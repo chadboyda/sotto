@@ -7,9 +7,9 @@ import { estTokens, fitTokens, tokenChunks, speakable, summary, clip, awaitingQu
 import { makeOwner, ownerStatus, isOwnerAlive } from "./owner.js";
 import { writeActive, removeActive, createPendingContext, removePendingContext, readUsage, writeUsage, localDate, StatusFileWriter } from "./statefiles.js";
 import { Transcript } from "./transcript.js";
-import { DelegationEngine } from "./delegation.js";
+import { DelegationEngine, parseTaskNotifications } from "./delegation.js";
 import { Mirror, MIRROR_MODES } from "./mirror.js";
-import { Narrator, elicitationSpeech, serverName, ToolLine, AgentTracker, agentsText, cardText } from "./policy.js";
+import { Narrator, elicitationSpeech, serverName, ToolLine, AgentTracker, TopLevelWork, reportSentence, isBackgroundLaunch, agentsText, cardText } from "./policy.js";
 import { SpeechQueue, COMMENTARY_PREROLL_MS } from "./speaker.js";
 import { renderForPolicy, buildSeedInput, greeting, ownerSwitchInstruction, voiceSwitchGreeting, personaSwitchGreeting, vocabularyUpdateInstruction, updateGreeting, cantHearInstruction, RECENT_GREETING_MS } from "./prompt.js";
 import { readPrefs, writePrefs, resolveVoice, normalizeVoice, voiceListMessage, unknownVoiceMessage, normalizeWindow, resolveWindowPref, personaVoiceOn } from "./prefs.js";
@@ -225,6 +225,8 @@ export class Voice {
     // words first, a deduped plain-words tool line, and a count of background agents.
     this.toolLine = new ToolLine();
     this.agents = new AgentTracker({ clock: this.clock });
+    this.work = new TopLevelWork(); // what the parent launched, for "X is done" (policy.js)
+    this.reports = new Map(); // agent_id → its SubagentHandback report
     this.agentsShown = 0;
     this.cardSaid = "";
     this.delegation = new DelegationEngine({
@@ -752,7 +754,7 @@ export class Voice {
       this.mirror.discard(); // words said to the old project are not the new one's business
       this.awaiting = null;
       this.narrator.resetTurn();
-      this.agents.reset(); this.toolLine.reset(); this.agentsShown = 0;
+      this.agents.reset(); this.work.reset(); this.reports.clear(); this.toolLine.reset(); this.agentsShown = 0;
       removePendingContext(this.paths);
       this.owner = next;
       this.log.info("owner.switch", { from: old.project, to: next.project, session_id: next.session_id });
@@ -1205,6 +1207,12 @@ export class Voice {
     if (typeof b.agent_id === "string" && b.agent_id) {
       this.agents.seen(b.agent_id);
       this.syncAgents();
+      // A subagent that hands back through SubagentHandback delivers its report
+      // as that call's message (last_assistant_message is then only its closing text).
+      if (event === "PreToolUse" && b.tool_name === "SubagentHandback" && typeof b.tool_input?.message === "string") {
+        this.reports.set(b.agent_id, b.tool_input.message);
+        while (this.reports.size > 50) this.reports.delete(this.reports.keys().next().value);
+      }
       if (event === "PreToolUse" && ASK_TOOLS.has(b.tool_name)) this.onAsk(b);
       else if (event === "PermissionRequest") {
         if (ASK_TOOLS.has(b.tool_name)) this.onAsk(b);
@@ -1218,6 +1226,16 @@ export class Voice {
     switch (event) {
       case "UserPromptSubmit":
         this.delegation.onHook(event, b);
+        // A task-notification naming a background agent is its completion,
+        // if its SubagentStop did not already count it.
+        for (const note of parseTaskNotifications(b.prompt)) {
+          if (this.agents.complete(note.taskId)) this.syncAgents();
+          const rec = this.work.bind(note.toolUseId, note.taskId) || this.work.byAgent(note.taskId);
+          if (this.work.finish(rec)) {
+            const ok = !note.status || note.status === "completed";
+            this.narrator.onAgentDone({ label: rec.label, result: ok ? reportSentence(note.result || note.summary) : `It ${note.status === "killed" ? "was stopped" : note.status}.` });
+          }
+        }
         if (!this.delegation.wasStopped(b.prompt_id)) {
           this.narrator.onTurnStart();
           this.clearAwaiting();
@@ -1230,6 +1248,8 @@ export class Voice {
         this.delegation.onHook(event, b);
         if (ASK_TOOLS.has(b.tool_name)) { this.onAsk(b); break; }
         if (b.tool_name === "Agent" || b.tool_name === "Task") { this.agents.launched(); this.syncAgents(); }
+        // Top-level background work, by name, for "Fixing X is done" later.
+        if (["Agent", "Task", "Workflow", "Bash"].includes(b.tool_name) && isBackgroundLaunch(b.tool_name, b.tool_input)) this.work.launch(b.tool_use_id, b.tool_name, b.tool_input);
         this.narrator.onToolUse(b.tool_name, b.tool_input);
         const line = this.toolLine.push(b.tool_name, b.tool_input);
         if (line) this.activity("tool", line);
@@ -1254,6 +1274,8 @@ export class Voice {
         }
         break;
       case "Stop": {
+        this.agents.noteTasks(b.background_tasks);
+        this.work.bindTasks(b.background_tasks);
         const q = awaitingQuestion(b.last_assistant_message);
         if (q) this.setAwaiting(q, "stop");
         else if (this.awaiting) { this.awaiting = null; this.changed(); } // an AskUserQuestion answered in the terminal
@@ -1312,21 +1334,43 @@ export class Voice {
         const bg = Array.isArray(b.background_tasks) ? b.background_tasks.find((t) => t && t.id === b.agent_id) : null;
         const name = clip(speakable(bg && bg.description ? `the "${bg.description}" agent` : `the ${type} agent`).replace(/[.!?…]+$/, ""), 80);
         const detail = typeof b.last_assistant_message === "string" ? summary(b.last_assistant_message, 300) : "";
-        // Spoken only as "A background agent finished", and only if the parent
-        // does not speak for it (policy.js onAgentDone); the parent's own
-        // summary (its turn, or the task-notification turn) is what the user hears.
-        this.agents.stopped(b.agent_id);
+        // Only a real agent finishing counts, once per id (AgentTracker): the
+        // internal progress-line agent Claude Code runs every ~30 s beside a
+        // background agent also fires SubagentStop, with an id that is none
+        // of the session's agents. Spoken only as "A background agent
+        // finished", and only if the parent does not speak for it
+        // (policy.js onAgentDone); the parent's own summary (its turn, or the
+        // task-notification turn) is what the user hears.
+        this.agents.noteTasks(b.background_tasks);
+        this.work.bindTasks(b.background_tasks);
+        if (!this.agents.complete(b.agent_id)) {
+          this.log.info("agent.stop_ignored", { why: this.agents.isDone(b.agent_id) ? "already_done" : "not_an_agent" });
+          return true;
+        }
         this.syncAgents();
-        this.narrator.onAgentDone(detail ? `${name[0].toUpperCase()}${name.slice(1)}: ${detail}` : "");
+        // Announced only for work the parent launched; a nested agent (a
+        // subagent's own, or a workflow's) is counted but never spoken.
+        const rec = this.work.byAgent(b.agent_id);
+        const report = this.reports.get(b.agent_id) || b.last_assistant_message;
+        this.reports.delete(b.agent_id);
+        if (this.work.finish(rec)) this.narrator.onAgentDone({ label: rec.label, result: reportSentence(report), detail: detail ? `${name[0].toUpperCase()}${name.slice(1)}: ${detail}` : "" });
+        else this.log.info("agent.stop_nested", {});
         return true;
       }
       case "TaskCompleted": {
+        // A TaskCompleted naming one of our background agents is that agent
+        // finishing (counted once, like its SubagentStop); anything else is
+        // a checklist task.
+        if (typeof b.task_id === "string" && this.agents.isKnown(b.task_id)) {
+          if (this.agents.complete(b.task_id)) this.syncAgents();
+          const rec = this.work.byAgent(b.task_id);
+          if (this.work.finish(rec)) this.narrator.onAgentDone({ label: rec.label, result: "" });
+          return true;
+        }
+        // A checklist tick (TaskCreate/TaskUpdate) is Claude's bookkeeping: the
+        // card shows it, the voice model never gets it (it narrated them).
         const subject = clip(speakable(b.task_subject || "").replace(/[.!?…]+$/, ""), 80);
-        if (!subject) return true;
-        const who = typeof b.teammate_name === "string" && b.teammate_name ? clip(speakable(b.teammate_name).replace(/[.!?…]+$/, ""), 40) : "";
-        // A checklist tick is frequent: spoken in walkthrough; a teammate's task at milestones.
-        this.narrator.onCompletion({ what: who ? `${who}'s task "${subject}"` : `the task "${subject}"`, detail: "", level: who ? "milestones" : "walkthrough" });
-        this.activity("task", `Task done: ${subject}`);
+        if (subject) this.activity("task", `Task done: ${subject}`);
         return true;
       }
       case "TeammateIdle": {
@@ -2256,7 +2300,7 @@ export class Voice {
     this.delegation.resetClaudeState(); // a later /talk on may be another session
     this.narrator.dispose();
     this.narrator.resetTurn();
-    this.agents.reset(); this.toolLine.reset(); this.agentsShown = 0;
+    this.agents.reset(); this.work.reset(); this.reports.clear(); this.toolLine.reset(); this.agentsShown = 0;
     this.speech.drain();
     this.nonce = null;
     this.voiceSwitch = null;

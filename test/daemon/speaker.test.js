@@ -1,7 +1,7 @@
 // Speech queue (SPEC §6.10.2): a spoken update never cuts off the assistant.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { SpeechQueue, priorityOf, PRIORITY, SPEAK_HANGOVER_MS, COMMENTARY_PREROLL_MS, HOLD_MAX_MS, URGENT_WAIT_MS } from "../../daemon/speaker.js";
+import { SpeechQueue, priorityOf, PRIORITY, SPEAK_HANGOVER_MS, COMMENTARY_PREROLL_MS, HOLD_MAX_MS, URGENT_WAIT_MS, repeatScore, contentWords, REPEAT_WINDOW_MS } from "../../daemon/speaker.js";
 import { createFakeClock } from "../helpers/fake-clock.js";
 
 function makeQ({ audioAt } = {}) {
@@ -212,5 +212,67 @@ test("outside a swap, a repeated text is a new event and is spoken again", async
   await speak(clock, q, "Claude needs approval.", 1000);
   await clock.advance(30000);
   q.enqueue(c("permission", "Claude needs approval to run npm test."));
+  assert.equal(sent.length, 2);
+});
+
+// ---- repeats: the same answer is never spoken twice (live log 2026-09-24) -----------------
+const HELD_ANSWER = "Claude Code's answer: The fix is underway. The native app gets the same three fixed pills for Session, Today and Cost. Everything else the web window gained while the native app was being built gets ported too. It ships as version 0.3.2.";
+const VOICE_PARAPHRASE = "The pills never made it into the native app while we were building in parallel. That's on me. I'm fixing it now: the native app gets those same fixed pills and a quick parity pass for everything else, and it ships as version 0.3.2.";
+
+test("repeatScore: paraphrases score high, same-topic news low, short texts and new numbers never", () => {
+  const said = (...t) => { const s = new Set(); for (const x of t) for (const w of contentWords(x)) s.add(w); return s; };
+  assert.ok(repeatScore(HELD_ANSWER, said(VOICE_PARAPHRASE)) >= 0.4);
+  assert.ok(repeatScore("Claude Code, on what you just said: Agreed, and that's exactly the change already being built: both timers go together in the status bar at the top, and the session timer leaves the spot under the dial.",
+    said("Claude Code's answer: Done, it's in the same update. The session timer moves up next to today's total, and both tick as real clocks. The line under the dial will only show the keyboard shortcuts.",
+      "Done, same update. Both timers sit in the top bar and tick like real clocks. The line under the dial just keeps the shortcuts.")) >= 0.55);
+  assert.ok(repeatScore("Claude Code's answer: Yes, exactly that: the window will turn my markdown into real formatting, so bold looks bold, lists look like lists, and code looks like code.",
+    said("Claude Code, on what you just said: Good catch. The window shows my messages as raw text, so markdown like double asterisks appears literally.")) < 0.4);
+  assert.equal(repeatScore("Claude Code's answer: The parser tests pass.", said("I'll ask Claude whether the parser tests pass.")), 0, "too short to judge");
+  assert.equal(repeatScore("Update on your earlier request: the helper counted 3 files in the source folder of the project.", said("Launched a helper to count the files in the source folder of the project.")), 0, "a new number is news");
+});
+
+test("a held answer the voice already paraphrased from its silent context is not spoken again", async () => {
+  const { clock, q, sent, demoted } = makeQ();
+  q.onOutput("You're right to notice.", 0, 800);
+  await clock.advance(100);
+  q.enqueue({ ...c("voice_result", HELD_ANSWER), delegationId: "item_1" });
+  assert.equal(sent.length, 0, "held while the voice talks");
+  await speak(clock, q, VOICE_PARAPHRASE, 8000, 1000);
+  await clock.advance(SPEAK_HANGOVER_MS + 1000);
+  assert.equal(sent.length, 0, "the replay is dropped");
+  assert.equal(demoted.length, 1, "kept as silent context");
+  assert.equal(demoted[0].delegationId, null);
+  assert.equal(q.size, 0);
+});
+
+test("an answer is not dropped for the voice's own words before it arrived", async () => {
+  const { clock, q, sent } = makeQ();
+  await speak(clock, q, "I'll ask Claude Code whether the native app gets the same three fixed pills for session today and cost", 3000);
+  await clock.advance(SPEAK_HANGOVER_MS + 100);
+  q.enqueue({ ...c("voice_result", HELD_ANSWER), delegationId: "item_1" });
+  assert.equal(sent.length, 1);
+});
+
+test("a mirror reply restating the answer just spoken is dropped; a new answer later is not", async () => {
+  const { clock, q, sent, demoted } = makeQ();
+  q.enqueue({ ...c("voice_result", "Claude Code's answer: Done, it's in the same update. The session timer moves up next to today's total, and both tick as real clocks. The line under the dial will only show the keyboard shortcuts."), delegationId: "item_7" });
+  await speak(clock, q, "Done, same update. Both timers sit in the top bar and tick like real clocks. The line under the dial just keeps the shortcuts.", 5000, 0);
+  await clock.advance(SPEAK_HANGOVER_MS + 3000);
+  q.enqueue(c("mirror_result", "Claude Code, on what you just said: Agreed, and that's exactly the change already being built: both timers go together in the status bar at the top, and the session timer leaves the spot under the dial."));
+  assert.equal(sent.length, 1);
+  assert.equal(demoted.length, 1);
+  // Past the window the same topic can be spoken again.
+  await clock.advance(REPEAT_WINDOW_MS + 1000);
+  q.enqueue(c("mirror_result", "Claude Code, on what you just said: Agreed, and that's exactly the change already being built: both timers go together in the status bar at the top, and the session timer leaves the spot under the dial."));
+  assert.equal(sent.length, 2);
+});
+
+test("questions and approvals are never dropped as repeats", async () => {
+  const { clock, q, sent } = makeQ();
+  const ask = "Claude's asking: Which layout do you want for the settings drawer panel? Options: Grid or Stack. Answer in the terminal.";
+  q.enqueue(c("question", ask));
+  await clock.advance(COMMENTARY_PREROLL_MS + 100);
+  q.enqueue(c("question", ask.replace("want", "prefer")));
+  await clock.advance(COMMENTARY_PREROLL_MS + 100);
   assert.equal(sent.length, 2);
 });
