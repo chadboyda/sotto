@@ -142,6 +142,7 @@ final class CaptureRing: @unchecked Sendable {
 /// Owns one route's capture chain on a serial queue drained every 10 ms.
 final class CapturePipeline: @unchecked Sendable {
     let ring: CaptureRing
+    var rate: Double { ring.rate }
     private let resampler: Resampler
     private var framer = Framer()
     private let emitter: MicFrameEmitter

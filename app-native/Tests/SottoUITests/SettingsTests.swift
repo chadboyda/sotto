@@ -126,9 +126,20 @@ final class SettingsTextTests: XCTestCase {
         XCTAssertEqual(SettingsText.personaSwitched("June"), "Switching to June. The conversation carries over.")
     }
 
+    func testBluetoothMicWarning() {
+        let airpods = DeviceChoice(id: "bt", name: "AirPods Max", bluetooth: true, headphones: true)
+        let builtIn = DeviceChoice(id: "bi", name: "MacBook Pro Microphone")
+        XCTAssertEqual(SettingsText.bluetoothMicWarning(selected: airpods, active: builtIn), SettingsText.bluetoothMicHelp)
+        XCTAssertEqual(SettingsText.bluetoothMicWarning(selected: nil, active: airpods), SettingsText.bluetoothMicHelp, "Automatic resolved to a Bluetooth mic")
+        XCTAssertNil(SettingsText.bluetoothMicWarning(selected: builtIn, active: airpods), "the chosen mic wins")
+        XCTAssertNil(SettingsText.bluetoothMicWarning(selected: nil, active: builtIn))
+        XCTAssertNil(SettingsText.bluetoothMicWarning(selected: nil, active: nil))
+        XCTAssertTrue(SettingsText.bluetoothMicHelp.contains("MacBook mic works better"))
+    }
+
     func testNoEmojiInCopy() {
         let strings = [SettingsText.personaDefaultHelp, SettingsText.personaVoiceToggle, SettingsText.personaSwitching, SettingsText.voiceHelp, SettingsText.voiceSamplesHelp, SettingsText.wakeHelp, SettingsText.echoHelp,
-                       SettingsText.keyIntro, SettingsText.keyKeep, SettingsText.micCompareHelp]
+                       SettingsText.keyIntro, SettingsText.keyKeep, SettingsText.micCompareHelp, SettingsText.bluetoothMicHelp]
             + ["quiet", "milestones", "walkthrough"].map(SettingsText.policyHelp)
             + ["auto", "app", "chrome", "default"].map(SettingsText.windowHelp)
             + [MicPermission.notDetermined, .denied, .restricted].compactMap { SettingsText.micCard($0) }.flatMap { [$0.title, $0.body] + $0.steps }

@@ -36,6 +36,11 @@ public struct AudioRouteInfo: Equatable, Sendable {
     public var echoCancellation: Bool = false
     /// Added by B3 (additive): why this plan was chosen (e.g. "speakers", "headphones", "pref_always", "sleeping", "test").
     public var reason: String = ""
+    /// The rate the capture chain converts from (the input unit's stream format), and the input
+    /// device's nominal rate when it could be read; 0 when unknown (fake audio). Logged, so a
+    /// Bluetooth call-mode mic (16 or 8 kHz) shows up in the daemon log.
+    public var captureRate: Double = 0
+    public var deviceRate: Double = 0
     public init(mode: AudioMode, input: AudioDevice?, output: AudioDevice?) { self.mode = mode; self.input = input; self.output = output }
     public init(mode: AudioMode, input: AudioDevice?, output: AudioDevice?, echoCancellation: Bool, reason: String) {
         self.mode = mode; self.input = input; self.output = output; self.echoCancellation = echoCancellation; self.reason = reason

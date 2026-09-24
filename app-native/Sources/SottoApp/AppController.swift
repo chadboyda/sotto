@@ -464,6 +464,7 @@ final class AppController: NSObject, NSApplicationDelegate, PanelControllerDeleg
         settings.activeInput = route.input.map(AppController.choice)
         settings.activeOutput = route.output.map(AppController.choice)
         log.log("route", ["mode": route.mode.rawValue, "input_bt": route.input?.bluetooth ?? false,
+                          "capture_rate": route.captureRate, "device_rate": route.deviceRate,
                           "output_headphones": route.output?.headphones ?? false])
         sendRoute()
     }
@@ -486,6 +487,10 @@ final class AppController: NSObject, NSApplicationDelegate, PanelControllerDeleg
         }
         link?.send(.route(RouteMessage(mode: r.mode.rawValue, input: dev(r.input), output: dev(r.output),
                                        echoCancellation: io.echoCancellation.rawValue)))
+        if r.captureRate > 0 {
+            // The route message carries no rates; this lands in the daemon log as page.log (src app).
+            link?.send(.log(level: "info", message: "sotto: capture \(r.mode.rawValue) from \(r.input?.name ?? "?") at \(Int(r.captureRate)) Hz (device \(Int(r.deviceRate)) Hz), \(r.reason)"))
+        }
     }
 
     private func levels(mic m: Float, speaker s: Float) {
