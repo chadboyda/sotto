@@ -201,6 +201,10 @@ kbd {
   font-variant-numeric: tabular-nums;
 }
 .top > * { flex: none; }
+/* Desktop app (SPEC §6.16): the panel draws the page under its transparent title bar;
+   the app sets .host-app and --host-inset-top (the title bar height) so the header
+   starts below the window buttons. */
+html.host-app .top { padding-top: calc(var(--space-1) + var(--host-inset-top, 28px)); min-height: calc(48px + var(--host-inset-top, 28px)); }
 /* Only the left group shrinks, and inside it only the project name (ellipsis); app.js
    fitHeader hides whole items once anything else would be clipped. */
 .status { flex: 0 1 auto; display: flex; align-items: flex-start; gap: var(--space-2); min-width: 0; margin-right: auto; white-space: nowrap; }

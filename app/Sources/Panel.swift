@@ -29,8 +29,8 @@ protocol PanelControllerDelegate: AnyObject {
 }
 
 final class PanelController: NSObject, NSWindowDelegate, WKNavigationDelegate, WKUIDelegate, WKScriptMessageHandler {
-    static let expandedSize = NSSize(width: 420, height: 640)
-    static let pillSize = NSSize(width: 250, height: 44)
+    static let expandedSize = PanelGeometry.defaultSize
+    static let pillSize = NSSize(width: 290, height: 44)
     private static let frameKey = "PanelFrame"
     private static let compactKey = "PanelCompact"
 
@@ -66,7 +66,7 @@ final class PanelController: NSObject, NSWindowDelegate, WKNavigationDelegate, W
         panel.becomesKeyOnlyIfNeeded = false
         panel.isReleasedWhenClosed = false
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .ignoresCycle]
-        panel.minSize = NSSize(width: 320, height: 420)
+        panel.minSize = PanelGeometry.minSize
         panel.delegate = self
         panel.contentView = NSView(frame: NSRect(origin: .zero, size: PanelController.expandedSize))
         panel.contentView?.wantsLayer = true
@@ -101,6 +101,8 @@ final class PanelController: NSObject, NSWindowDelegate, WKNavigationDelegate, W
             ucc.addScriptMessageHandler(WeakReplyHandler(m), contentWorld: .page, name: "sottoMic")
         }
         ucc.addUserScript(WKUserScript(source: bridgeSource, injectionTime: .atDocumentStart, forMainFrameOnly: true))
+        ucc.addUserScript(WKUserScript(source: PanelController.hostChromeSource(inset: PanelController.titlebarInset),
+                                       injectionTime: .atDocumentStart, forMainFrameOnly: true))
         if Prefs.testMode { ucc.addUserScript(WKUserScript(source: PanelController.testSilenceSource, injectionTime: .atDocumentEnd, forMainFrameOnly: true)) }
         ucc.add(WeakScriptHandler(self), name: "sottoHost")
         cfg.userContentController = ucc
@@ -165,6 +167,25 @@ final class PanelController: NSObject, NSWindowDelegate, WKNavigationDelegate, W
             case .failure(let e): completion(.failure(e))
             }
         }
+    }
+
+    /// Height of the expanded panel's title bar. The page is drawn under it
+    /// (transparent full-size title bar), so the page pads its header by this
+    /// much and the window buttons never sit on the status line.
+    static var titlebarInset: CGFloat {
+        let r = NSRect(x: 0, y: 0, width: 420, height: 640)
+        let f = NSWindow.frameRect(forContentRect: r, styleMask: expandedStyle.subtracting(.fullSizeContentView))
+        return max(0, min(64, (f.height - r.height).rounded()))
+    }
+
+    /// Host chrome for the page (SPEC §6.16 "Title bar"): class `host-app` on
+    /// <html> and `--host-inset-top` = the title bar height; web/styles.css
+    /// pads the header by it. A page without the rule is unaffected.
+    static func hostChromeSource(inset: CGFloat) -> String {
+        """
+        (() => { const d = document.documentElement; if (!d) return;
+          d.classList.add("host-app"); d.style.setProperty("--host-inset-top", "\(Int(inset))px"); })();
+        """
     }
 
     /// Set a BOOL WebKit SPI if this WebKit has it (checked at run time, so a
@@ -240,6 +261,11 @@ final class PanelController: NSObject, NSWindowDelegate, WKNavigationDelegate, W
 
     func toggleVisible() { isVisible ? hide() : show() }
 
+    /// ⌥⌘T: hidden → shown; compact → the full panel; expanded → hidden.
+    func showOrExpandOrHide() {
+        if !isVisible { show() } else if compact { setCompact(false) } else { hide() }
+    }
+
     func setCompact(_ on: Bool) {
         guard on != compact else { return }
         if on { saveFrame() }
@@ -262,8 +288,10 @@ final class PanelController: NSObject, NSWindowDelegate, WKNavigationDelegate, W
             panel.backgroundColor = .windowBackgroundColor
             panel.isOpaque = true
             restoringFrame = true
-            panel.setFrame(expandedFrame(), display: true)
+            let e = expandedFrame()
+            panel.setFrame(e, display: true)
             restoringFrame = false
+            log.log("panel_frame", ["compact": false, "frame": [e.minX, e.minY, e.width, e.height], "reason": lastFrameReason])
             webView?.frame = contentBounds(forExpanded: true)
             webView?.autoresizingMask = [.width, .height]
             webView?.alphaValue = 1
@@ -305,14 +333,18 @@ final class PanelController: NSObject, NSWindowDelegate, WKNavigationDelegate, W
         restoringFrame = false
     }
 
+    private var lastFrameReason = "default"
+
+    /// The saved expanded frame when it is usable, else the full default
+    /// (PanelGeometry). A frame that had to be replaced is dropped from the
+    /// defaults, so a tiny frame never comes back.
     private func expandedFrame() -> NSRect {
-        if let s = Prefs.store.string(forKey: PanelController.frameKey) {
-            let r = NSRectFromString(s)
-            if r.width >= 320, r.height >= 420, NSScreen.screens.contains(where: { $0.visibleFrame.intersects(r) }) { return r }
-        }
-        let vf = NSScreen.main?.visibleFrame ?? NSRect(x: 0, y: 0, width: 1440, height: 900)
-        let s = PanelController.expandedSize
-        return NSRect(x: vf.maxX - s.width - 24, y: vf.maxY - s.height - 24, width: s.width, height: s.height)
+        let saved = Prefs.store.string(forKey: PanelController.frameKey)
+        let (f, reason) = PanelGeometry.expandedFrame(saved: saved, screens: NSScreen.screens.map { $0.visibleFrame },
+                                                      main: NSScreen.main?.visibleFrame)
+        lastFrameReason = reason
+        if reason == "too_small" || reason == "offscreen" { Prefs.store.set(NSStringFromRect(f), forKey: PanelController.frameKey) }
+        return f
     }
 
     private func restoreFrame() {
@@ -326,10 +358,14 @@ final class PanelController: NSObject, NSWindowDelegate, WKNavigationDelegate, W
         } else {
             panel.setFrame(expandedFrame(), display: false)
         }
+        let f = panel.frame
+        log.log("panel_frame", ["compact": compact, "frame": [f.minX, f.minY, f.width, f.height], "reason": lastFrameReason,
+                                "titlebar_inset": PanelController.titlebarInset])
     }
 
     private func saveFrame() {
-        guard !compact, !restoringFrame else { return }
+        guard !compact, !restoringFrame, panel.styleMask.contains(.titled),
+              panel.frame.width >= PanelGeometry.minSize.width, panel.frame.height >= PanelGeometry.minSize.height else { return }
         Prefs.store.set(NSStringFromRect(panel.frame), forKey: PanelController.frameKey)
     }
 
@@ -459,22 +495,35 @@ final class PillView: NSVisualEffectView {
         icon.symbolConfiguration = NSImage.SymbolConfiguration(pointSize: 15, weight: .medium)
         label.font = .systemFont(ofSize: 12, weight: .medium)
         label.lineBreakMode = .byTruncatingTail
-        for (b, sym, tip) in [(muteButton, "mic.fill", "Mute or unmute"), (expandButton, "arrow.up.left.and.arrow.down.right", "Expand")] {
+        for (b, sym, tip) in [(muteButton, "mic.fill", "Mute or unmute"), (expandButton, "arrow.up.left.and.arrow.down.right", "Show the full panel (⌥⌘T)")] {
             b.bezelStyle = .regularSquare
             b.isBordered = false
             b.image = NSImage(systemSymbolName: sym, accessibilityDescription: tip)
             b.toolTip = tip
             b.setAccessibilityLabel(tip)
         }
+        // The way back to the full panel must be obvious: a labelled button,
+        // not just a glyph (double-click on the pill and ⌥⌘T also expand).
+        expandButton.title = "Expand"
+        expandButton.imagePosition = .imageLeading
+        expandButton.isBordered = true
+        expandButton.bezelStyle = .recessed
+        expandButton.controlSize = .small
+        expandButton.font = .systemFont(ofSize: 11, weight: .semibold)
+        expandButton.setContentCompressionResistancePriority(.required, for: .horizontal)
         muteButton.target = self
         muteButton.action = #selector(muteTapped)
         expandButton.target = self
         expandButton.action = #selector(expandTapped)
         let stack = NSStackView(views: [icon, label, muteButton, expandButton])
         stack.orientation = .horizontal
+        stack.distribution = .fill // the label takes the slack; the buttons sit at the right edge
         stack.spacing = 8
         stack.edgeInsets = NSEdgeInsets(top: 0, left: 12, bottom: 0, right: 10)
         stack.translatesAutoresizingMaskIntoConstraints = false
+        icon.setContentHuggingPriority(.required, for: .horizontal)
+        muteButton.setContentHuggingPriority(.required, for: .horizontal)
+        expandButton.setContentHuggingPriority(.required, for: .horizontal)
         label.setContentHuggingPriority(.defaultLow, for: .horizontal)
         label.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         addSubview(stack)

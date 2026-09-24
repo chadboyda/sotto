@@ -11,6 +11,11 @@ if let i = CommandLine.arguments.firstIndex(of: "--mic-plan-eval"), i + 1 < Comm
     print(MicPlan.evaluate(json: CommandLine.arguments[i + 1]))
     exit(0)
 }
+// Tests: where the expanded panel opens for a saved frame (Support.swift).
+if let i = CommandLine.arguments.firstIndex(of: "--panel-frame-eval"), i + 1 < CommandLine.arguments.count {
+    print(PanelGeometry.evaluate(json: CommandLine.arguments[i + 1]))
+    exit(0)
+}
 // Diagnostics: the plan the app would use right now (no capture).
 if CommandLine.arguments.contains("--mic-plan") {
     let pref = (ProcessInfo.processInfo.environment["SOTTO_APP_MIC"] ?? Prefs.store.string(forKey: MicController.prefKey) ?? "auto").lowercased()

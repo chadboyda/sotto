@@ -26,8 +26,15 @@ import { startFakeInbox } from "../helpers/fake-inbox.js";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 const LIVE = process.env.SOTTO_APP_LIVE === "1";
+// The daemon opens the app through LaunchServices (`open -a <bundle> sotto://…`),
+// and the app is single-instance per bundle id: with the user's own Sotto
+// running, the test's window would load in THEIR panel. Never run then.
+const userAppRunning = () => process.platform === "darwin" &&
+  (spawnSync("ps", ["-axo", "args="], { encoding: "utf8" }).stdout || "").split("\n")
+    .some((l) => /Sotto\.app\/Contents\/MacOS\/Sotto/.test(l) && !l.includes(os.tmpdir()) && !l.startsWith("/private/var/folders/"));
 const SKIP = !LIVE ? "set SOTTO_APP_LIVE=1 (real gpt-live-1 session)"
   : process.platform !== "darwin" ? "macOS only"
+  : userAppRunning() ? "a Sotto app is running (quit it first: its panel would receive the test window)"
   : !resolveApiKey({ env: process.env, pluginRoot: ROOT, dataDir: os.tmpdir() }) ? "no OPENAI_API_KEY" : false;
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const freePort = () => new Promise((resolve) => {

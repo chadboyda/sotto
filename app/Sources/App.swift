@@ -183,9 +183,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, PanelControllerDelegat
         panel.evaluate("window.sottoHost && window.sottoHost.toggleMute()")
     }
 
+    /// Menu item and ⌥⌘T: show a hidden panel, expand a compact one, hide a full one.
     @objc private func menuToggleShow() {
         guard request != nil else { return }
-        panel.toggleVisible()
+        panel.showOrExpandOrHide()
     }
 
     @objc private func menuToggleCompact() {
@@ -310,9 +311,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, PanelControllerDelegat
         let icon = lastIcon ?? .off
         headerItem.title = model.project.isEmpty ? "Sotto: \(icon.label)" : "Sotto: \(icon.label) (\(model.project))"
         let hasPage = request != nil && panel.webView != nil
-        showItem.title = panel.isVisible ? "Hide Panel" : "Show Panel"
+        showItem.title = !panel.isVisible ? "Show Panel" : panel.compact ? "Show Full Panel" : "Hide Panel"
         showItem.isEnabled = hasPage
-        compactItem.state = panel.compact ? .on : .off
+        compactItem.title = panel.compact ? "Expand Panel" : "Compact Panel"
         muteItem.title = model.muted ? "Unmute" : "Mute"
         muteItem.isEnabled = hasPage && model.state == "live"
         offItem.isEnabled = hasPage && model.state != "off"
