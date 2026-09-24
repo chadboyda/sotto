@@ -4,7 +4,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
   route, Narrator, questionSpeech, planSpeech, elicitationSpeech, serverName, isBackgroundLaunch,
-  COMPLETION_BATCH_MS, LONG_PROGRESS_MS, ATTENTION_DEDUPE_MS,
+  COMPLETION_BATCH_MS, LONG_PROGRESS_MS, ATTENTION_DEDUPE_MS, AGENT_DONE_MS,
 } from "../../daemon/policy.js";
 import { parseTaskNotifications } from "../../daemon/delegation.js";
 import { createFakeClock } from "../helpers/fake-clock.js";
@@ -282,7 +282,7 @@ test("tool failures: context always, spoken in walkthrough at most every 15 s", 
   assert.equal(spoken().length, 1);
   await clock.advance(15000);
   n.onToolFailure("Read", { file_path: "/a/b.js" }, "File does not exist.");
-  assert.equal(spoken().at(-1), "Reading b.js failed.");
+  assert.equal(spoken().at(-1), "Reading a file failed.");
 });
 
 // ---- daemon integration (fake sideband) --------------------------------------------------
@@ -309,17 +309,59 @@ test("AskUserQuestion PreToolUse → spoken question, attached to the voice requ
   assert.ok(h.sse.some((m) => m.type === "activity" && m.kind === "question"));
 });
 
-test("SubagentStop: foreground agent spoken (milestones); background agent left to its task turn; internal agents ignored", async (t) => {
+test("SubagentStop: the parent speaks for its agents; an unexplained finish is one short line; internal agents ignored", async (t) => {
   const { h, ws, hook } = await live(t);
   hook("SubagentStop", { agent_id: "x1", agent_type: "", last_assistant_message: "suggestion" });
   hook("SubagentStop", { agent_id: "a1", agent_type: "Explore", last_assistant_message: "Found 12 endpoints in the API. Details follow.", background_tasks: [] });
   hook("SubagentStop", { agent_id: "a2", agent_type: "general-purpose", last_assistant_message: "there are 3 files.", background_tasks: [{ id: "a2", type: "subagent", status: "running", description: "count files" }] });
-  await h.clock.advance(COMPLETION_BATCH_MS);
-  const c = appends(ws, "commentary");
-  assert.deepEqual(c.map((e) => e.content), ["The Explore agent finished: Found 12 endpoints in the API."]);
-  assert.ok(appends(ws, "thinking").some((e) => /The "count files" agent finished: there are 3 files\./.test(e.content)));
+  await h.clock.advance(AGENT_DONE_MS);
+  // The parent is idle and said nothing about them: one short line, no agent details spoken.
+  assert.deepEqual(appends(ws, "commentary").map((e) => e.content), ["2 background agents finished."]);
+  assert.ok(appends(ws, "thinking").some((e) => /The "count files" agent: there are 3 files\./.test(e.content)));
   assert.ok(!appends(ws, "thinking").some((e) => /suggestion/.test(e.content)));
   assert.equal(h.voice.status().claude.busy, false, "subagent stops never mark Claude busy");
+  // Mid-turn: the parent will summarize, so nothing is spoken.
+  hook("UserPromptSubmit", { prompt: "typed task", prompt_id: "p9" });
+  hook("SubagentStop", { agent_id: "a3", agent_type: "Explore", last_assistant_message: "Done." });
+  await h.clock.advance(AGENT_DONE_MS);
+  assert.equal(appends(ws, "commentary").length, 1);
+});
+
+test("subagent events stay out of the card and the voice; they only count as background agents", async (t) => {
+  const { h, ws, hook } = await live(t);
+  hook("UserPromptSubmit", { prompt: "research this", prompt_id: "p1" });
+  hook("PreToolUse", { prompt_id: "p1", tool_name: "Agent", tool_input: { description: "Explore repo", subagent_type: "Explore" } });
+  hook("PreToolUse", { prompt_id: "p1", tool_name: "Agent", tool_input: { description: "Explore docs", subagent_type: "Explore" } });
+  for (const id of ["a1", "a2"]) {
+    hook("PreToolUse", { agent_id: id, agent_type: "Explore", tool_name: "Bash", tool_input: { command: "cd /repo && ls", description: "List files" } });
+    hook("PreToolUse", { agent_id: id, agent_type: "Explore", tool_name: "Read", tool_input: { file_path: "/repo/secret.js" } });
+    hook("MessageDisplay", { agent_id: id, agent_type: "Explore", message_id: `m${id}`, index: 0, delta: "Subagent musings.", final: true });
+  }
+  await h.clock.advance(3000);
+  const act = h.sse.filter((m) => m.type === "activity");
+  const texts = act.map((m) => m.text).join("\n");
+  assert.ok(!/helper agent|running|List files|Subagent musings|\bcd\b/.test(texts), texts);
+  assert.deepEqual(act.filter((m) => m.kind === "agents").map((m) => m.count), [1, 2]);
+  assert.equal(act.filter((m) => m.kind === "agents").at(-1).text, "2 background agents working");
+  const toVoice = ws.sent.map((e) => JSON.stringify(e)).join("\n");
+  assert.ok(!/Subagent musings|List files|secret\.js/.test(toVoice));
+  hook("SubagentStop", { agent_id: "a1", agent_type: "Explore", last_assistant_message: "ok" });
+  assert.equal(h.sse.filter((m) => m.type === "activity" && m.kind === "agents").at(-1).count, 1);
+});
+
+test("the card gets Claude's own words, sanitized, not raw deltas or busywork", async (t) => {
+  const { h, hook } = await live(t);
+  hook("UserPromptSubmit", { prompt: "fix it", prompt_id: "p1" });
+  hook("PreToolUse", { prompt_id: "p1", tool_name: "Bash", tool_input: { command: "cd /repo" } });
+  hook("PreToolUse", { prompt_id: "p1", tool_name: "Bash", tool_input: { command: "npm test" } });
+  hook("MessageDisplay", { prompt_id: "p1", message_id: "m1", index: 0, delta: "I found the **bug** in `/Users/me/x/voice.js`", final: false });
+  hook("MessageDisplay", { prompt_id: "p1", message_id: "m1", index: 1, delta: ". Fixing it now.", final: true });
+  hook("Stop", { prompt_id: "p1", last_assistant_message: "Fixed **two** bugs.\n\n- one\n- two" });
+  const act = h.sse.filter((m) => m.type === "activity");
+  assert.deepEqual(act.filter((m) => m.kind === "tool").map((m) => m.text), ["Running the tests"]);
+  assert.deepEqual(act.filter((m) => m.kind === "text").map((m) => m.text), ["I found the bug in voice.js.", "I found the bug in voice.js. Fixing it now."]);
+  const end = act.find((m) => m.kind === "turn_end");
+  assert.equal(end.summary, "Fixed **two** bugs.\n\n- one\n- two", "markdown for the page's safe renderer");
 });
 
 test("background task turn: a voice-launched agent's completion is spoken as an update on that request, even in quiet", async (t) => {
@@ -414,5 +456,5 @@ test("held low-priority update becomes thinking after 20 s of continuous speech"
   hook("SubagentStop", { agent_id: "a1", agent_type: "Explore", last_assistant_message: "Found it.", background_tasks: [] });
   for (let tl = 0; tl < 25000; tl += 250) { ws.receive({ type: "session.output_transcript.delta", delta: "and ", start_ms: 200 + tl, end_ms: 450 + tl }); await h.clock.advance(250); }
   assert.equal(appends(ws, "commentary").length, 0);
-  assert.ok(appends(ws, "thinking").some((e) => e.content === BG + "The Explore agent finished: Found it."));
+  assert.ok(appends(ws, "thinking").some((e) => e.content === BG + "A background agent finished. The Explore agent: Found it."));
 });

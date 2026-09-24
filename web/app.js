@@ -35,7 +35,6 @@ const el = {
   statusLabel: $("status-label"),
   statusDetail: $("status-detail"),
   project: $("project"),
-  clock: $("clock"),
   usage: $("usage"),
   banners: $("banners"),
   dialCanvas: $("dial-canvas"),
@@ -72,6 +71,7 @@ const el = {
   keyHelp: $("key-help"),
   claude: $("claude"),
   claudeTitle: $("claude-title"),
+  claudeAgents: $("claude-agents"),
   claudeTime: $("claude-time"),
   claudeStep: $("claude-step"),
   claudeCommand: $("claude-command"),
@@ -247,6 +247,10 @@ const S = {
   floor: null, // "you" | "voice" | null, from the level meters
   claudeKind: null, // last SSE activity kind
   claudeText: "",
+  claudeSays: "", // Claude's own latest words this turn (SSE activity "text", already plain)
+  claudeSaysAt: null,
+  claudeTool: "", // plain-words tool line (SSE activity "tool")
+  agents: 0, // background agents working (SSE activity "agents")
   workSince: null,
   summaryExpanded: false,
   voices: null, // GET /api/voices
@@ -418,8 +422,17 @@ function handleDaemonMessage(msg) {
       handleCommand(msg.command, msg.reason);
       break;
     case "activity": {
+      if (msg.kind === "agents") {
+        // A count for the card's quiet chip; not what Claude is doing.
+        S.agents = Math.max(0, Number(msg.count) || 0);
+        renderClaude();
+        break;
+      }
       const v = lib.activityView(msg);
       S.activity = { text: v.text, tone: v.tone };
+      if (msg.kind === "turn_start" || msg.kind === "turn_end") { S.claudeSays = ""; S.claudeSaysAt = null; S.claudeTool = ""; }
+      if (msg.kind === "text") { S.claudeSays = msg.text || ""; S.claudeSaysAt = Date.now(); }
+      if (msg.kind === "tool") S.claudeTool = msg.text || "";
       if (v.busy !== null) setBusy(v.busy);
       if (v.summary) {
         S.summary = v.summary;
@@ -844,6 +857,7 @@ const meter = {
     this.level = 0;
     this.detector.reset();
     this.floor.reset();
+    wordHold.reset(null);
     dial.input(0, 0, null, null);
     setFloor(null);
   },
@@ -1020,8 +1034,13 @@ function chooseMic(deviceId) {
   }
 }
 
+// The dial follows the levels in real time; the word under it is a slow summary
+// that changes only once a new floor has held for ~1.3 s (SPEC-DEVIATIONS "status word").
+const wordHold = lib.createWordHold({ holdMs: 1300 });
+
 /** Who has the floor changed: update the dial word, not the whole page. */
-function setFloor(floor) {
+function setFloor(raw) {
+  const floor = wordHold.update(raw, performance.now());
   if (S.floor === floor) return;
   S.floor = floor;
   if (S.phase === "live") {
@@ -2110,17 +2129,17 @@ function render() {
 }
 
 /**
- * Header items by priority (status word > money > time > project > detail > "today"):
+ * Header items by priority (status word > money > session > today > detail > project):
  * when the row is short of room, whole items hide instead of being cut to "claude…"
  * and "$0.…". The money is never truncated.
  */
 function fitHeader() {
   const top = el.top;
   const text = el.statusLabel.parentElement;
-  const suffix = el.usage.querySelector(".usage-suffix");
+  const items = [el.usage.querySelector(".usage-today"), el.usage.querySelector(".usage-session")].filter(Boolean);
   el.project.hidden = !el.project.textContent;
   el.statusDetail.hidden = !el.statusDetail.textContent;
-  if (suffix) suffix.hidden = false;
+  for (const it of items) it.hidden = false;
   // Too tight: the row overflows, the word or the detail is clipped, or the project
   // has ellipsized to a stub (under ~6 characters) that no longer names anything.
   const over = () =>
@@ -2131,20 +2150,20 @@ function fitHeader() {
   el.project.hidden = true;
   if (!over()) return;
   el.statusDetail.hidden = true;
-  if (!over() || !suffix) return;
-  suffix.hidden = true;
-}
-
-function clockText() {
-  return S.phase === "live" && S.startedAt ? lib.sessionText(Date.now() - S.startedAt) : "";
+  for (const it of items) {
+    if (!over()) return;
+    it.hidden = true;
+  }
 }
 
 /**
- * Today's usage as one chip: "14 min · $0.71 today", the figures in the strong ink and
- * the units quieter. The reading is throttled (lib.stableUsage) so the cents don't
- * tick with every data-channel update.
+ * The header's timers as clocks (SPEC-DEVIATIONS "timers"): "Session 14:02 ·
+ * Today 31:40 · $1.56", ticking every second, tabular so the width holds. Today's
+ * figure is the billed reading (lib.stableUsage) advanced by wall time while live
+ * (lib.tickingToday); the cost is the reading's, so the cents don't tick.
  */
 let usageShown = null;
+let todayShown = null;
 let usageText = "";
 function renderUsage() {
   if (!S.status) {
@@ -2152,18 +2171,24 @@ function renderUsage() {
     usageText = "";
     return false;
   }
-  usageShown = lib.stableUsage(usageShown, lib.todaySeconds(S.status, S.dcUsage, S.liveSessionId), Date.now());
-  const time = lib.formatDuration(usageShown.seconds);
+  const now = Date.now();
+  usageShown = lib.stableUsage(usageShown, lib.todaySeconds(S.status, S.dcUsage, S.liveSessionId), now);
+  const live = S.phase === "live" && !!S.startedAt;
+  todayShown = lib.tickingToday(usageShown, now, { live, shown: todayShown });
+  const session = live ? lib.formatClock((now - S.startedAt) / 1000) : "";
+  const today = lib.formatClock(todayShown);
   const cost = lib.formatCost(usageShown.seconds);
-  const text = `${time} · ${cost} today`;
+  const text = `${session}|${today}|${cost}`;
   el.usage.hidden = false;
   if (text === usageText) return false;
   usageText = text;
-  const strong = (t) => Object.assign(document.createElement("span"), { className: "usage-fig", textContent: t });
-  const quiet = (t, cls = "usage-unit") => Object.assign(document.createElement("span"), { className: cls, textContent: t });
-  // "14 min" -> figure "14" + unit " min"; "under a minute" stays one quiet phrase.
-  const timeNodes = time.split(/(\d+)/).filter(Boolean).map((t) => (/^\d+$/.test(t) ? strong(t) : quiet(t)));
-  el.usage.replaceChildren(...timeNodes, quiet(" · ", "usage-sep"), strong(cost), quiet(" today", "usage-suffix"));
+  const span = (cls, t) => Object.assign(document.createElement("span"), { className: cls, textContent: t });
+  const item = (cls, label, fig) => {
+    const it = span(`usage-item ${cls}`, "");
+    it.append(span("usage-unit", `${label} `), span("usage-fig", fig), span("usage-sep", " · "));
+    return it;
+  };
+  el.usage.replaceChildren(...(session ? [item("usage-session", "Session", session)] : []), item("usage-today", "Today", today), span("usage-fig usage-cost", cost));
   return true;
 }
 
@@ -2177,7 +2202,6 @@ function renderHeader(v = S.view || computeView()) {
   const owner = S.status?.owner;
   el.project.textContent = owner?.project || "";
   el.project.title = owner?.cwd || "";
-  el.clock.textContent = clockText();
   renderUsage();
   fitHeader();
   document.title = lib.windowTitle(v, attention());
@@ -2206,9 +2230,16 @@ function renderStage(v = computeView()) {
     voiceDown: linking,
   });
 
-  el.stageWord.textContent = v.word;
+  if (el.stageWord.textContent !== v.word) {
+    // Crossfade instead of a jump: restart a short fade-in on the new word.
+    el.stageWord.dataset.fade = "false";
+    el.stageWord.textContent = v.word;
+    if (v.view === "live") requestAnimationFrame(() => (el.stageWord.dataset.fade = "true"));
+  }
   el.stageWord.dataset.tone = v.wordTone || "";
-  el.stageSub.hidden = !v.sub;
+  // In the live view the line under the word keeps its height (CSS min-height), so a
+  // state that has one and a state that has none never move what is below.
+  el.stageSub.hidden = v.view === "live" ? false : !v.sub;
   el.stageSub.textContent = v.sub || "";
   el.keyHint.hidden = S.phase !== "live";
   el.keyHintVerb.textContent = v.floor === "muted" ? "to unmute" : "to mute";
@@ -2279,20 +2310,29 @@ const REQUEST_ACTIVE = new Set(["collecting", "sent", "delivered", "held_suspect
 
 function renderClaude() {
   const d = S.delegations[0] || null;
-  const m = lib.claudeView({ busy: !!S.busy, kind: S.claudeKind, text: S.claudeText, summary: S.summary, request: d });
+  const m = lib.claudeView({
+    busy: !!S.busy, kind: S.claudeKind, text: S.claudeText, says: S.claudeSays, saysAt: S.claudeSaysAt,
+    tool: S.claudeTool, now: Date.now(), agents: S.agents, summary: S.summary, request: d,
+  });
   el.body.dataset.claude = m.kind;
   el.claudeTitle.textContent = m.title;
+  el.claudeAgents.hidden = !m.agents;
+  el.claudeAgents.textContent = m.agents || "";
   el.claudeStep.hidden = m.kind !== "working";
-  el.claudeStep.textContent = m.step || "";
+  if (el.claudeStep.textContent !== (m.step || "")) el.claudeStep.textContent = m.step || "";
+  el.claudeStep.dataset.secondary = String(!!m.secondary);
   el.claudeCommand.hidden = !(m.kind === "approval" && m.command);
   el.claudeCommand.textContent = m.command || "";
   el.claudeNote.hidden = m.kind !== "approval";
   // While the paused card shows the pending result, don't repeat it.
   const showSummary = m.kind === "finished";
   el.summary.hidden = !showSummary;
-  el.summary.textContent = showSummary ? m.summary : "";
+  // Claude's markdown, escaped first and then a whitelist of tags (lib.renderMarkdown);
+  // code blocks only in the expanded view.
+  const html = showSummary ? lib.renderMarkdown(m.summary, { code: S.summaryExpanded ? "block" : "omit" }) : "";
+  if (el.summary.dataset.html !== html) { el.summary.innerHTML = html; el.summary.dataset.html = html; }
   el.claude.dataset.expanded = String(S.summaryExpanded);
-  el.moreBtn.hidden = !showSummary || m.summary.length < 150;
+  el.moreBtn.hidden = !showSummary || (m.summary.length < 150 && !/\n\s*\n|```/.test(m.summary));
   el.moreBtn.textContent = S.summaryExpanded ? "Less" : "More";
   el.moreBtn.setAttribute("aria-expanded", String(S.summaryExpanded));
   const req = m.request;
@@ -2313,7 +2353,8 @@ function syncTicker() {
   const need = (S.phase === "live" && S.startedAt) || S.busy;
   if (need && !ticker) {
     ticker = setInterval(() => {
-      if (S.phase === "live" && S.startedAt) el.clock.textContent = clockText();
+      // Claude's words stay the card's line while fresh; after that a tool line may show.
+      if (S.busy) renderClaude();
       // A held usage reading (lib.stableUsage) catches up within ~10 s even when no new
       // status or data-channel usage arrives.
       if (renderUsage()) fitHeader();

@@ -226,11 +226,11 @@ kbd {
   white-space: pre;
   color: var(--fg-2);
 }
-.usage-fig { color: var(--fg); font-weight: 600; }
+.usage-fig { color: var(--fg); font-weight: 600; font-variant-numeric: tabular-nums; }
 .usage-sep { color: var(--fg-3); }
+.usage-item[hidden] { display: none; }
 /* The gear's 44 px box has 12 px of air around the icon; pull it in so the visible gap is 16. */
 .gear { margin-left: calc(var(--space-1) * -1); }
-.clock:empty { display: none; }
 
 /* Status glyph: the SHAPE carries the meaning, colour supports it. */
 .glyph { position: relative; width: 12px; height: 12px; margin-top: 4px; flex: none; color: var(--fg-3); }
@@ -408,6 +408,13 @@ body[data-floor="off"] .mute-icon .ico-slash { opacity: 1; }
   transition-property: color;
   transition-duration: var(--dur-base);
 }
+/* Live view: the word is a slow summary in a fixed slot (SPEC-DEVIATIONS "status
+   word"). One line, and the line under it always keeps its height, so nothing
+   below (the Claude card, the captions) moves when the floor changes. */
+body[data-view="live"] .word { white-space: nowrap; max-width: 100%; overflow: hidden; text-overflow: ellipsis; }
+.word[data-fade="true"] { animation: word-in 260ms ease-out; }
+@keyframes word-in { from { opacity: 0.25; } to { opacity: 1; } }
+body[data-view="live"] .sub { min-height: calc(var(--text-small) * 1.45); line-height: 1.45; white-space: nowrap; max-width: 100%; overflow: hidden; text-overflow: ellipsis; }
 body[data-floor="you"] .word { color: var(--live); }
 body[data-floor="muted"] .word { color: var(--mute); }
 .word[data-tone="attn"] { color: var(--attn) !important; }
@@ -415,7 +422,6 @@ body[data-floor="muted"] .word { color: var(--mute); }
 .sub { color: var(--fg-2); font-size: var(--text-small); text-wrap: balance; }
 .hint { color: var(--fg-3); font-size: var(--text-small); display: flex; align-items: center; gap: 6px; font-variant-numeric: tabular-nums; }
 .hint .keys { display: inline-flex; align-items: center; gap: 6px; }
-.hint .clock::before { content: "·"; margin-right: 6px; }
 
 .steps { display: flex; flex-direction: column; gap: 4px; margin-top: 4px; text-align: left; font-size: var(--text-small); }
 .steps li { display: flex; align-items: center; gap: 8px; color: var(--fg-3); }
@@ -449,19 +455,33 @@ body[data-claude="idle"] .claude-title { font-weight: 400; color: var(--fg-2); }
 .claude-time { margin-left: auto; color: var(--fg-3); font-variant-numeric: tabular-nums; }
 .claude-icon { width: 14px; height: 14px; flex: none; border-radius: 50%; border: 2px solid var(--fg-3); }
 .claude-step { color: var(--fg); font-size: var(--text-body); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* A plain-words tool line stands in only while Claude has said nothing lately: quieter. */
+.claude-step[data-secondary="true"] { color: var(--fg-2); font-size: var(--text-small); line-height: calc(var(--text-body) * 1.4); }
+.claude-agents { color: var(--fg-3); font-size: var(--text-meta); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.claude-agents:not([hidden]) + .claude-time:not(:empty)::before { content: "·"; margin-right: 6px; }
+.claude-agents:not([hidden]) { margin-left: auto; }
+.claude-agents:not([hidden]) + .claude-time { margin-left: 0; }
+.claude-summary p, .claude-summary ul, .claude-summary ol { margin: 0 0 0.35em; }
+.claude-summary ul, .claude-summary ol { padding-left: 1.25em; }
+.claude-summary code { font-family: var(--font-mono, ui-monospace, monospace); font-size: 0.92em; padding: 0 3px; border-radius: 3px; background: var(--surface-sunken); }
+.claude-summary pre { margin: 0 0 0.35em; padding: 6px 8px; overflow-x: auto; border-radius: var(--radius-sm); background: var(--surface-sunken); }
+.claude-summary pre code { padding: 0; background: none; }
+.claude-summary a { color: inherit; text-decoration: underline; text-underline-offset: 2px; }
+.claude-summary .md-omitted { color: var(--fg-3); }
 .claude-request { color: var(--fg-3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .claude-request[data-tone="error"] { color: var(--err); }
 .claude-request[data-tone="warn"] { color: var(--attn); }
+/* Rendered markdown (paragraphs, lists): clamped by height, since line-clamp does
+   not reach into block children. */
 .claude-summary {
   color: var(--fg);
   font-size: var(--text-body);
+  line-height: 1.45;
   text-wrap: pretty;
-  display: -webkit-box;
-  -webkit-line-clamp: 3;
-  -webkit-box-orient: vertical;
+  max-height: calc(3 * 1.45em);
   overflow: hidden;
 }
-.claude[data-expanded="true"] .claude-summary { -webkit-line-clamp: unset; max-height: 40vh; overflow-y: auto; }
+.claude[data-expanded="true"] .claude-summary { max-height: 40vh; overflow-y: auto; }
 .more {
   justify-self: start;
   min-height: var(--hit);
@@ -810,7 +830,7 @@ body[data-card="permission"][data-dial="small"] .stage { padding-top: 52px; }
   .readout { align-items: flex-start; text-align: left; }
   .steps { display: none; }
   .claude { padding-block: var(--space-2) !important; gap: 2px; }
-  .claude-summary { -webkit-line-clamp: 1; }
+  .claude-summary { max-height: 1.45em; }
   .claude-command { max-height: 4.4em; }
   .claude-note .note-full { display: none; }
   .claude-note .note-short { display: inline; font-weight: 600; }
