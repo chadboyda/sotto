@@ -286,7 +286,7 @@ test("control: off, already off, status, toggle, policy, shutdown", async (t) =>
   assert.equal(h.voice.control({ action: "off" }).message, "sotto: voice is already off.");
   const ws = await h.goLive();
   ws.receive({ type: "session.usage.updated", usage: { seconds: 90 } });
-  assert.equal(h.voice.control({ action: "status" }).message, "sotto: voice ON (proj-a) | 1 min today ($0.08) | voice marin | milestones");
+  assert.equal(h.voice.control({ action: "status" }).message, "sotto: voice ON (proj-a) | 1 min today ($0.08) | voice marin | persona sotto | milestones");
   const p = h.voice.control({ action: "policy", policy: "walkthrough" });
   assert.equal(p.message, "sotto: speaking policy is now walkthrough.");
   assert.match(appends(ws, "instructions").at(-1).content, /^The update preference has changed\. Update preference: Walkthrough/);

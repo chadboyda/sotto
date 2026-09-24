@@ -104,6 +104,9 @@ const el = {
   policyHelp: $("policy-help"),
   voiceSelect: $("voice-select"),
   voiceHelp: $("voice-help"),
+  personaSelect: $("persona-select"),
+  personaHelp: $("persona-help"),
+  personaVoice: $("persona-voice"),
   voiceGrid: $("voice-grid"),
   inputSelect: $("input-select"),
   micCompare: $("mic-compare"),
@@ -264,6 +267,8 @@ const S = {
   workSince: null,
   summaryExpanded: false,
   voices: null, // GET /api/voices
+  personas: null, // GET /api/personas
+  personaBusy: false, // a persona POST is in flight (keeps its help text)
   view: null, // last lib.pageView()
 };
 
@@ -350,6 +355,7 @@ async function startEvents() {
   const restarted = S.token !== null && boot.body.page_token !== S.token;
   S.token = boot.body.page_token;
   loadVoices();
+  loadPersonas();
   if (restarted) {
     // A new daemon knows nothing about our old Live session (its sideband is gone),
     // so close it rather than keep paying for an orphan.
@@ -487,6 +493,13 @@ function applyStatus(st) {
   if (S.voices && st.voice && S.voices.current !== st.voice) {
     S.voices = { ...S.voices, current: st.voice };
     renderVoices();
+  }
+  // A persona set from the terminal (/talk persona, the CLI) shows here too.
+  if (S.personas && st.persona && S.personas.current !== st.persona) {
+    if (S.personas.personas.some((p) => p.id === st.persona)) {
+      S.personas = { ...S.personas, current: st.persona };
+      renderPersonas();
+    } else loadPersonas(); // a custom persona added since the list was loaded
   }
   if (st.state === "paused" && st.last_error?.code === "daily_cap") S.pausedReason = "daily_cap";
   renderKeySettings();
@@ -2472,6 +2485,8 @@ function renderFooter(v = S.view || computeView()) {
   const connected = S.sseUp && st !== "off" && S.phase !== "replaced";
   el.policy.querySelectorAll("button").forEach((b) => (b.disabled = !connected));
   el.voiceSelect.disabled = !S.voices || !S.sseUp;
+  el.personaSelect.disabled = !S.personas || !S.sseUp;
+  el.personaVoice.disabled = !S.personas || !S.sseUp;
   const pausable = S.phase === "live" || S.phase === "connecting" || st === "live" || st === "connecting";
   // Card views have their own primary action; Pause would be the wrong one there.
   el.pauseBtn.hidden = v.view !== "live";
@@ -2732,6 +2747,71 @@ async function chooseVoice(name) {
 }
 
 // ---------------------------------------------------------------------------
+// Persona picker (§4.6 GET /api/personas, POST /api/persona). Like the voice,
+// the daemon re-creates a live session itself; the page follows.
+// ---------------------------------------------------------------------------
+const PERSONA_HELP = "How the voice talks: its tone, humor and opinions. What Claude does stays the same.";
+
+async function loadPersonas() {
+  try {
+    const res = await fetchJson("/api/personas", { headers: pageHeaders() });
+    if (!res.ok || !Array.isArray(res.body?.personas)) return;
+    S.personas = res.body;
+    renderPersonas();
+  } catch {
+    /* the picker stays disabled */
+  }
+}
+
+function personaLabel(p) {
+  const tag = p.source === "project" ? " (project)" : p.source === "user" ? " (yours)" : "";
+  return `${p.name}${tag}`;
+}
+
+function renderPersonas() {
+  const v = S.personas;
+  if (!v) return;
+  fillSelect(el.personaSelect, v.personas.map((p) => [p.id, personaLabel(p)]), v.current);
+  el.personaVoice.checked = v.use_voice !== false;
+  const cur = v.personas.find((p) => p.id === v.current);
+  if (!S.personaBusy) el.personaHelp.textContent = cur?.description ? `${cur.description}${cur.voice ? ` Voice: ${capName(cur.voice)}.` : ""}` : PERSONA_HELP;
+}
+
+async function choosePersona(id) {
+  if (!id || id === S.personas?.current) return;
+  S.personaBusy = true;
+  el.personaHelp.textContent = "Switching the persona…";
+  try {
+    const res = await fetchJson("/api/persona", { method: "POST", headers: pageHeaders(), body: JSON.stringify({ persona: id }) });
+    if (!res.ok) throw new Error(res.body?.error?.message || `HTTP ${res.status}`);
+    S.personas = { ...S.personas, current: res.body.persona || id };
+    if (S.voices && res.body.voice && S.voices.current !== res.body.voice) {
+      S.voices = { ...S.voices, current: res.body.voice };
+      renderVoices();
+    }
+    S.personaBusy = false;
+    renderPersonas();
+    const name = S.personas.personas.find((p) => p.id === S.personas.current)?.name || id;
+    if (res.body.switching) el.personaHelp.textContent = `Switching to ${name}. The conversation carries over.`;
+  } catch (err) {
+    S.personaBusy = false;
+    renderPersonas();
+    showBanner("error", String(err?.message || err).replace(/^sotto: /, ""), "persona_pick");
+  }
+}
+
+async function setPersonaVoice(on) {
+  try {
+    const res = await fetchJson("/api/persona", { method: "POST", headers: pageHeaders(), body: JSON.stringify({ use_voice: on }) });
+    if (!res.ok) throw new Error(res.body?.error?.message || `HTTP ${res.status}`);
+    if (S.personas) S.personas = { ...S.personas, use_voice: on };
+  } catch (err) {
+    el.personaVoice.checked = !on;
+    showBanner("error", String(err?.message || err).replace(/^sotto: /, ""), "persona_pick");
+  }
+}
+
+// ---------------------------------------------------------------------------
 // User actions
 // ---------------------------------------------------------------------------
 function resume() {
@@ -2835,6 +2915,8 @@ el.outputSelect.addEventListener("change", async () => {
 el.echoTestBtn?.addEventListener("click", () => runEchoTest());
 
 el.voiceSelect.addEventListener("change", () => chooseVoice(el.voiceSelect.value));
+el.personaSelect.addEventListener("change", () => choosePersona(el.personaSelect.value));
+el.personaVoice.addEventListener("change", () => setPersonaVoice(el.personaVoice.checked));
 
 el.moreBtn.addEventListener("click", () => {
   S.summaryExpanded = !S.summaryExpanded;
@@ -2988,6 +3070,7 @@ el.settingsBtn.addEventListener("click", () => {
   if (el.settings.open) return;
   el.settings.showModal();
   if (!S.voices && S.token) loadVoices();
+  if (S.token) loadPersonas(); // custom persona files may have changed
 });
 el.settingsClose.addEventListener("click", () => el.settings.close());
 el.settings.addEventListener("close", () => {

@@ -251,9 +251,18 @@ The user can change the voice without `/config`: `/talk voice <name>` (§5.7), t
 
 **Precedence** for the voice of every new Live session: `D/prefs.json` > userConfig `voice` (`CLAUDE_PLUGIN_OPTION_VOICE`, sent by toggle.sh as `config.voice`) > `marin`. Invalid values at any level are skipped. The daemon re-reads `prefs.json` on every `/control on`/`toggle`, so an edit made while no daemon ran is picked up. Implemented by `resolveVoice()` in `daemon/prefs.js` and mirrored in toggle.sh.
 
-`audio.output.voice` is immutable for a Live session (the Live API reference, https://developers.openai.com/api/reference/resources/live/primary-websocket: voice and format "are immutable after startup"), so a change while live re-creates the session (§6.14).
+The persona (§4.6) persists in the same file. `audio.output.voice` is immutable for a Live session (the Live API reference, https://developers.openai.com/api/reference/resources/live/primary-websocket: voice and format "are immutable after startup"), so a change while live re-creates the session (§6.14).
 
 ---
+
+### 4.6 Personas (`daemon/personas.js`, `D/prefs.json` `persona`, `persona_voice`)
+A persona is a personality block layered into the Live instructions (§8.1) plus an optional suggested voice. It changes how the voice talks (tone, humor, opinions, emotion, pacing), never what it relays: the block sits right after the identity line, and every rule that follows (brevity, secrets, mic checks, relay and "done" rules, delegation policy) comes after it and is stated to take precedence.
+- **Built-ins** (id, suggested voice): `sotto` (marin, default), `june` (coral), `moss` (cedar), `tempo` (tempo), `koan` (sage), `vic` (ash), `pip` (echo), `fern` (verse). Each has a display name, a one-line description and a body of at most ~250 tokens. toggle.sh mirrors the ids, voices and descriptions (pinned by test).
+- **Custom:** `<project>/.claude/sotto-personas/<id>.md` > `D/personas/<id>.md` > built-in, by id; the file name is the id (`^[a-z0-9][a-z0-9_-]{0,31}$`). Optional `---` frontmatter with `name`, `description` (≤ 160 chars) and `voice` (one of the 22; anything else is ignored with a `persona.warning`), then the body. An empty body is skipped (`persona.invalid`); a body over 2,000 chars is cut at a word; `{{`/`}}` are removed. At most 50 files per directory. Custom personas follow the built-ins, sorted by id. The project is the owner's `project_dir` (else `cwd`); unbound, the `/control` caller's session.
+- **Selection:** `/talk persona [name]` (§5.7), `sotto persona [name]` (§5.9), the drawer (`GET /api/personas`, `POST /api/persona`, §6.4). All persist `{"persona":<id>}` in `D/prefs.json`. A name matches an id, else a display name (case-insensitive). A saved id that no longer exists resolves to `sotto`.
+- **Persona voice:** `persona_voice` (default true; the drawer's "Switch to the persona's own voice"). When on, choosing a persona that names a voice also persists and applies that voice, in the same session swap. A later voice choice wins until the next persona choice.
+- **Live switch:** instructions are immutable per Live session, so a change while live re-creates the session exactly as §6.14 (close, wait for `session.closed` up to 2 s, `reconnect`), with SSE `notice` `persona_change` (`Switching to <Name>.`) and reconnect reason `persona_change`; `personaSwitch = id`; the greeting is the §8.3 persona line. While `connecting`, the ready session is switched with no greeting; in `reconnecting` the replacement uses the new persona; otherwise it applies to the next session.
+- **Messages** (`/control` `persona`): list `sotto: persona is <id>. Personas: <id>[ (current)][ (<description>)], …. Change it with /talk persona <name>.`; set `sotto: persona set to <id>[ with the <voice> voice]. ` + `Switching the live session now.` | `The session switches as soon as it is ready.` | `It applies to the next voice session.`; `sotto: persona is already <id>.`; `sotto: unknown persona "<shown>". Personas: <ids>.`
 
 ## 5. Plugin shell (Owner A)
 
@@ -443,6 +452,7 @@ Invoked by the UserPromptExpansion hook. Stdin example (VERIFIED shape):
    | `restart` | `restart` (§6.17) |
    | `quiet`, `milestones`, `walkthrough` | `policy` with `"policy":<word>` |
    | `voice`, `voices` (+ optional second word) | `voice`, with `"voice":<lowercased second word>` when one is given (§4.5) |
+   | `persona`, `personas` (+ optional second word) | `persona`, with `"persona":<lowercased second word>` when one is given (§4.6); a word that is not a valid id gets the unknown-persona string before any daemon contact |
    | `app` | `app` (§6.16): needs the inbox socket and cold-starts a daemon like `on` |
    | `window`, `windows` (+ optional second word) | `window`, with `"window":<lowercased second word>` when one is given; a word other than auto/app/chrome/default is answered with the §9.1 "unknown window" string |
    | `key`, `keys`, `apikey`, `api-key`, `api_key` | `key`; with any second word, `"setup":true` (the word itself is never read or sent, §4.3) |
@@ -458,6 +468,7 @@ Invoked by the UserPromptExpansion hook. Stdin example (VERIFIED shape):
      - For `policy`, print `sotto: voice is off. Turn it on with /talk on first.`
      - For `restart`, print `sotto: voice is off. The next /talk on starts the latest code.`
      - For `key`, spawn like `on` (below) but without requiring the inbox socket: the daemon serves the key setup window.
+     - For `persona`, handle it locally like `voice`: list the built-ins plus `D/personas/*.md` and `$CLAUDE_PROJECT_DIR` (else the input `cwd`) `/.claude/sotto-personas/*.md` with the §4.6 list string, or write `D/prefs.json` (with the persona's voice unless `persona_voice` is false). `write_prefs` keeps `persona` and `persona_voice` on voice and window writes.
      - For `window`, handle it locally like `voice` (list, or rewrite `D/prefs.json` keeping the voice); `voice` keeps the window likewise.
      - For `voice`, handle it locally and never spawn: list (current = `prefs.json` voice, else the resolved userConfig voice) or write `D/prefs.json` (§9.1 strings). The same local path runs when a sotto daemon of **another** data dir holds the port, because the choice belongs to this data dir.
      - Otherwise:
@@ -488,11 +499,13 @@ Claude Code adds a plugin's `bin/` to the Bash tool's `PATH` (plugins-reference.
 |---|---|---|
 | `sotto voice` | Print the voice list with the current voice marked (§9.1/§9.2 list string) | 0 |
 | `sotto voice <name>` | Set the voice (§4.5); if a Live session is running, switch it now (§6.14) | 0, or 1 for an unknown voice or any `ERROR` |
+| `sotto persona` | Print the persona list with descriptions, current one marked (§4.6) | 0 |
+| `sotto persona <name>` | Set the persona (§4.6); if a Live session is running, switch it now | 0, or 1 for an unknown persona or any `ERROR` |
 | `sotto status` | Same as `/talk status` | 0 |
 | `sotto restart` | Same as `/talk restart` (§6.17) | 0 |
 | anything else | usage on stderr | 2 |
 
-- **Implementation:** it runs `scripts/toggle.sh` with a synthesized UserPromptExpansion input (`{"command_args":"voice <name>"}`), so the CLI and `/talk voice` share one code path. It prints the `stopReason` as one plain line.
+- **Implementation:** it runs `scripts/toggle.sh` with a synthesized UserPromptExpansion input (`{"command_args":"voice <name>","cwd":"<$PWD>"}`; the cwd lets `persona` find the project's personas), so the CLI and `/talk voice` share one code path. It prints the `stopReason` as one plain line.
 - **Data dir discovery** (the Bash tool gets no `CLAUDE_PLUGIN_DATA`). Candidates: `$CLAUDE_PLUGIN_DATA` if set, `~/.claude/plugins/data/sotto*`, `~/.sotto`. Pick the first dir whose `active` owner socket equals `$CLAUDE_CODE_MESSAGING_SOCKET` (Claude Code exports it to Bash commands); else any dir with `active`; else one with a live `daemon.pid`; else `$CLAUDE_PLUGIN_DATA`; else the candidate whose `logs/` is newest. The port comes from `active` (field 2) or `daemon.port`.
 - It never touches the API key and never starts a daemon.
 
@@ -702,6 +715,7 @@ Messages are in §9.2.
 - 403 `bad_token` without the page token; 403 `bad_origin` for a foreign `Origin` (§6.3).
 - Setting the voice that is already current is a no-op (200, `switching:false`, message `sotto: voice is already <v>.`).
 - The page needs no other call: when `switching` is true the daemon sends SSE `notice` (`code:"voice_change"`, level `info`, text `Switching to the <v> voice.`), then `command:"reconnect"` with reason `voice_change`, which the existing reconnect handler (§7) answers with a new `/api/session` (`reason:"reconnect"`). A mute survives it, as for any reconnect.
+- **`GET /api/personas`** (page auth) → `{personas:[{id,name,description,voice,source:"builtin"|"user"|"project"}], current, use_voice, live, live_persona}`; bodies are never sent. **`POST /api/persona`** (page auth) `{persona?, use_voice?}` → `use_voice` alone: `{ok:true, use_voice}`; with `persona`: `{ok:true, persona, voice, switching, message}` (400 `bad_persona` for an unknown one or an empty body). A live switch is announced like the voice's (notice `persona_change`, `reconnect:persona_change`). `pageStatus` and `/status` `config` carry `persona`.
 
 ### 6.5 Owner binding and switching
 - Owner = `{socket, token, session_id, claude_pid, cwd, project_dir, project, transcript_path}`.
@@ -1036,7 +1050,7 @@ Answers to Claude's questions are decisions, and a voice model that thinks the c
   | Message | Shape |
   |---|---|
   | `status` | `{"type":"status","status":<PageStatus>}` on connect and on every change |
-  | `command` | `{"type":"command","command":"connect|disconnect|reconnect|close_window","reason":"…"}` (`reconnect` reasons include `expiry`, `rtc_failed`, `sideband_lost` and `voice_change`) |
+  | `command` | `{"type":"command","command":"connect|disconnect|reconnect|close_window","reason":"…"}` (`reconnect` reasons include `expiry`, `rtc_failed`, `sideband_lost`, `voice_change` and `persona_change`) |
   | `activity` | `{"type":"activity","kind":"turn_start|turn_end|tool|text|permission|agents","text":"…"}`: `tool` carries the §6.10 label (deduped per turn); `text` is Claude's main-thread message so far, sanitized (no markdown, code or paths), first one or two sentences; `turn_end` adds `summary` (the final message as markdown, ≤4000 chars); `agents` adds `count` (background agents working). Subagent hooks never produce `tool` or `text`. |
   | `delegation` | `{"type":"delegation","id":"…","status":"…","text":"…"}` |
   | `notice` | `{"type":"notice","level":"info|warn|error","code":"…","text":"…"}` |
@@ -1072,6 +1086,8 @@ Trigger: `/control` `voice` (toggle.sh, the CLI) or `POST /api/voice`.
 3. The page re-offers with `reason:"reconnect"`: the seed carries the recent voice history as user/assistant messages (already spoken, §8.2) and the Claude context, so the conversation continues without repeating the last update. The session body uses the new voice.
 4. When the new sideband is ready, the greeting is the §8.3 voice-switch line instead of none.
 5. If the voice changes while a session is `connecting` (or the ready session's voice differs from `config.voice`), the switch runs as soon as that session is ready, with no greeting in the old voice. In `reconnecting`, the pending replacement simply uses the new voice and greets with the switch line. In `off`, `waiting_page` and `paused`, the voice applies to the next session.
+
+A persona change (§4.6) uses the same re-creation (`recreateLive`), with `persona_change` for the notice code and reconnect reason; when the persona brings a new voice, one swap changes both and the greeting is the persona line.
 
 #### 6.14.1 Voice samples (`daemon/preview.js`, `GET /api/voice-preview`)
 The settings drawer can play a sample of any voice without touching the live session (the voice is immutable per Live session).
@@ -1320,11 +1336,11 @@ Full duplex is the product: the user can talk over the voice at any time and gpt
 ## 8. Live session prompt and seeding (`daemon/prompt.js`)
 
 ### 8.1 Instructions template (immutable per session)
-`render({project, policyText, vocabulary})` substitutes `{{project}}`, `{{policy_text}}` and `{{vocabulary}}` (the glossary, or nothing). The headings `Backchannel policy:`, `Interruption policy:`, `Delegation policy:`, `Backend tools:`, `Delegate to the backend when:` and `Do not delegate to the backend when:` are **verbatim** from guide-live-prompting.md. The template ends with the guide's two closing lines. Full text:
+`render({project, policyText, vocabulary, persona})` substitutes `{{project}}`, `{{policy_text}}`, `{{vocabulary}}` (the glossary, or nothing) and `{{persona}}` (`personaBlock(persona)`, §4.6: `Your persona is <Name>. Personality:`, the body, then a fixed paragraph saying the persona shapes tone, humor, opinions and emotion, stays inside the short reply, never changes what is relayed, when to delegate or what counts as done, that an opinion is not the user's decision, that saying it will ask Claude means delegating in the same turn, and that every rule below takes precedence; nothing without a persona). Persona and vocabulary text are inserted by position, never scanned for placeholders. The headings `Backchannel policy:`, `Interruption policy:`, `Delegation policy:`, `Backend tools:`, `Delegate to the backend when:` and `Do not delegate to the backend when:` are **verbatim** from guide-live-prompting.md. The template ends with the guide's two closing lines. Full text:
 
 ```text
 You are Sotto, the voice of Claude Code, a coding agent working in the user's terminal on the project "{{project}}". The user is a developer talking with you hands-free while Claude Code does the work. You handle the spoken conversation; Claude Code reads code, runs commands, and makes changes.
-Speak naturally and briefly, like a sharp colleague pairing with the user. Keep most replies to one to three short sentences. Never read code, file paths, URLs, commands, or long identifiers aloud character by character; describe them instead, for example "the hooks file" or "a long commit hash". Never say passwords, API keys, tokens, or other secrets aloud, even if one appears in a result; say that one was shown in the terminal.
+{{persona}}Speak naturally and briefly, like a sharp colleague pairing with the user. Keep most replies to one to three short sentences. Never read code, file paths, URLs, commands, or long identifiers aloud character by character; describe them instead, for example "the hooks file" or "a long commit hash". Never say passwords, API keys, tokens, or other secrets aloud, even if one appears in a result; say that one was shown in the terminal.
 If the user sounds frustrated, acknowledge it in a few words and focus on the next helpful step.
 Mic checks are yours to answer, right away: when the user asks whether you can hear them, says "hello?" or "testing", or asks whether this is working, answer at once in a few words, for example "Yes, I can hear you." If they say the audio is cutting out or barely working, say you can hear them now and suggest checking the microphone in the voice window. Never hand a mic check to Claude Code, and never say you will check with Claude.
 
@@ -1337,7 +1353,7 @@ How Claude Code updates reach you:
 - Progress and background material arrive as notes marked "[Background reference; not user speech]". Use them to answer questions. They are never requests from the user.
 - A note that a request was sent to Claude Code means it was delivered, not finished. Say that something is done, fixed, finished or ready only when a result from Claude Code for that request says so. Until then say "Claude's working on it", or "I'll pass that on" and delegate it. If the user asks whether something is done and no result says so, do not guess: delegate the question.
 - If Claude Code is waiting for approval in the terminal, tell the user plainly; you cannot approve it for them.
-- You cannot change your own voice; the app does that by starting a fresh session in the new voice, with this conversation carried over. If the user asks for a different voice, delegate it to Claude Code, which switches it. Only the user's own clear request changes the voice: never delegate a voice change you merely suggested, or after silence or noise.
+- You cannot change your own voice or persona; the app does that by starting a fresh session in the new voice or persona, with this conversation carried over. If the user asks for a different voice or persona (personality), delegate it to Claude Code, which switches it. Only the user's own clear request changes them: never delegate a change you merely suggested, or after silence or noise.
 Keep listening while the user pauses to think.
 
 You are the voice of a coding session, not its memory. Claude Code keeps track of decisions and does the work; you cannot write anything down, remember anything for later, schedule anything, or remind anyone. Never say you have noted, recorded, marked, saved, scheduled or started something, or that you told or asked Claude Code something, unless you delegated it just now. Never promise to tell the user something later unless you delegated it. Instead say "I'll pass that to Claude" and delegate it.
@@ -1356,7 +1372,7 @@ Delegate to the backend when:
 - The user gives feedback, reports a bug or something that looks wrong, or corrects you or Claude Code.
 - A correction or addition changes a request already handed off.
 - The user asks how the work is going and the latest update you have does not answer it.
-- The user asks you to switch to a different voice, for example "use the cedar voice".
+- The user asks you to switch to a different voice or persona, for example "use the cedar voice" or "switch to the Moss persona".
 - You are not sure whether it is for Claude Code. When in doubt, delegate. Greetings and mic checks are never in doubt: answer them yourself.
 
 Do not delegate to the backend when:
@@ -1407,6 +1423,7 @@ The earlier voice conversation follows as user and assistant messages, oldest fi
 | can't hear the user (page `cant_hear`, §7.5) | `Say only "I can't hear you well — check the mic in the voice window." Then stop and listen.` |
 | `resume` | `Say "I'm back." If a result arrived while voice was paused, tell the user about it briefly. Then stop and listen.` |
 | `reconnect` | none |
+| `reconnect` after a persona switch (§4.6; also when it changed the voice) | `In one short sentence, in your new personality, tell the user you're now <Name>. Then stop and listen; the conversation continues from where it left off.` |
 | `reconnect` after a voice switch (§6.14) | `Say only "Switched to <voice>." Then stop and listen; the conversation continues from where it left off.` |
 | `wake`, `notify` | none (§6.15) |
 
@@ -1421,7 +1438,7 @@ The earlier voice conversation follows as user and assistant messages, oldest fi
 ### 9.1 toggle.sh strings (bash side)
 | Condition | stopReason |
 |---|---|
-| bad argument | `sotto: usage: /talk [on|off|status|restart|quiet|milestones|walkthrough|voice [name]|app|window [auto|app|chrome]|key]` |
+| bad argument | `sotto: usage: /talk [on|off|status|restart|quiet|milestones|walkthrough|voice [name]|persona [name]|app|window [auto|app|chrome]|key]` |
 | window, unknown | `sotto: unknown window "<word, ≤20>". Choose auto, app or chrome.` |
 | window list, no daemon | `sotto: window is <w>. Change it with /talk window <auto|app|chrome>.` |
 | window set, no daemon | `sotto: window set to <w>. It applies the next time the voice window opens.` |
@@ -1459,7 +1476,7 @@ The earlier voice conversation follows as user and assistant messages, oldest fi
 | off | `sotto: voice OFF. <m> min today ($<$>).` |
 | off, already off | `sotto: voice is already off.` |
 | status, off | `sotto: voice is off. <m> min today ($<$>).` |
-| status, on | `sotto: voice <STATE> (<project>) | <m> min today ($<$>) | voice <voice> | <policy>` plus ` | <app note>` and ` | last error: <message>` if set. `<STATE>` is `ON` when live, else the state word. The app note (also appended to the off status as ` <note>.`) is set only when the window is `auto`/`app` and the app is not ready: `desktop app installing`, `desktop app not installed yet; /talk app installs it`, or `desktop app couldn't be installed (<message>); using Chrome. Retry with /talk app`. |
+| status, on | `sotto: voice <STATE> (<project>) | <m> min today ($<$>) | voice <voice> | persona <persona id> | <policy>` plus ` | <app note>` and ` | last error: <message>` if set. `<STATE>` is `ON` when live, else the state word. The app note (also appended to the off status as ` <note>.`) is set only when the window is `auto`/`app` and the app is not ready: `desktop app installing`, `desktop app not installed yet; /talk app installs it`, or `desktop app couldn't be installed (<message>); using Chrome. Retry with /talk app`. |
 | on, window held for an app install | `sotto: voice ON (<project>). Installing the desktop app (signed release, about 350 KB); the window opens when it is ready.` |
 | on, app install failed | `sotto: voice ON (<project>). Desktop app couldn't be installed (<message>); using Chrome.` (the page also gets the `app_install_failed` notice) |
 | window (list) | `sotto: window is <w> (desktop app: <state>). Change it with /talk window <auto|app|chrome>.` |
@@ -1597,6 +1614,7 @@ Inject `clock`, `fetchImpl`, `WebSocketImpl`, `inbox`, `chrome` and `log`.
   - an unexpected close triggers one re-attach.
 - **mirror** (`test/daemon/mirror.test.js`): the classifier on the real lines of the 2026-09-23 session; the 6 s quiet timer, batching, once-only sending, consumption, filler left unconsumed, deferral to a collecting delegation, the late-delegation upgrade, modes, echoes, the quoted assistant line; replays of real transcript fragments (`test/fixtures/voice-decisions.json`) through the whole daemon (naming decision, restart request, bug report); mirror turns (no delivery, `mirror_result`, "Noted." silent); awaiting-input detection, note, status, seed and clearing; the §8.1 delegation lines; the voice-switch guard replay (the model's own offer with no user words sends nothing).
 - **voice switch** (`test/daemon/voice-switch.test.js`): prefs precedence (prefs > userConfig > default, invalid skipped); `/control voice` messages; live switch closes the old session, sends `reconnect:voice_change`, is not counted as a loss, seeds the voice history, uses the new voice and greets with the switch line; switch while `connecting`; `paused` applies to the next session; `/api/voices` and `/api/voice` auth and shapes.
+- **personas** (`test/daemon/personas.test.js`): built-ins (8, distinct voices, bodies ≤ ~250 tokens); file parsing (frontmatter, defaults, bad voice, cut at 2,000 chars, empty, bad id, CRLF); precedence project > user > built-in; lookup by id or name, unknown → default; list/unknown messages; prefs `persona`/`persona_voice`; the persona block comes after the identity line and before every relay rule, is inserted literally, and keeps the instructions far below 16k tokens; session create uses the chosen persona; `/control persona` messages, persona voice on and off; project personas through an unbound caller's session; live switch (close, `reconnect:persona_change`, seeded history without a repeat, new voice, persona greeting); switch while `connecting`; `/api/personas` and `/api/persona` auth and shapes. toggle.sh (`test/scripts/toggle.test.js`): the bash list equals `personaListMessage` and mirrors the built-ins; local set with the persona's voice, `persona_voice` false, custom files, unknown, daemon-up body.
 - **voice lifecycle** (fake clock): idle close after `idle_minutes`; no idle close while a delegation is collecting; the expiry reconnect window; daily-cap 80 % and 100 %; `pendingResult` while paused; SessionEnd `clear` is ignored.
 
 ### 11.3 Owner C: `test/web/*.test.js`
@@ -1661,6 +1679,9 @@ Unit tests: `test/daemon/update.test.js` (fingerprint, settle, quiet polling, fa
 
 ### 11.8 End-to-end decisions (`test/e2e/decisions.mjs`; `npm run e2e:decisions`, also run by `npm run e2e`)
 Fake mic: 8 s lead, "Sotto is a clever name. I think we should go with that one.", 13 s, "Oh, and let me know when the auto restart is ready.", silence (TTS fixtures `decide-name.wav`, `ask-later.wav`). The test plays Claude through the real hook.sh (UserPromptSubmit on delivery, then Stop "Got it." / "Noted." for a mirror). Checks: each utterance reaches the inbox within 12 s of its last word, exactly once, delegated (`next`) or mirrored (`later`, tagged, `clv-mirror-`); reports which; WARN on a self-made promise in the voice's replies; hook.sh gives a mirror the voice context; a mirror turn's "Noted." is silent. About 40 billed seconds.
+
+### 11.11 End-to-end persona switch (`test/e2e/persona.mjs`; `npm run e2e:persona`, also run by `npm run e2e`)
+The fake mic asks the same question twice (good news plus a request for Claude). After the first answer, `/talk persona tempo` switches the live session: the new session is created with `persona:"tempo"`, voice `tempo`, reason `reconnect`; the old one closes `close_requested`; the persona greeting is sent and spoken; the second answer is not the same words as the first; the request reaches Claude before and after the switch (delegated or mirrored); no secrets in the log. About 50 billed seconds.
 
 ### 11.10 End-to-end mic check (`test/e2e/miccheck.mjs`; `npm run e2e:miccheck`, also run by `npm run e2e`)
 Fake mic (macOS `say`, built at run time): 8 s lead, "Hello? Hello? Can you hear me? Wow, it's like barely working.", silence. Checks: the voice starts answering within 8 s of the last word, says it can hear the user, does not defer to Claude; no `session.delegation.created` and no inbox message (neither delegated nor mirrored) for 12 s. About 25 billed seconds.

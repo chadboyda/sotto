@@ -74,6 +74,7 @@ read -r ARG ARG2 _ <<<"$ARGS_WS"
 
 POLICY=""
 VOICE_ARG=""
+PERSONA_ARG=""
 WINDOW_ARG=""
 KEY_SETUP=""
 shopt -s nocasematch
@@ -87,6 +88,8 @@ case "$ARG" in
                                 POLICY="$(printf '%s' "$ARG" | tr '[:upper:]' '[:lower:]')" ;;
   voice|voices)                 ACTION=voice
                                 VOICE_ARG="$(printf '%s' "$ARG2" | tr '[:upper:]' '[:lower:]')" ;;
+  persona|personas)             ACTION=persona
+                                PERSONA_ARG="$(printf '%s' "$ARG2" | tr '[:upper:]' '[:lower:]')" ;;
   # /talk app: install the desktop app if needed and open the voice in it
   # (persists window=app). /talk window [auto|app|chrome]: where it opens.
   app)                          ACTION=app ;;
@@ -103,7 +106,7 @@ esac
 shopt -u nocasematch
 
 if [[ "$ACTION" == usage ]]; then
-  finish "sotto: usage: /talk [on|off|status|restart|quiet|milestones|walkthrough|voice [name]|app|window [auto|app|chrome]|key]"
+  finish "sotto: usage: /talk [on|off|status|restart|quiet|milestones|walkthrough|voice [name]|persona [name]|app|window [auto|app|chrome]|key]"
 fi
 
 # --- config (SPEC §4.1/§4.2); unset, empty or invalid -> default ---------------
@@ -182,17 +185,135 @@ pref_voice() { # prints the valid voice from prefs.json, or nothing
   # shellcheck disable=SC2086
   if [[ "$p" =~ $re ]] && in_list "${BASH_REMATCH[1]}" $VOICES; then printf '%s' "${BASH_REMATCH[1]}"; fi
 }
+pref_persona() { # prints the persona id from prefs.json (not checked against the list), or nothing
+  local p="" re='"persona"[[:space:]]*:[[:space:]]*"([a-z0-9][a-z0-9_-]*)"'
+  [[ -r "$PREFS" ]] && p="$(<"$PREFS")"
+  if [[ "$p" =~ $re ]]; then printf '%s' "${BASH_REMATCH[1]}"; fi
+}
+pref_persona_voice() { # prints true/false when prefs.json sets persona_voice, else nothing
+  local p="" re='"persona_voice"[[:space:]]*:[[:space:]]*(true|false)'
+  [[ -r "$PREFS" ]] && p="$(<"$PREFS")"
+  if [[ "$p" =~ $re ]]; then printf '%s' "${BASH_REMATCH[1]}"; fi
+}
 pref_window() { # prints the valid window mode from prefs.json, or nothing
   local p="" re='"window"[[:space:]]*:[[:space:]]*"([a-z]+)"'
   [[ -r "$PREFS" ]] && p="$(<"$PREFS")"
   if [[ "$p" =~ $re ]] && in_list "${BASH_REMATCH[1]}" auto app chrome default; then printf '%s' "${BASH_REMATCH[1]}"; fi
 }
-# write_prefs VOICE WINDOW: rewrite prefs.json with both (either may be empty).
+# write_prefs VOICE WINDOW [PERSONA]: rewrite prefs.json (any may be empty).
+# Without a PERSONA argument the saved persona is kept; persona_voice always is.
 write_prefs() {
-  local body=""
+  local body="" persona pv
+  if (( $# >= 3 )); then persona=$3; else persona="$(pref_persona)"; fi
+  pv="$(pref_persona_voice)"
   [[ -n "$1" ]] && body="\"voice\":\"$1\""
   [[ -n "$2" ]] && body="${body:+$body,}\"window\":\"$2\""
+  [[ -n "$persona" ]] && body="${body:+$body,}\"persona\":\"$persona\""
+  [[ -n "$pv" ]] && body="${body:+$body,}\"persona_voice\":$pv"
   printf '{%s}\n' "$body" > "$PREFS.tmp" && chmod 600 "$PREFS.tmp" && mv -f "$PREFS.tmp" "$PREFS"
+}
+
+# --- /talk persona (SPEC §4.6) --------------------------------------------------
+# Same split as the voice: the daemon answers when it runs (and switches a live
+# session); otherwise this lists and saves the choice itself. Mirrors
+# daemon/personas.js: the built-ins below (ids, voices, descriptions) are
+# pinned to it by test/scripts/toggle.test.js; custom personas are
+# <project>/.claude/sotto-personas/<id>.md and $D/personas/<id>.md.
+PERSONAS="sotto june moss tempo koan vic pip fern"
+PROJECT_DIR="${CLAUDE_PROJECT_DIR:-$IN_CWD}"
+persona_builtin() { # persona_builtin ID: prints "voice|description", fails if not a built-in
+  case "$1" in
+    sotto) printf '%s' "marin|Balanced and friendly, with real opinions and a light touch of humor" ;;
+    june)  printf '%s' "coral|Warm, encouraging partner who celebrates progress and keeps you steady" ;;
+    moss)  printf '%s' "cedar|Dry-witted senior engineer: understated, seen-it-all, quietly funny" ;;
+    tempo) printf '%s' "tempo|High-energy hype buddy: every green test is a small victory" ;;
+    koan)  printf '%s' "sage|Calm zen mentor: slow, unflappable, finds the lesson in the bug" ;;
+    vic)   printf '%s' "ash|Blunt no-nonsense reviewer: straight answers, zero fluff" ;;
+    pip)   printf '%s' "echo|Playful, sarcastic sidekick with a soft spot for the user" ;;
+    fern)  printf '%s' "verse|Curious explorer who narrates the codebase like a field naturalist" ;;
+    *) return 1 ;;
+  esac
+}
+persona_file() { # persona_file ID: prints the custom file for ID (project beats user), or fails
+  local f
+  for f in "$PROJECT_DIR/.claude/sotto-personas/$1.md" "$D/personas/$1.md"; do
+    [[ -n "$PROJECT_DIR" || "$f" == "$D"/* ]] || continue
+    [[ -f "$f" && -s "$f" ]] && { printf '%s' "$f"; return 0; }
+  done
+  return 1
+}
+persona_ids() { # all ids: built-ins in order, then custom ones sorted, no duplicates
+  local f id out=" $PERSONAS " extra=""
+  for f in "$D"/personas/*.md "$PROJECT_DIR"/.claude/sotto-personas/*.md; do
+    [[ -f "$f" && ( -n "$PROJECT_DIR" || "$f" == "$D"/* ) ]] || continue
+    id="${f##*/}"; id="${id%.md}"
+    [[ "$id" =~ ^[a-z0-9][a-z0-9_-]{0,31}$ ]] || continue
+    [[ "$out$extra " == *" $id "* ]] && continue
+    extra+=" $id"
+  done
+  # shellcheck disable=SC2086
+  [[ -n "$extra" ]] && extra="$(printf '%s\n' $extra | LC_ALL=C sort | tr '\n' ' ')"
+  extra="${extra% }"
+  printf '%s' "$PERSONAS${extra:+ $extra}"
+}
+persona_meta() { # persona_meta ID KEY: a frontmatter value from the custom file, or nothing
+  local f line n=0 in=0
+  f="$(persona_file "$1")" || return 0
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    n=$((n + 1)); (( n > 30 )) && break
+    line="${line%$'\r'}"
+    if [[ "$line" =~ ^---[[:space:]]*$ ]]; then (( in )) && break; in=1; continue; fi
+    (( in )) || break
+    if [[ "$line" =~ ^[[:space:]]*$2[[:space:]]*:[[:space:]]*(.*)$ ]]; then
+      line="${BASH_REMATCH[1]}"; line="${line%"${line##*[![:space:]]}"}"
+      [[ "$line" == \"*\" || "$line" == \'*\' ]] && line="${line:1:${#line}-2}"
+      printf '%s' "$line"; return 0
+    fi
+  done < "$f"
+}
+persona_desc() {
+  local b d
+  if persona_file "$1" >/dev/null; then d="$(persona_meta "$1" description)"
+  elif b="$(persona_builtin "$1")"; then d="${b#*|}"; fi
+  d="${d//[$'\001'-$'\037']/ }"; d="${d:0:160}"
+  while [[ "$d" == *. || "$d" == *" " ]]; do d="${d%?}"; done
+  printf '%s' "$d"
+}
+persona_voice() { # the persona's own voice, if valid
+  local b v=""
+  if persona_file "$1" >/dev/null; then v="$(persona_meta "$1" voice | tr '[:upper:]' '[:lower:]')"
+  elif b="$(persona_builtin "$1")"; then v="${b%%|*}"; fi
+  # shellcheck disable=SC2086
+  in_list "$v" $VOICES && printf '%s' "$v"
+}
+# persona_local: /talk persona with no daemon of ours to ask (exits).
+persona_local() {
+  local cur ids id d out="" v cv
+  ids="$(persona_ids)"
+  cur="$(pref_persona)"
+  # shellcheck disable=SC2086
+  in_list "$cur" $ids || cur=sotto
+  if [[ -z "$PERSONA_ARG" ]]; then
+    for id in $ids; do
+      d="$(persona_desc "$id")"
+      [[ -n "$out" ]] && out+=", "
+      out+="$id"; [[ "$id" == "$cur" ]] && out+=" (current)"; [[ -n "$d" ]] && out+=" ($d)"
+    done
+    finish "sotto: persona is $cur. Personas: $out. Change it with /talk persona <name>."
+  fi
+  # shellcheck disable=SC2086
+  if ! in_list "$PERSONA_ARG" $ids; then
+    SHOWN="${PERSONA_ARG//[^a-z0-9_-]/}"
+    finish "sotto: unknown persona \"${SHOWN:0:40}\". Personas: ${ids// /, }."
+  fi
+  cv="$(pref_voice)"; [[ -n "$cv" ]] || cv="$CFG_VOICE"
+  v=""
+  [[ "$(pref_persona_voice)" != false ]] && v="$(persona_voice "$PERSONA_ARG")"
+  [[ "$v" == "$cv" ]] && v=""
+  [[ "$PERSONA_ARG" == "$cur" && -z "$v" ]] && finish "sotto: persona is already $PERSONA_ARG."
+  write_prefs "${v:-$(pref_voice)}" "$(pref_window)" "$PERSONA_ARG" \
+    || fail prefs_write "sotto: ERROR could not save the persona to $PREFS."
+  finish "sotto: persona set to $PERSONA_ARG${v:+ with the $v voice}. It applies to the next voice session."
 }
 # voice_local: /talk voice with no daemon of ours to ask (exits).
 voice_local() {
@@ -216,6 +337,10 @@ window_local() {
 if [[ "$ACTION" == window && -n "$WINDOW_ARG" ]] && ! in_list "$WINDOW_ARG" auto app chrome default; then
   SHOWN="${WINDOW_ARG//[^a-z0-9_-]/}"
   finish "sotto: unknown window \"${SHOWN:0:20}\". Choose auto, app or chrome."
+fi
+if [[ "$ACTION" == persona && -n "$PERSONA_ARG" && ! "$PERSONA_ARG" =~ ^[a-z0-9][a-z0-9_-]{0,31}$ ]]; then
+  SHOWN="${PERSONA_ARG//[^a-z0-9_-]/}"
+  finish "sotto: unknown persona \"${SHOWN:0:40}\". Personas: $(ids="$(persona_ids)"; printf '%s' "${ids// /, }")."
 fi
 if [[ "$ACTION" == voice && -n "$VOICE_ARG" ]]; then
   # shellcheck disable=SC2086
@@ -290,6 +415,7 @@ if [[ -n "$H" ]]; then
       # The voice lives in OUR prefs.json; a foreign daemon has nothing to do with it.
       voice_local
     fi
+    [[ "$ACTION" == persona ]] && persona_local
     [[ "$ACTION" == window ]] && window_local
     if [[ "$ACTION" == on || "$ACTION" == toggle || "$ACTION" == app ]]; then
       # Replace it with ours: ask it to shut down, wait for the port, then spawn.
@@ -333,6 +459,7 @@ daemon_down() {
     restart)    finish "sotto: voice is off. The next /talk on starts the latest code." ;;
     policy)     finish "sotto: voice is off. Turn it on with /talk on first." ;;
     voice)      voice_local ;;
+    persona)    persona_local ;;
     window)     window_local ;;
   esac
   # on/toggle/app/key continue: key needs a daemon to serve the setup window.
@@ -451,6 +578,7 @@ if [[ -n "$CLAUDE_PROJECT_DIR" ]]; then json_escape -v v "$CLAUDE_PROJECT_DIR"; 
 BODY="{\"action\":\"$ACTION\""
 [[ "$ACTION" == policy ]] && BODY+=",\"policy\":\"$POLICY\""
 [[ "$ACTION" == voice && -n "$VOICE_ARG" ]] && BODY+=",\"voice\":\"$VOICE_ARG\""
+[[ "$ACTION" == persona && -n "$PERSONA_ARG" ]] && BODY+=",\"persona\":\"$PERSONA_ARG\""
 [[ "$ACTION" == window && -n "$WINDOW_ARG" ]] && BODY+=",\"window\":\"$WINDOW_ARG\""
 [[ "$ACTION" == key && -n "$KEY_SETUP" ]] && BODY+=",\"setup\":true"
 BODY+=",\"session\":{$SESSION}"
