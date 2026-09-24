@@ -26,11 +26,11 @@ const ok = async () => ({ ok: true });
 /** A fake plugin root (app sources + version) and its sources hash. */
 function fakePlugin(version = "9.8.7") {
   const root = tmp();
-  fs.mkdirSync(path.join(root, "app/Sources"), { recursive: true });
+  fs.mkdirSync(path.join(root, "app-native/Sources/SottoApp"), { recursive: true });
   fs.mkdirSync(path.join(root, "scripts"), { recursive: true });
   fs.mkdirSync(path.join(root, ".claude-plugin"), { recursive: true });
-  fs.writeFileSync(path.join(root, "app/Info.plist"), "<plist/>");
-  fs.writeFileSync(path.join(root, "app/Sources/main.swift"), "print(1)\n");
+  fs.writeFileSync(path.join(root, "app-native/Package.swift"), "// swift-tools-version:6.0\n");
+  fs.writeFileSync(path.join(root, "app-native/Sources/SottoApp/main.swift"), "print(1)\n");
   fs.writeFileSync(path.join(root, "scripts/build-app.sh"), "#!/bin/bash\nexit 0\n");
   fs.writeFileSync(path.join(root, ".claude-plugin/plugin.json"), JSON.stringify({ name: "sotto", version }));
   return { root, hash: appSourceHash(root), version };

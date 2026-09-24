@@ -47,19 +47,28 @@ test("no test launches Chrome except through spawnSilentChrome", () => {
   for (const f of launchers) assert.match(read(f), /spawnSilentChrome\(/, f);
 });
 
-test("every desktop-app launch in the tests is in test mode (mock mic, muted page)", () => {
-  // Direct exec of the app binary with a page: must pass --test.
+test("every desktop-app launch in the tests is in test mode (fake audio, never the speakers)", () => {
+  // Direct exec of the app binary: every spawn(EXE, [...]) with a daemon port
+  // or a URL passes --test (the --selftest/--version probes open no audio).
   const app = read("test/app/app.test.mjs");
-  const direct = [...app.matchAll(/spawn\(EXE,\s*\[([^\]]*)\]/g)];
+  const direct = [...app.matchAll(/spawn(?:Sync)?\(EXE,\s*\[([^\]]*)\]/g)].map((m) => m[1]).filter((a) => !/"--(selftest|version)"/.test(a));
   assert.ok(direct.length > 0);
-  for (const [, args] of direct) assert.match(args, /"--test"/);
-  // First LaunchServices launch of each test carries SOTTO_APP_TEST=1 (later
-  // `open` calls reach the same, already test-mode instance).
+  for (const args of direct) assert.match(args, /"--test"/, args);
+  // The first LaunchServices launch of each test carries SOTTO_APP_TEST=1
+  // (later `open` calls reach the same, already test-mode instance), and the
+  // daemon-driven launches set it in the daemon env (window.js forwards it).
   assert.match(app, /"--env", "SOTTO_APP_TEST=1"/);
-  assert.match(read("test/app/live.test.mjs"), /SOTTO_APP_TEST: "1"/);
-  // The app's test mode forces the mock mic and adds the page-silencing script.
-  const support = read("app/Sources/Support.swift");
-  assert.match(support, /if o\.testMode \{[^}]*o\.mockCapture = true/);
-  const panel = read("app/Sources/Panel.swift");
-  assert.match(panel, /if Prefs\.testMode \{ ucc\.addUserScript\(WKUserScript\(source: PanelController\.testSilenceSource/);
+  assert.match(app, /SOTTO_APP_TEST: "1"/);
+  for (const f of listTests("test/app")) {
+    const src = read(f);
+    if (/createDaemon\(/.test(src) && /SOTTO_BROWSER: "app"/.test(src)) assert.match(src, /SOTTO_APP_TEST: "1"/, f);
+    // LaunchServices launches go to a test bundle id copy, never com.chadboyda.sotto.
+    if (/"open", \["-g", "-a"/.test(src)) assert.match(src, /com\.chadboyda\.sotto\.apptest/, f);
+  }
+  // In test mode the app always builds the fake engine (output to a WAV, never
+  // a CoreAudio unit) and never registers hotkeys or shows the panel.
+  const dir = path.join(ROOT, "app-native/Sources/SottoApp");
+  const src = fs.readdirSync(dir).filter((f) => f.endsWith(".swift")).map((f) => fs.readFileSync(path.join(dir, f), "utf8")).join("\n");
+  assert.match(src, /makeAudioIO\(test: options\.testMode\)/);
+  assert.match(src, /if o\.testMode \{[^}]*o\.hidden = !o\.show[^}]*o\.hotkeys = false/);
 });

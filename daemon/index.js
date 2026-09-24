@@ -15,6 +15,9 @@ import { createLogger } from "./log.js";
 import { SseHub } from "./sse.js";
 import { Voice } from "./voice.js";
 import { createHttpServer } from "./http.js";
+import { createNativeEndpoint } from "./native.js";
+import { NativeController } from "./native-session.js";
+import { rejectUpgrade } from "./wsserver.js";
 import { createWindow } from "./window.js";
 import * as inboxModule from "./inbox.js";
 import { WebSocketImpl as DefaultWS } from "./ws.js";
@@ -22,6 +25,8 @@ import { Updater, hashSources } from "./update.js";
 import { performRestart, readHandover, listenWithRetry } from "./handover.js";
 
 const LAUNCH_CODE_TTL_MS = 2 * 60_000;
+/** The native app link needs working node:http upgrade sockets (not Bun 1.3; see getPreference below). */
+const NATIVE_LINK_OK = !process.versions.bun || process.env.SOTTO_NATIVE_BUN === "1";
 
 export const realClock = {
   now: () => Date.now(),
@@ -62,7 +67,7 @@ export function nodeProblem(versions = process.versions, WS = globalThis.WebSock
 export function createDaemon({
   dataDir, port, pluginRoot, env = process.env, clock = realClock, fetchImpl = globalThis.fetch,
   WebSocketImpl = DefaultWS, inbox = inboxModule, chrome, log, daemonKey, pageToken, pageSecret, onExit, owner, execFile,
-  onRestart,
+  onRestart, nativeOptions = {},
   keychain, userConfigKey = env.CLAUDE_PLUGIN_OPTION_OPENAI_API_KEY, keys,
 }) {
   const paths = dataPaths(dataDir);
@@ -89,15 +94,24 @@ export function createDaemon({
   // OpenAI API key sources (SPEC §4.3): env > .env > Keychain > userConfig.
   const keyStore = keys || new KeyStore({ env, pluginRoot, dataDir, keychain, userConfigKey });
   let voice;
+  let nativeCtl = null; // NativeController: the native app link (docs/NATIVE.md)
   const sse = new SseHub({ clock, onChange: () => voice && voice.changed() });
   // Desktop app, Chrome --app window, or default browser (SPEC §6.16).
   const chromeApi = chrome || createWindow({
     dataDir, port, pluginRoot, env, log: logger, launchCode: issueLaunchCode, clock,
     // prefs.json (/talk window, /talk app) > userConfig `window` > auto.
-    getPreference: () => (voice ? voice.windowPref() : undefined),
+    // Under Bun (the fallback runtime) the native app cannot connect: Bun
+    // 1.3's node:http `upgrade` sockets accept writes that never reach the
+    // client (probed 2026-09-24), so /api/native never completes. The voice
+    // window is the Chrome page there.
+    getPreference: () => {
+      const pref = voice ? voice.windowPref() : undefined;
+      return !NATIVE_LINK_OK && (pref === undefined || pref === "auto" || pref === "app") ? "chrome" : pref;
+    },
     onInstallResult: (r) => voice?.appInstallResult(r),
-    pageConnected: () => sse.count > 0,
-    wantsWindow: () => !!voice && voice.config.open_browser !== false && sse.count === 0
+    // The native app's hello counts as the window having connected (§4.6).
+    pageConnected: () => sse.count > 0 || !!nativeCtl?.connected,
+    wantsWindow: () => !!voice && voice.config.open_browser !== false && sse.count === 0 && !nativeCtl?.connected
       && (voice.state === "waiting_page" || voice.state === "reconnecting" || voice.keySetup),
   });
   // Self-update (§6.17): only when the caller can swap processes (main()).
@@ -140,9 +154,21 @@ export function createDaemon({
     build: code.web,
     onControlAnswered: (action) => { if (action === "shutdown") setImmediate(stopListening); },
   });
+  // Native app link: WebSocket upgrade on the same port (docs/NATIVE.md §1).
+  nativeCtl = new NativeController({ voice, log: logger, clock, build: code.web, previewFile: (v) => voice.previews.file(v), ...nativeOptions });
+  const native = createNativeEndpoint({ port, pageToken: token, controller: nativeCtl, log: logger, clock });
+  server.on("upgrade", (req, socket, head) => {
+    socket.on("error", () => {});
+    try {
+      if (!native.handleUpgrade(req, socket, head)) rejectUpgrade(socket, 404, "not_found");
+    } catch (e) {
+      logger.error("native.upgrade_error", { message: String(e && e.message) });
+      try { socket.destroy(); } catch { /* ignore */ }
+    }
+  });
 
   return {
-    server, voice, sse, paths, keys: keyStore, daemonKey: key, pageToken: token, pageSecret: secret, issueLaunchCode, log: logger, stopListening, updater,
+    server, voice, sse, native, nativeCtl, paths, keys: keyStore, daemonKey: key, pageToken: token, pageSecret: secret, issueLaunchCode, log: logger, stopListening, updater,
     listen() {
       return new Promise((resolve, reject) => {
         server.once("error", reject);
@@ -160,6 +186,9 @@ export function createDaemon({
     },
     close() {
       updater?.stop();
+      // The app reconnects to the next daemon (4005 daemon_exit, §1).
+      native.close();
+      nativeCtl.dispose();
       voice.dispose();
       sse.close();
       listening = false;

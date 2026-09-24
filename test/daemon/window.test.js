@@ -17,13 +17,15 @@ import { createFakeClock } from "../helpers/fake-clock.js";
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 const tmp = () => fs.mkdtempSync(path.join(os.tmpdir(), "clw-"));
 
-/** A plugin root with a tiny app/ and a build script (content only matters for the hash). */
+/** A plugin root with a tiny app-native/ and a build script (content only matters for the hash). */
 function fakePlugin() {
   const root = tmp();
-  fs.mkdirSync(path.join(root, "app/Sources"), { recursive: true });
+  fs.mkdirSync(path.join(root, "app-native/Sources/SottoApp"), { recursive: true });
+  fs.mkdirSync(path.join(root, "app-native/Bundle"), { recursive: true });
   fs.mkdirSync(path.join(root, "scripts"), { recursive: true });
-  fs.writeFileSync(path.join(root, "app/Info.plist"), "<plist/>");
-  fs.writeFileSync(path.join(root, "app/Sources/main.swift"), "print(1)\n");
+  fs.writeFileSync(path.join(root, "app-native/Package.swift"), "// swift-tools-version:6.0\n");
+  fs.writeFileSync(path.join(root, "app-native/Bundle/Info.plist"), "<plist/>");
+  fs.writeFileSync(path.join(root, "app-native/Sources/SottoApp/main.swift"), "print(1)\n");
   fs.writeFileSync(path.join(root, "scripts/build-app.sh"), "#!/bin/bash\nexit 0\n");
   return root;
 }
@@ -56,32 +58,16 @@ describe("chooseWindow", () => {
     assert.equal(pick({ want: "none" }).mode, "none");
     assert.equal(pick({ want: "default" }).mode, "default");
     assert.equal(pick({ want: "chrome" }).mode, "chrome");
-    assert.deepEqual(pick({ want: "chrome", chromeExists: false }), { mode: "default", build: false, needRoute: false, reason: "no_chrome" });
+    assert.deepEqual(pick({ want: "chrome", chromeExists: false }), { mode: "default", build: false, reason: "no_chrome" });
   });
 
-  test("app: ready app launches without a route check", () => {
-    assert.deepEqual(pick({ want: "app" }), { mode: "app", build: false, needRoute: false, reason: "requested" });
-  });
-
-  test("auto: ready app needs the audio route first, then picks by it", () => {
-    assert.equal(pick({ want: "auto" }).needRoute, true);
-    assert.equal(pick({ want: "auto", route: { input: { bluetooth: false }, output: { bluetooth: true } } }).mode, "app");
-    const bt = pick({ want: "auto", route: { input: { bluetooth: true }, output: { bluetooth: true } } });
-    assert.equal(bt.mode, "chrome");
-    assert.equal(bt.reason, "bluetooth_input");
-    // No Chrome to fall back to: the app is still better than the default browser.
-    assert.equal(pick({ want: "auto", chromeExists: false, route: { input: { bluetooth: true } } }).mode, "app");
-  });
-
-  test("auto + Bluetooth default input: the app when its native mic can use another input on headphones", () => {
-    const route = (o) => ({ input: { bluetooth: true }, output: { bluetooth: true, headphones: true }, builtin_input: true, native_mic: true, ...o });
-    assert.deepEqual(pick({ want: "auto", route: route() }), { mode: "app", build: false, needRoute: false, reason: "native_mic" });
-    // Any missing condition: Chrome, as before.
-    assert.equal(pick({ want: "auto", route: route({ native_mic: false }) }).reason, "bluetooth_input");
-    assert.equal(pick({ want: "auto", route: route({ builtin_input: false }) }).reason, "bluetooth_input");
-    assert.equal(pick({ want: "auto", route: route({ output: { bluetooth: false, headphones: false } }) }).reason, "bluetooth_input");
-    // An older app build without the fields: Chrome.
-    assert.equal(pick({ want: "auto", route: { input: { bluetooth: true }, output: { bluetooth: true } } }).reason, "bluetooth_input");
+  test("app and auto: a ready app opens, with no audio-route check (docs/NATIVE.md §4.6)", () => {
+    assert.deepEqual(pick({ want: "app" }), { mode: "app", build: false, reason: "requested" });
+    assert.deepEqual(pick({ want: "auto" }), { mode: "app", build: false, reason: "auto" });
+    // The native app never captures from a Bluetooth input, so a headset
+    // default no longer sends auto to Chrome (whatever a caller passes).
+    assert.equal(pick({ want: "auto", route: { input: { bluetooth: true }, output: { bluetooth: true } } }).mode, "app");
+    assert.equal(pick({ want: "auto", chromeExists: false }).mode, "app");
   });
 
   test("missing or stale app: build in the background, Chrome this time", () => {
@@ -116,13 +102,40 @@ describe("app build state and sources hash", () => {
     assert.equal(r.stdout.trim(), appSourceHash(ROOT));
   });
 
-  test("hash changes with any app source", () => {
+  test("hash changes with any app source, and ignores SwiftPM build products", () => {
     const root = fakePlugin();
     const h1 = appSourceHash(root);
-    fs.writeFileSync(path.join(root, "app/Sources/main.swift"), "print(2)\n");
+    for (const junk of [".build/debug/Sotto", ".swiftpm/xcode/x.plist", "Sources/SottoApp/.DS_Store"]) {
+      fs.mkdirSync(path.dirname(path.join(root, "app-native", junk)), { recursive: true });
+      fs.writeFileSync(path.join(root, "app-native", junk), "x");
+    }
+    assert.equal(appSourceHash(root), h1, ".build/, .swiftpm/ and .DS_Store are not sources");
+    fs.writeFileSync(path.join(root, "app-native/Sources/SottoApp/main.swift"), "print(2)\n");
     assert.notEqual(appSourceHash(root), h1);
-    fs.rmSync(path.join(root, "app"), { recursive: true });
+    const h2 = appSourceHash(root);
+    fs.writeFileSync(path.join(root, "app-native/Bundle/Info.plist"), "<plist version=\"1.0\"/>");
+    assert.notEqual(appSourceHash(root), h2, "the bundle files count");
+    // The old WKWebView app/ directory is not part of the native app.
+    fs.mkdirSync(path.join(root, "app"), { recursive: true });
+    fs.writeFileSync(path.join(root, "app/Info.plist"), "<plist/>");
+    const h3 = appSourceHash(root);
+    fs.writeFileSync(path.join(root, "app/Info.plist"), "<plist changed/>");
+    assert.equal(appSourceHash(root), h3);
+    fs.rmSync(path.join(root, "app-native"), { recursive: true });
     assert.equal(appSourceHash(root), null);
+  });
+
+  test("build-app.sh and appSourceHash agree on a fake plugin with build products", { skip: process.platform !== "darwin" }, () => {
+    const root = fakePlugin();
+    fs.copyFileSync(path.join(ROOT, "scripts/build-app.sh"), path.join(root, "scripts/build-app.sh"));
+    fs.mkdirSync(path.join(root, "app-native/.build/release"), { recursive: true });
+    fs.writeFileSync(path.join(root, "app-native/.build/release/Sotto"), "bin");
+    fs.mkdirSync(path.join(root, "app-native/Sources/SottoUI"), { recursive: true });
+    fs.writeFileSync(path.join(root, "app-native/Sources/SottoUI/Z.swift"), "// z\n");
+    fs.writeFileSync(path.join(root, "app-native/Sources/SottoUI/a b.swift"), "// space\n");
+    const r = spawnSync("/bin/bash", [path.join(root, "scripts/build-app.sh"), "--print-hash"], { encoding: "utf8" });
+    assert.equal(r.status, 0, r.stderr);
+    assert.equal(r.stdout.trim(), appSourceHash(root));
   });
 
   test("missing, ready, stale, failed, building, nosource", () => {
@@ -131,7 +144,7 @@ describe("app build state and sources hash", () => {
     assert.equal(appBuildState({ pluginRoot: root, dataDir: data }).state, "missing");
     const p = stamp(root, data);
     assert.equal(appBuildState({ pluginRoot: root, dataDir: data }).state, "ready");
-    fs.writeFileSync(path.join(root, "app/Sources/main.swift"), "print(3)\n");
+    fs.writeFileSync(path.join(root, "app-native/Sources/SottoApp/main.swift"), "print(3)\n");
     assert.equal(appBuildState({ pluginRoot: root, dataDir: data }).state, "stale");
     stamp(root, data, { ok: false, exe: false });
     const failed = appBuildState({ pluginRoot: root, dataDir: data });
@@ -145,8 +158,8 @@ describe("app build state and sources hash", () => {
   });
 });
 
-/** createWindow with fakes: records spawns, answers --audio-route and ps. */
-function harness({ env = {}, built = true, release = false, route = { input: { bluetooth: false }, output: { bluetooth: true } }, running = false, platform = "darwin", chrome = true, installWaitMs, procs = null, kill } = {}) {
+/** createWindow with fakes: records spawns, answers ps. */
+function harness({ env = {}, built = true, release = false, running = false, platform = "darwin", chrome = true, installWaitMs, procs = null, kill } = {}) {
   const root = fakePlugin();
   if (release) {
     // A versioned plugin with the fetcher: the release download applies.
@@ -185,7 +198,6 @@ function harness({ env = {}, built = true, release = false, route = { input: { b
     },
     execFile: (file, args, opts, cb) => {
       execCalls.push([file, ...args]);
-      if (args[0] === "--audio-route") return setImmediate(() => cb(null, JSON.stringify(route)));
       if (file === "ps" && args[1] === "pid=,lstart=,args=") return setImmediate(() => cb(null, procs ? procs(p.exe) : ""));
       if (file === "ps") return setImmediate(() => cb(null, running ? `/sbin/launchd\n${p.exe}\n` : "/sbin/launchd\n"));
       return setImmediate(() => cb(new Error("unexpected")));
@@ -204,12 +216,10 @@ function harness({ env = {}, built = true, release = false, route = { input: { b
 const tick = () => new Promise((r) => setImmediate(r));
 
 describe("createWindow", () => {
-  test("auto + built app + wired/built-in mic: measures the route, then opens the app with a launch code", async () => {
+  test("auto + built app: opens the app at once with a launch code, no audio-route probe", () => {
     const h = harness();
     assert.deepEqual(h.w.open(), { mode: "app" });
-    assert.equal(h.spawned.length, 0, "launch waits for the route check");
-    await tick();
-    assert.deepEqual(h.execCalls[0], [h.p.exe, "--audio-route"]);
+    assert.equal(h.execCalls.length, 0, "no --audio-route exec any more");
     assert.equal(h.spawned.length, 1);
     const [cmd, g, a, bundle, url] = h.spawned[0];
     assert.deepEqual([cmd, g, a, bundle], ["open", "-g", "-a", h.p.bundle]);
@@ -220,52 +230,25 @@ describe("createWindow", () => {
     assert.equal(u.searchParams.get("k"), "c0de000000000001");
     assert.equal(u.searchParams.get("data"), h.data);
     assert.deepEqual(h.browserCalls, []);
-    // The route is cached: the next open launches at once.
     h.w.open();
     assert.equal(h.spawned.length, 2);
+    assert.equal(new URL(h.spawned[1].at(-1)).searchParams.get("k"), "c0de000000000002", "a fresh code per open");
   });
 
-  test("auto + Bluetooth default input: Chrome, not the app", async () => {
-    const h = harness({ route: { input: { bluetooth: true }, output: { bluetooth: true } } });
+  test("test-mode launches forward the fake-audio test settings to the app", () => {
+    const h = harness({ env: { SOTTO_BROWSER: "app", SOTTO_APP_TEST: "1", SOTTO_APP_MIC_FIXTURE: "/tmp/f.wav", SOTTO_APP_OUT_WAV: "/tmp/o.wav", SOTTO_APP_ECHO_SIM_DB: "-12", SOTTO_APP_MIC_FIXTURE_LEAD_MS: "500" } });
     h.w.open();
-    await tick();
-    assert.equal(h.spawned.length, 0);
-    assert.deepEqual(h.browserCalls, ["chrome"]);
-  });
-
-  test("auto + Bluetooth input + headphones + native mic: the app", async () => {
-    const h = harness({ route: { input: { bluetooth: true }, output: { bluetooth: true, headphones: true }, builtin_input: true, native_mic: true } });
-    h.w.open();
-    await tick();
-    assert.equal(h.spawned.length, 1);
-    assert.deepEqual(h.browserCalls, []);
-  });
-
-  test("test-mode launches forward the native-mic test settings to the app", async () => {
-    const h = harness({ env: { SOTTO_BROWSER: "app", SOTTO_APP_TEST: "1", SOTTO_APP_MIC: "native", SOTTO_APP_MIC_FIXTURE: "/tmp/f.wav", SOTTO_APP_ECHO_SIM_DB: "-12" } });
-    h.w.open();
-    await tick();
     const args = h.spawned[0];
-    for (const kv of ["SOTTO_APP_TEST=1", "SOTTO_APP_MIC=native", "SOTTO_APP_MIC_FIXTURE=/tmp/f.wav", "SOTTO_APP_ECHO_SIM_DB=-12"]) {
+    for (const kv of ["SOTTO_APP_TEST=1", "SOTTO_APP_MIC_FIXTURE=/tmp/f.wav", "SOTTO_APP_OUT_WAV=/tmp/o.wav", "SOTTO_APP_ECHO_SIM_DB=-12", "SOTTO_APP_MIC_FIXTURE_LEAD_MS=500"]) {
       assert.ok(args.includes(kv), `${kv} in ${args}`);
     }
     // Never outside test mode.
-    const h2 = harness({ env: { SOTTO_BROWSER: "app", SOTTO_APP_MIC: "native" } });
+    const h2 = harness({ env: { SOTTO_BROWSER: "app", SOTTO_APP_OUT_WAV: "/tmp/o.wav" } });
     h2.w.open();
-    await tick();
-    assert.ok(!h2.spawned[0].some((a) => a.startsWith("SOTTO_APP_MIC")));
+    assert.ok(!h2.spawned[0].some((a) => a.startsWith("SOTTO_APP_")));
   });
 
-  test("the window is no longer wanted when the route arrives: nothing opens", async () => {
-    const h = harness();
-    h.w.open();
-    h.state.wants = false;
-    await tick();
-    assert.equal(h.spawned.length, 0);
-    assert.deepEqual(h.browserCalls, []);
-  });
-
-  test("app requested explicitly: no route check", () => {
+  test("app requested explicitly", () => {
     const h = harness({ env: { SOTTO_BROWSER: "app" } });
     assert.equal(h.w.open().mode, "app");
     assert.equal(h.execCalls.length, 0);
@@ -465,7 +448,7 @@ describe("createWindow", () => {
     assert.equal(h.w.open().mode, "chrome");
   });
 
-  test("the app never connects a page: Chrome after the watchdog", async () => {
+  test("the app never says hello: Chrome after the watchdog", async () => {
     const h = harness({ env: { SOTTO_BROWSER: "app" } });
     h.w.open();
     await h.clock.advance(APP_PAGE_TIMEOUT_MS - 1);
@@ -474,7 +457,7 @@ describe("createWindow", () => {
     assert.deepEqual(h.browserCalls, ["chrome"]);
   });
 
-  test("a connected page disarms the watchdog", async () => {
+  test("the app's hello (pageConnected: a page or the native link) disarms the watchdog", async () => {
     const h = harness({ env: { SOTTO_BROWSER: "app" } });
     h.w.open();
     h.state.page = true;

@@ -20,8 +20,10 @@ function tree(t) {
   w("daemon/voice.js", "export const a = 1;\n");
   w("web/app.js", "console.log(1);\n");
   w("scripts/hook.sh", "#!/bin/bash\n");
-  w("app/Sources/main.swift", "print(1)\n");
-  w("app/.build/junk.o", "x"); // build output: ignored
+  w("app-native/Sources/SottoApp/main.swift", "print(1)\n");
+  w("app-native/.build/junk.o", "x"); // build output: ignored
+  w("app-native/.swiftpm/xcode/x", "x"); // SwiftPM state: ignored
+  w("app/Sources/main.swift", "print(1)\n"); // the removed WKWebView app: not a source dir
   w("web/.DS_Store", "x"); // dotfiles: ignored
   w("test/x.test.js", "x"); // outside the source dirs
   w("README.md", "x");
@@ -30,7 +32,7 @@ function tree(t) {
 
 test("listSources covers daemon, web, scripts and app, skipping dotfiles and build output", (t) => {
   const { root } = tree(t);
-  assert.deepEqual(listSources(root), ["app/Sources/main.swift", "daemon/index.js", "daemon/voice.js", "scripts/hook.sh", "web/app.js"]);
+  assert.deepEqual(listSources(root), ["app-native/Sources/SottoApp/main.swift", "daemon/index.js", "daemon/voice.js", "scripts/hook.sh", "web/app.js"]);
 });
 
 test("hashSources: any source change moves `all`; only web/ moves `web`; unrelated files move nothing", (t) => {

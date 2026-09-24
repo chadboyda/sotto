@@ -9,8 +9,8 @@ import fs from "node:fs";
 import path from "node:path";
 import { createHash } from "node:crypto";
 
-/** The directories whose sources make up "the code" (the daemon, the page, the hooks, the app). */
-export const SOURCE_DIRS = ["daemon", "web", "scripts", "app"];
+/** The directories whose sources make up "the code" (the daemon, the page, the hooks, the native app). */
+export const SOURCE_DIRS = ["daemon", "web", "scripts", "app-native"];
 /** How often the sources are checked: a stat of every file, then a hash only if a stat changed. */
 export const CHECK_MS = 30_000;
 /** A change must hold still this long before it counts (an editor or `git checkout` mid-write). */

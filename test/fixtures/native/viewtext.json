@@ -1,0 +1,3647 @@
+[
+ {
+  "fn": "statusLabel",
+  "args": [
+   "off"
+  ],
+  "out": "Off"
+ },
+ {
+  "fn": "statusLabel",
+  "args": [
+   "waiting_page"
+  ],
+  "out": "Opening"
+ },
+ {
+  "fn": "statusLabel",
+  "args": [
+   "live"
+  ],
+  "out": "Live"
+ },
+ {
+  "fn": "statusLabel",
+  "args": [
+   "sleeping"
+  ],
+  "out": "Sleeping"
+ },
+ {
+  "fn": "statusLabel",
+  "args": [
+   "some_new_state"
+  ],
+  "out": "Some new state"
+ },
+ {
+  "fn": "statusLabel",
+  "args": [
+   ""
+  ],
+  "out": "Unknown"
+ },
+ {
+  "fn": "formatDuration",
+  "args": [
+   0,
+   false
+  ],
+  "out": "0 min"
+ },
+ {
+  "fn": "formatDuration",
+  "args": [
+   0,
+   true
+  ],
+  "out": "0 minutes"
+ },
+ {
+  "fn": "formatDuration",
+  "args": [
+   30,
+   false
+  ],
+  "out": "under a minute"
+ },
+ {
+  "fn": "formatDuration",
+  "args": [
+   30,
+   true
+  ],
+  "out": "under a minute"
+ },
+ {
+  "fn": "formatDuration",
+  "args": [
+   60,
+   false
+  ],
+  "out": "1 min"
+ },
+ {
+  "fn": "formatDuration",
+  "args": [
+   60,
+   true
+  ],
+  "out": "1 minute"
+ },
+ {
+  "fn": "formatDuration",
+  "args": [
+   852,
+   false
+  ],
+  "out": "14 min"
+ },
+ {
+  "fn": "formatDuration",
+  "args": [
+   852,
+   true
+  ],
+  "out": "14 minutes"
+ },
+ {
+  "fn": "formatDuration",
+  "args": [
+   3600,
+   false
+  ],
+  "out": "1 hr"
+ },
+ {
+  "fn": "formatDuration",
+  "args": [
+   3600,
+   true
+  ],
+  "out": "1 hour"
+ },
+ {
+  "fn": "formatDuration",
+  "args": [
+   3900,
+   false
+  ],
+  "out": "1 hr 5 min"
+ },
+ {
+  "fn": "formatDuration",
+  "args": [
+   3900,
+   true
+  ],
+  "out": "1 hour 5 minutes"
+ },
+ {
+  "fn": "formatDuration",
+  "args": [
+   7200,
+   false
+  ],
+  "out": "2 hr"
+ },
+ {
+  "fn": "formatDuration",
+  "args": [
+   7200,
+   true
+  ],
+  "out": "2 hours"
+ },
+ {
+  "fn": "formatClock",
+  "args": [
+   0
+  ],
+  "out": "0:00"
+ },
+ {
+  "fn": "formatClock",
+  "args": [
+   5
+  ],
+  "out": "0:05"
+ },
+ {
+  "fn": "formatClock",
+  "args": [
+   852
+  ],
+  "out": "14:12"
+ },
+ {
+  "fn": "formatClock",
+  "args": [
+   3909
+  ],
+  "out": "1:05:09"
+ },
+ {
+  "fn": "formatUsage",
+  "args": [
+   0
+  ],
+  "out": "0 min · $0.00"
+ },
+ {
+  "fn": "formatUsage",
+  "args": [
+   1
+  ],
+  "out": "under a minute · <$0.01"
+ },
+ {
+  "fn": "formatUsage",
+  "args": [
+   852
+  ],
+  "out": "14 min · $0.71"
+ },
+ {
+  "fn": "formatUsage",
+  "args": [
+   90
+  ],
+  "out": "1 min · $0.08"
+ },
+ {
+  "fn": "formatMoney",
+  "args": [
+   0
+  ],
+  "out": "$0.00"
+ },
+ {
+  "fn": "formatMoney",
+  "args": [
+   0.004
+  ],
+  "out": "<$0.01"
+ },
+ {
+  "fn": "formatMoney",
+  "args": [
+   0.075
+  ],
+  "out": "$0.08"
+ },
+ {
+  "fn": "formatMoney",
+  "args": [
+   0.71
+  ],
+  "out": "$0.71"
+ },
+ {
+  "fn": "formatMoney",
+  "args": [
+   12.345
+  ],
+  "out": "$12.35"
+ },
+ {
+  "fn": "formatElapsed",
+  "args": [
+   0
+  ],
+  "out": "0 sec"
+ },
+ {
+  "fn": "formatElapsed",
+  "args": [
+   42000
+  ],
+  "out": "42 sec"
+ },
+ {
+  "fn": "formatElapsed",
+  "args": [
+   192000
+  ],
+  "out": "3 min 12 sec"
+ },
+ {
+  "fn": "formatElapsed",
+  "args": [
+   3720000
+  ],
+  "out": "1 hr 2 min"
+ },
+ {
+  "fn": "truncate",
+  "args": [
+   "short",
+   40
+  ],
+  "out": "short"
+ },
+ {
+  "fn": "truncate",
+  "args": [
+   "word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word ",
+   40
+  ],
+  "out": "word word word word word word word…"
+ },
+ {
+  "fn": "truncate",
+  "args": [
+   "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+   40
+  ],
+  "out": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa…"
+ },
+ {
+  "fn": "truncate",
+  "args": [
+   "  spaced\n\ttext  ",
+   40
+  ],
+  "out": "spaced text"
+ },
+ {
+  "fn": "delegationLabel",
+  "args": [
+   "sent"
+  ],
+  "out": {
+   "label": "Sent to Claude",
+   "tone": "active"
+  }
+ },
+ {
+  "fn": "delegationLabel",
+  "args": [
+   "answered"
+  ],
+  "out": {
+   "label": "Answered",
+   "tone": "done"
+  }
+ },
+ {
+  "fn": "delegationLabel",
+  "args": [
+   "held_suspected"
+  ],
+  "out": {
+   "label": "Not picked up yet",
+   "tone": "warn"
+  }
+ },
+ {
+  "fn": "delegationLabel",
+  "args": [
+   "brand_new"
+  ],
+  "out": {
+   "label": "Brand new",
+   "tone": "muted"
+  }
+ },
+ {
+  "fn": "closedReasonMessage",
+  "args": [
+   "close_requested"
+  ],
+  "out": null
+ },
+ {
+  "fn": "closedReasonMessage",
+  "args": [
+   "content"
+  ],
+  "out": "The voice session was ended by a safety filter."
+ },
+ {
+  "fn": "closedReasonMessage",
+  "args": [
+   "expired"
+  ],
+  "out": "The voice session reached its time limit."
+ },
+ {
+  "fn": "closedReasonMessage",
+  "args": [
+   "remote_hangup"
+  ],
+  "out": "The voice service hung up."
+ },
+ {
+  "fn": "closedReasonMessage",
+  "args": [
+   "connection_lost"
+  ],
+  "out": "The voice connection was lost."
+ },
+ {
+  "fn": "closedReasonMessage",
+  "args": [
+   "weird"
+  ],
+  "out": "The voice session ended (weird)."
+ },
+ {
+  "fn": "closedReasonMessage",
+  "args": [
+   null
+  ],
+  "out": "The voice session ended."
+ },
+ {
+  "fn": "pausedMessage",
+  "args": [
+   "idle",
+   5,
+   null
+  ],
+  "out": "Paused after 5 minutes of silence"
+ },
+ {
+  "fn": "pausedMessage",
+  "args": [
+   "idle",
+   null,
+   45
+  ],
+  "out": "Paused after 45 seconds of silence"
+ },
+ {
+  "fn": "pausedMessage",
+  "args": [
+   "idle",
+   null,
+   120
+  ],
+  "out": "Paused after 2 minutes of silence"
+ },
+ {
+  "fn": "pausedMessage",
+  "args": [
+   "idle",
+   null,
+   150
+  ],
+  "out": "Paused after 3 minutes of silence"
+ },
+ {
+  "fn": "pausedMessage",
+  "args": [
+   "idle",
+   null,
+   null
+  ],
+  "out": "Paused after a stretch of silence"
+ },
+ {
+  "fn": "pausedMessage",
+  "args": [
+   "daily_cap",
+   null,
+   null
+  ],
+  "out": "Paused: today's voice limit is reached"
+ },
+ {
+  "fn": "pausedMessage",
+  "args": [
+   "user",
+   null,
+   null
+  ],
+  "out": "Paused"
+ },
+ {
+  "fn": "pausedMessage",
+  "args": [
+   null,
+   null,
+   null
+  ],
+  "out": "Paused"
+ },
+ {
+  "fn": "pausedMessage",
+  "args": [
+   "error",
+   null,
+   null
+  ],
+  "out": "Voice stopped"
+ },
+ {
+  "fn": "pausedMessage",
+  "args": [
+   "app_gone",
+   null,
+   null
+  ],
+  "out": "Paused (app gone)"
+ },
+ {
+  "fn": "errorBannerText",
+  "args": [
+   {
+    "type": "error",
+    "error": {
+     "message": "Rate limited"
+    }
+   }
+  ],
+  "out": "Rate limited"
+ },
+ {
+  "fn": "errorBannerText",
+  "args": [
+   {
+    "type": "error",
+    "message": "top"
+   }
+  ],
+  "out": "top"
+ },
+ {
+  "fn": "errorBannerText",
+  "args": [
+   {
+    "type": "error"
+   }
+  ],
+  "out": "The voice service reported an error."
+ },
+ {
+  "fn": "errorBannerText",
+  "args": [
+   {
+    "type": "error",
+    "client_event_id": "x",
+    "error": {
+     "message": "m"
+    }
+   }
+  ],
+  "out": null
+ },
+ {
+  "fn": "errorBannerText",
+  "args": [
+   {
+    "type": "info"
+   }
+  ],
+  "out": null
+ },
+ {
+  "fn": "activityView",
+  "args": [
+   {
+    "kind": "turn_start",
+    "text": ""
+   }
+  ],
+  "out": {
+   "text": "Claude is working",
+   "busy": true,
+   "summary": null,
+   "tone": "work"
+  }
+ },
+ {
+  "fn": "activityView",
+  "args": [
+   {
+    "kind": "turn_start",
+    "text": "Fix the test"
+   }
+  ],
+  "out": {
+   "text": "Claude is working: Fix the test",
+   "busy": true,
+   "summary": null,
+   "tone": "work"
+  }
+ },
+ {
+  "fn": "activityView",
+  "args": [
+   {
+    "kind": "tool",
+    "text": "Bash: ls daemon"
+   }
+  ],
+  "out": {
+   "text": "Claude: Bash: ls daemon",
+   "busy": true,
+   "summary": null,
+   "tone": "work"
+  }
+ },
+ {
+  "fn": "activityView",
+  "args": [
+   {
+    "kind": "text",
+    "text": "Looking at the **auth** spec"
+   }
+  ],
+  "out": {
+   "text": "Claude: Looking at the **auth** spec",
+   "busy": true,
+   "summary": null,
+   "tone": "work"
+  }
+ },
+ {
+  "fn": "activityView",
+  "args": [
+   {
+    "kind": "permission",
+    "text": "rm -rf build"
+   }
+  ],
+  "out": {
+   "text": "Waiting for your approval in the terminal: rm -rf build",
+   "busy": true,
+   "summary": null,
+   "tone": "attention"
+  }
+ },
+ {
+  "fn": "activityView",
+  "args": [
+   {
+    "kind": "turn_end",
+    "text": "There are 34 files in daemon/."
+   }
+  ],
+  "out": {
+   "text": "Claude finished",
+   "busy": false,
+   "summary": "There are 34 files in daemon/.",
+   "tone": "done"
+  }
+ },
+ {
+  "fn": "activityView",
+  "args": [
+   {
+    "kind": "turn_end",
+    "text": "short",
+    "summary": "## Done\n- one\n- two"
+   }
+  ],
+  "out": {
+   "text": "Claude finished",
+   "busy": false,
+   "summary": "## Done\n- one\n- two",
+   "tone": "done"
+  }
+ },
+ {
+  "fn": "activityView",
+  "args": [
+   {
+    "kind": "agents",
+    "text": "1 background agent",
+    "count": 1
+   }
+  ],
+  "out": {
+   "text": "",
+   "busy": null,
+   "summary": null,
+   "tone": "info"
+  }
+ },
+ {
+  "fn": "activityView",
+  "args": [
+   {
+    "kind": "mystery",
+    "text": "hello"
+   }
+  ],
+  "out": {
+   "text": "hello",
+   "busy": null,
+   "summary": null,
+   "tone": "info"
+  }
+ },
+ {
+  "fn": "claudeView",
+  "args": [
+   {
+    "busy": false
+   }
+  ],
+  "out": {
+   "kind": "idle",
+   "title": "Claude is idle",
+   "request": null,
+   "agents": null
+  }
+ },
+ {
+  "fn": "claudeView",
+  "args": [
+   {
+    "busy": true
+   }
+  ],
+  "out": {
+   "kind": "working",
+   "title": "Claude is working",
+   "step": "Thinking",
+   "secondary": false,
+   "request": null,
+   "agents": null
+  }
+ },
+ {
+  "fn": "claudeView",
+  "args": [
+   {
+    "busy": true,
+    "says": "I'll check the **auth** spec first.",
+    "tool": "Bash: npm test",
+    "request": {
+     "text": "List the files in the daemon folder.",
+     "status": "delivered"
+    },
+    "agents": 2
+   }
+  ],
+  "out": {
+   "kind": "working",
+   "title": "Claude is working",
+   "step": "I'll check the auth spec first.",
+   "secondary": false,
+   "request": {
+    "text": "List the files in the daemon folder.",
+    "label": "Claude is on it",
+    "tone": "active"
+   },
+   "agents": "2 background agents working"
+  }
+ },
+ {
+  "fn": "claudeView",
+  "args": [
+   {
+    "busy": true,
+    "says": "Old words",
+    "saysAt": 0,
+    "now": 25000,
+    "tool": "Running `npm test`"
+   }
+  ],
+  "out": {
+   "kind": "working",
+   "title": "Claude is working",
+   "step": "Running npm test",
+   "secondary": true,
+   "request": null,
+   "agents": null
+  }
+ },
+ {
+  "fn": "claudeView",
+  "args": [
+   {
+    "busy": true,
+    "says": "Fresh words",
+    "saysAt": 10000,
+    "now": 25000,
+    "tool": "Bash: ls"
+   }
+  ],
+  "out": {
+   "kind": "working",
+   "title": "Claude is working",
+   "step": "Fresh words",
+   "secondary": false,
+   "request": null,
+   "agents": null
+  }
+ },
+ {
+  "fn": "claudeView",
+  "args": [
+   {
+    "busy": true,
+    "kind": "permission",
+    "text": "rm -rf build",
+    "request": {
+     "text": "List the files in the daemon folder.",
+     "status": "delivered"
+    },
+    "agents": 1
+   }
+  ],
+  "out": {
+   "kind": "approval",
+   "title": "Claude needs your approval",
+   "command": "rm -rf build",
+   "note": "Waiting for your approval in the terminal",
+   "request": {
+    "text": "List the files in the daemon folder.",
+    "label": "Claude is on it",
+    "tone": "active"
+   },
+   "agents": "1 background agent working"
+  }
+ },
+ {
+  "fn": "claudeView",
+  "args": [
+   {
+    "busy": false,
+    "kind": "permission",
+    "text": "rm -rf build"
+   }
+  ],
+  "out": {
+   "kind": "idle",
+   "title": "Claude is idle",
+   "request": null,
+   "agents": null
+  }
+ },
+ {
+  "fn": "claudeView",
+  "args": [
+   {
+    "busy": false,
+    "summary": "Fixed the flaky test.",
+    "request": {
+     "text": "Fix it",
+     "status": "answered"
+    }
+   }
+  ],
+  "out": {
+   "kind": "finished",
+   "title": "Claude finished",
+   "summary": "Fixed the flaky test.",
+   "request": {
+    "text": "Fix it",
+    "label": "Answered",
+    "tone": "done"
+   },
+   "agents": null
+  }
+ },
+ {
+  "fn": "stripMarkdown",
+  "args": [
+   "**Bold** and _it_ and `code` [link](https://x.y)"
+  ],
+  "out": "Bold and it and code link"
+ },
+ {
+  "fn": "stripMarkdown",
+  "args": [
+   "## Head\n- a\n- b\n```js\nx()\n```\nend"
+  ],
+  "out": "Head a b end"
+ },
+ {
+  "fn": "stripMarkdown",
+  "args": [
+   "> quoted ~~no~~"
+  ],
+  "out": "quoted no"
+ },
+ {
+  "fn": "keySettingsView",
+  "args": [
+   null
+  ],
+  "out": {
+   "text": "Checking…",
+   "help": "",
+   "change": false,
+   "remove": false,
+   "changeLabel": "Change"
+  }
+ },
+ {
+  "fn": "keySettingsView",
+  "args": [
+   {
+    "present": false,
+    "source": null,
+    "file": null,
+    "hint": null,
+    "label": null,
+    "can_change": true,
+    "can_remove": false,
+    "keychain": true,
+    "setup": false
+   }
+  ],
+  "out": {
+   "text": "No key yet",
+   "help": "Add one to start talking. It is checked with OpenAI and kept in your macOS Keychain.",
+   "change": true,
+   "remove": false,
+   "changeLabel": "Add key"
+  }
+ },
+ {
+  "fn": "keySettingsView",
+  "args": [
+   {
+    "present": true,
+    "source": "keychain",
+    "file": null,
+    "hint": "wxyz",
+    "label": "the macOS Keychain",
+    "can_change": true,
+    "can_remove": true,
+    "keychain": true,
+    "setup": false
+   }
+  ],
+  "out": {
+   "text": "Key ending in wxyz",
+   "help": "Saved in your macOS Keychain.",
+   "change": true,
+   "remove": true,
+   "changeLabel": "Change"
+  }
+ },
+ {
+  "fn": "keySettingsView",
+  "args": [
+   {
+    "present": true,
+    "source": "env",
+    "file": null,
+    "hint": "abcd",
+    "label": "the OPENAI_API_KEY environment variable",
+    "can_change": false,
+    "can_remove": false,
+    "keychain": true,
+    "setup": false
+   }
+  ],
+  "out": {
+   "text": "Key ending in abcd",
+   "help": "From the OPENAI_API_KEY environment variable. Change it there.",
+   "change": false,
+   "remove": false,
+   "changeLabel": "Change"
+  }
+ },
+ {
+  "fn": "keySettingsView",
+  "args": [
+   {
+    "present": true,
+    "source": "dotenv",
+    "file": "/p/.env",
+    "hint": "abcd",
+    "label": "the .env file",
+    "can_change": true,
+    "can_remove": false,
+    "keychain": true,
+    "setup": false
+   }
+  ],
+  "out": {
+   "text": "Key ending in abcd",
+   "help": "From /p/.env. A key saved here replaces it.",
+   "change": true,
+   "remove": false,
+   "changeLabel": "Change"
+  }
+ },
+ {
+  "fn": "sleepView",
+  "args": [
+   {}
+  ],
+  "out": {
+   "title": "Sleeping — just start talking",
+   "body": "Voice wakes up when you speak. Nothing is sent or billed until then.",
+   "listening": true
+  }
+ },
+ {
+  "fn": "sleepView",
+  "args": [
+   {
+    "enabled": false
+   }
+  ],
+  "out": {
+   "title": "Sleeping",
+   "body": "Voice wake is off. Press Space or Wake now to continue.",
+   "listening": false
+  }
+ },
+ {
+  "fn": "sleepView",
+  "args": [
+   {
+    "micError": "busy"
+   }
+  ],
+  "out": {
+   "title": "Sleeping",
+   "body": "The microphone is unavailable (busy). Press Space to resume.",
+   "listening": false
+  }
+ },
+ {
+  "fn": "sleepView",
+  "args": [
+   {
+    "muted": true
+   }
+  ],
+  "out": {
+   "title": "Sleeping (muted)",
+   "body": "Not listening for your voice. Press M to listen again, or Space to resume.",
+   "listening": false
+  }
+ },
+ {
+  "fn": "sleepView",
+  "args": [
+   {
+    "cooldownMs": 4200
+   }
+  ],
+  "out": {
+   "title": "Sleeping",
+   "body": "Heard only noise a few times, so listening again in 5 s. Press Space to resume now.",
+   "listening": false
+  }
+ },
+ {
+  "fn": "hotkeyAction",
+  "args": [
+   {
+    "key": "m"
+   },
+   {
+    "live": true
+   }
+  ],
+  "out": "mute"
+ },
+ {
+  "fn": "hotkeyAction",
+  "args": [
+   {
+    "key": "M"
+   },
+   {
+    "sleeping": true
+   }
+  ],
+  "out": "mute"
+ },
+ {
+  "fn": "hotkeyAction",
+  "args": [
+   {
+    "key": " "
+   },
+   {
+    "paused": true
+   }
+  ],
+  "out": "resume"
+ },
+ {
+  "fn": "hotkeyAction",
+  "args": [
+   {
+    "key": " "
+   },
+   {
+    "live": true
+   }
+  ],
+  "out": "mute"
+ },
+ {
+  "fn": "hotkeyAction",
+  "args": [
+   {
+    "key": " ",
+    "targetTag": "BUTTON"
+   },
+   {
+    "live": true
+   }
+  ],
+  "out": null
+ },
+ {
+  "fn": "hotkeyAction",
+  "args": [
+   {
+    "key": "m",
+    "meta": true
+   },
+   {
+    "live": true
+   }
+  ],
+  "out": null
+ },
+ {
+  "fn": "hotkeyAction",
+  "args": [
+   {
+    "key": "m",
+    "repeat": true
+   },
+   {
+    "live": true
+   }
+  ],
+  "out": null
+ },
+ {
+  "fn": "hotkeyAction",
+  "args": [
+   {
+    "key": "m",
+    "targetTag": "INPUT"
+   },
+   {
+    "live": true
+   }
+  ],
+  "out": null
+ },
+ {
+  "fn": "hotkeyAction",
+  "args": [
+   {
+    "key": "m"
+   },
+   {
+    "paused": true
+   }
+  ],
+  "out": null
+ },
+ {
+  "fn": "hotkeyAction",
+  "args": [
+   {
+    "key": "x"
+   },
+   {
+    "live": true
+   }
+  ],
+  "out": null
+ },
+ {
+  "fn": "reduceCaptions",
+  "args": [
+   [
+    {
+     "role": "assistant",
+     "text": "Hi, ",
+     "start_ms": 100,
+     "end_ms": 300,
+     "session": "s1"
+    },
+    {
+     "role": "assistant",
+     "text": "I'm listening.",
+     "start_ms": 300,
+     "end_ms": 900,
+     "session": "s1"
+    },
+    {
+     "role": "user",
+     "text": " List the files ",
+     "start_ms": 2000,
+     "end_ms": 2600,
+     "session": "s1"
+    },
+    {
+     "role": "user",
+     "text": "",
+     "start_ms": 2600,
+     "end_ms": 2700,
+     "session": "s1"
+    },
+    {
+     "role": "user",
+     "text": "please",
+     "start_ms": 4101,
+     "end_ms": 4300,
+     "session": "s1"
+    },
+    {
+     "role": "user",
+     "text": " now",
+     "start_ms": 0,
+     "end_ms": 100,
+     "session": "s2"
+    },
+    {
+     "role": "robot",
+     "text": "x",
+     "start_ms": 150,
+     "end_ms": 200,
+     "session": "s2"
+    }
+   ],
+   60
+  ],
+  "out": [
+   {
+    "role": "assistant",
+    "text": "Hi, I'm listening.",
+    "start_ms": 100,
+    "end_ms": 900,
+    "session": "s1"
+   },
+   {
+    "role": "user",
+    "text": "List the files ",
+    "start_ms": 2000,
+    "end_ms": 2600,
+    "session": "s1"
+   },
+   {
+    "role": "user",
+    "text": "please",
+    "start_ms": 4101,
+    "end_ms": 4300,
+    "session": "s1"
+   },
+   {
+    "role": "user",
+    "text": "nowx",
+    "start_ms": 0,
+    "end_ms": 200,
+    "session": "s2"
+   }
+  ]
+ },
+ {
+  "fn": "reduceCaptions",
+  "args": [
+   [
+    {
+     "role": "assistant",
+     "text": "line 0",
+     "start_ms": 0,
+     "end_ms": 100,
+     "session": "s1"
+    },
+    {
+     "role": "user",
+     "text": "line 1",
+     "start_ms": 5000,
+     "end_ms": 5100,
+     "session": "s1"
+    },
+    {
+     "role": "assistant",
+     "text": "line 2",
+     "start_ms": 10000,
+     "end_ms": 10100,
+     "session": "s1"
+    },
+    {
+     "role": "user",
+     "text": "line 3",
+     "start_ms": 15000,
+     "end_ms": 15100,
+     "session": "s1"
+    },
+    {
+     "role": "assistant",
+     "text": "line 4",
+     "start_ms": 20000,
+     "end_ms": 20100,
+     "session": "s1"
+    }
+   ],
+   3
+  ],
+  "out": [
+   {
+    "role": "assistant",
+    "text": "line 2",
+    "start_ms": 10000,
+    "end_ms": 10100,
+    "session": "s1"
+   },
+   {
+    "role": "user",
+    "text": "line 3",
+    "start_ms": 15000,
+    "end_ms": 15100,
+    "session": "s1"
+   },
+   {
+    "role": "assistant",
+    "text": "line 4",
+    "start_ms": 20000,
+    "end_ms": 20100,
+    "session": "s1"
+   }
+  ]
+ },
+ {
+  "fn": "upsertDelegation",
+  "args": [
+   [
+    {
+     "id": "a",
+     "status": "sent",
+     "text": "one"
+    },
+    {
+     "id": "b",
+     "status": "sent",
+     "text": "two"
+    },
+    {
+     "id": "a",
+     "status": "answered"
+    },
+    {
+     "id": "c",
+     "text": "three"
+    },
+    {
+     "id": "d",
+     "status": "failed",
+     "text": "four"
+    },
+    {
+     "status": "x"
+    }
+   ],
+   3
+  ],
+  "out": [
+   {
+    "id": "d",
+    "status": "failed",
+    "text": "four"
+   },
+   {
+    "id": "c",
+    "status": "collecting",
+    "text": "three"
+   },
+   {
+    "id": "a",
+    "status": "answered",
+    "text": "one"
+   }
+  ]
+ },
+ {
+  "fn": "pageView",
+  "args": [
+   {
+    "phase": "boot",
+    "state": "off"
+   }
+  ],
+  "out": {
+   "view": "card",
+   "dial": "small",
+   "floor": "starting",
+   "word": "Starting",
+   "sub": "Looking for sotto…",
+   "wordTone": null,
+   "dialHint": null,
+   "steps": null,
+   "card": {
+    "pending": null,
+    "button": null,
+    "action": null,
+    "kbd": false,
+    "steps": null,
+    "arrow": false,
+    "keyInput": false,
+    "tone": "neutral",
+    "secondary": false,
+    "kind": "starting",
+    "title": "Starting sotto",
+    "body": "Looking for the voice daemon…"
+   },
+   "header": {
+    "detail": null,
+    "key": "connecting",
+    "label": "Starting"
+   }
+  }
+ },
+ {
+  "fn": "cardAnnouncement",
+  "args": [
+   {
+    "pending": null,
+    "button": null,
+    "action": null,
+    "kbd": false,
+    "steps": null,
+    "arrow": false,
+    "keyInput": false,
+    "tone": "neutral",
+    "secondary": false,
+    "kind": "starting",
+    "title": "Starting sotto",
+    "body": "Looking for the voice daemon…"
+   }
+  ],
+  "out": {
+   "text": "Starting sotto. Looking for the voice daemon…",
+   "assertive": false
+  }
+ },
+ {
+  "fn": "windowTitle",
+  "args": [
+   "starting",
+   false
+  ],
+  "out": "Sotto"
+ },
+ {
+  "fn": "pageView",
+  "args": [
+   {
+    "phase": "idle",
+    "state": "off",
+    "unauthorized": true
+   }
+  ],
+  "out": {
+   "view": "card",
+   "dial": "hidden",
+   "floor": "off",
+   "word": "Voice is off",
+   "sub": null,
+   "wordTone": null,
+   "dialHint": null,
+   "steps": null,
+   "card": {
+    "pending": null,
+    "button": null,
+    "action": null,
+    "kbd": false,
+    "steps": null,
+    "arrow": false,
+    "keyInput": false,
+    "tone": "neutral",
+    "secondary": false,
+    "kind": "unauthorized",
+    "title": "This window is not connected",
+    "body": "Open the voice window from Claude Code with /talk on."
+   },
+   "header": {
+    "detail": null,
+    "key": "off",
+    "label": "Not connected"
+   }
+  }
+ },
+ {
+  "fn": "cardAnnouncement",
+  "args": [
+   {
+    "pending": null,
+    "button": null,
+    "action": null,
+    "kbd": false,
+    "steps": null,
+    "arrow": false,
+    "keyInput": false,
+    "tone": "neutral",
+    "secondary": false,
+    "kind": "unauthorized",
+    "title": "This window is not connected",
+    "body": "Open the voice window from Claude Code with /talk on."
+   }
+  ],
+  "out": {
+   "text": "This window is not connected. Open the voice window from Claude Code with /talk on.",
+   "assertive": false
+  }
+ },
+ {
+  "fn": "windowTitle",
+  "args": [
+   "off",
+   false
+  ],
+  "out": "Sotto"
+ },
+ {
+  "fn": "pageView",
+  "args": [
+   {
+    "phase": "replaced",
+    "state": "live"
+   }
+  ],
+  "out": {
+   "view": "card",
+   "dial": "small",
+   "floor": "off",
+   "word": "Voice is off",
+   "sub": null,
+   "wordTone": null,
+   "dialHint": null,
+   "steps": null,
+   "card": {
+    "pending": null,
+    "button": "Use this window",
+    "action": "reload",
+    "kbd": false,
+    "steps": null,
+    "arrow": false,
+    "keyInput": false,
+    "tone": "neutral",
+    "secondary": false,
+    "kind": "replaced",
+    "title": "Voice moved to another window",
+    "body": "Another sotto window took over. This one is inactive."
+   },
+   "header": {
+    "detail": null,
+    "key": "off",
+    "label": "Inactive"
+   }
+  }
+ },
+ {
+  "fn": "cardAnnouncement",
+  "args": [
+   {
+    "pending": null,
+    "button": "Use this window",
+    "action": "reload",
+    "kbd": false,
+    "steps": null,
+    "arrow": false,
+    "keyInput": false,
+    "tone": "neutral",
+    "secondary": false,
+    "kind": "replaced",
+    "title": "Voice moved to another window",
+    "body": "Another sotto window took over. This one is inactive."
+   }
+  ],
+  "out": {
+   "text": "Voice moved to another window. Another sotto window took over.",
+   "assertive": false
+  }
+ },
+ {
+  "fn": "windowTitle",
+  "args": [
+   "off",
+   false
+  ],
+  "out": "Sotto"
+ },
+ {
+  "fn": "pageView",
+  "args": [
+   {
+    "phase": "lost",
+    "state": "live"
+   }
+  ],
+  "out": {
+   "view": "card",
+   "dial": "small",
+   "floor": "off",
+   "word": "Voice is off",
+   "sub": null,
+   "wordTone": null,
+   "dialHint": null,
+   "steps": null,
+   "card": {
+    "pending": null,
+    "button": null,
+    "action": null,
+    "kbd": false,
+    "steps": null,
+    "arrow": false,
+    "keyInput": false,
+    "tone": "warn",
+    "secondary": false,
+    "kind": "lost",
+    "title": "Lost contact with the sotto daemon",
+    "body": "The voice session was closed to stop billing. Waiting for the daemon to come back…"
+   },
+   "header": {
+    "detail": null,
+    "key": "error",
+    "label": "Disconnected"
+   }
+  }
+ },
+ {
+  "fn": "cardAnnouncement",
+  "args": [
+   {
+    "pending": null,
+    "button": null,
+    "action": null,
+    "kbd": false,
+    "steps": null,
+    "arrow": false,
+    "keyInput": false,
+    "tone": "warn",
+    "secondary": false,
+    "kind": "lost",
+    "title": "Lost contact with the sotto daemon",
+    "body": "The voice session was closed to stop billing. Waiting for the daemon to come back…"
+   }
+  ],
+  "out": {
+   "text": "Lost contact with the sotto daemon. The voice session was closed to stop billing.",
+   "assertive": true
+  }
+ },
+ {
+  "fn": "windowTitle",
+  "args": [
+   "off",
+   false
+  ],
+  "out": "Sotto"
+ },
+ {
+  "fn": "pageView",
+  "args": [
+   {
+    "phase": "closed",
+    "state": "off"
+   }
+  ],
+  "out": {
+   "view": "card",
+   "dial": "small",
+   "floor": "off",
+   "word": "Voice is off",
+   "sub": null,
+   "wordTone": null,
+   "dialHint": null,
+   "steps": null,
+   "card": {
+    "pending": null,
+    "button": null,
+    "action": null,
+    "kbd": false,
+    "steps": null,
+    "arrow": false,
+    "keyInput": false,
+    "tone": "neutral",
+    "secondary": false,
+    "kind": "closed",
+    "title": "Voice is off",
+    "body": "It's safe to close this window; start again from Claude Code with /talk on."
+   },
+   "header": {
+    "detail": null,
+    "key": "off",
+    "label": "Off"
+   }
+  }
+ },
+ {
+  "fn": "cardAnnouncement",
+  "args": [
+   {
+    "pending": null,
+    "button": null,
+    "action": null,
+    "kbd": false,
+    "steps": null,
+    "arrow": false,
+    "keyInput": false,
+    "tone": "neutral",
+    "secondary": false,
+    "kind": "closed",
+    "title": "Voice is off",
+    "body": "It's safe to close this window; start again from Claude Code with /talk on."
+   }
+  ],
+  "out": {
+   "text": "Voice is off. It's safe to close this window; start again from Claude Code with /talk on.",
+   "assertive": false
+  }
+ },
+ {
+  "fn": "windowTitle",
+  "args": [
+   "off",
+   false
+  ],
+  "out": "Sotto"
+ },
+ {
+  "fn": "pageView",
+  "args": [
+   {
+    "phase": "connecting",
+    "state": "connecting",
+    "micPrompt": true,
+    "host": "app"
+   }
+  ],
+  "out": {
+   "view": "card",
+   "dial": "small",
+   "floor": "off",
+   "word": "Voice is off",
+   "sub": null,
+   "wordTone": null,
+   "dialHint": "attn",
+   "steps": null,
+   "card": {
+    "pending": null,
+    "button": null,
+    "action": null,
+    "kbd": false,
+    "steps": null,
+    "arrow": false,
+    "keyInput": false,
+    "tone": "attn",
+    "secondary": false,
+    "kind": "permission",
+    "title": "Allow microphone access",
+    "body": "macOS is asking whether Sotto can use the microphone. Click Allow so Sotto can hear you. Voice starts once the mic is on.",
+    "note": "Don't see it? It may be behind this panel, or check System Settings, then Privacy & Security, then Microphone."
+   },
+   "header": {
+    "detail": null,
+    "key": "attention",
+    "label": "Allow mic"
+   }
+  }
+ },
+ {
+  "fn": "cardAnnouncement",
+  "args": [
+   {
+    "pending": null,
+    "button": null,
+    "action": null,
+    "kbd": false,
+    "steps": null,
+    "arrow": false,
+    "keyInput": false,
+    "tone": "attn",
+    "secondary": false,
+    "kind": "permission",
+    "title": "Allow microphone access",
+    "body": "macOS is asking whether Sotto can use the microphone. Click Allow so Sotto can hear you. Voice starts once the mic is on.",
+    "note": "Don't see it? It may be behind this panel, or check System Settings, then Privacy & Security, then Microphone."
+   }
+  ],
+  "out": {
+   "text": "Allow microphone access. macOS is asking whether Sotto can use the microphone.",
+   "assertive": false
+  }
+ },
+ {
+  "fn": "windowTitle",
+  "args": [
+   "off",
+   false
+  ],
+  "out": "Sotto"
+ },
+ {
+  "fn": "pageView",
+  "args": [
+   {
+    "phase": "connecting",
+    "state": "connecting",
+    "micPrompt": true
+   }
+  ],
+  "out": {
+   "view": "card",
+   "dial": "small",
+   "floor": "off",
+   "word": "Voice is off",
+   "sub": null,
+   "wordTone": null,
+   "dialHint": "prompt",
+   "steps": null,
+   "card": {
+    "pending": null,
+    "button": null,
+    "action": null,
+    "kbd": false,
+    "steps": null,
+    "arrow": true,
+    "keyInput": false,
+    "tone": "attn",
+    "secondary": false,
+    "kind": "permission",
+    "title": "Allow microphone access",
+    "body": "Chrome is asking at the top left of this window: click Allow so Sotto can hear you. Voice starts once the mic is on.",
+    "note": "Don't see it? The prompt closes if you click elsewhere; you can ask again."
+   },
+   "header": {
+    "detail": null,
+    "key": "attention",
+    "label": "Allow mic"
+   }
+  }
+ },
+ {
+  "fn": "cardAnnouncement",
+  "args": [
+   {
+    "pending": null,
+    "button": null,
+    "action": null,
+    "kbd": false,
+    "steps": null,
+    "arrow": true,
+    "keyInput": false,
+    "tone": "attn",
+    "secondary": false,
+    "kind": "permission",
+    "title": "Allow microphone access",
+    "body": "Chrome is asking at the top left of this window: click Allow so Sotto can hear you. Voice starts once the mic is on.",
+    "note": "Don't see it? The prompt closes if you click elsewhere; you can ask again."
+   }
+  ],
+  "out": {
+   "text": "Allow microphone access. Chrome is asking at the top left of this window: click Allow so Sotto can hear you.",
+   "assertive": false
+  }
+ },
+ {
+  "fn": "windowTitle",
+  "args": [
+   "off",
+   false
+  ],
+  "out": "Sotto"
+ },
+ {
+  "fn": "pageView",
+  "args": [
+   {
+    "phase": "error",
+    "state": "paused",
+    "errorCode": "no_api_key",
+    "host": "app"
+   }
+  ],
+  "out": {
+   "view": "card",
+   "dial": "small",
+   "floor": "off",
+   "word": "Voice is off",
+   "sub": null,
+   "wordTone": null,
+   "dialHint": null,
+   "steps": null,
+   "card": {
+    "pending": null,
+    "button": null,
+    "action": null,
+    "kbd": false,
+    "steps": null,
+    "arrow": false,
+    "keyInput": true,
+    "tone": "attn",
+    "secondary": false,
+    "kind": "apikey",
+    "title": "Add your OpenAI API key to start",
+    "body": "Sotto talks through OpenAI's gpt-live-1 voice model, billed to your OpenAI account at about $0.05 a minute. Paste a key from platform.openai.com/api-keys. Sotto checks it with OpenAI, then keeps it in your macOS Keychain. It is never shown again."
+   },
+   "header": {
+    "detail": null,
+    "key": "attention",
+    "label": "Key needed"
+   }
+  }
+ },
+ {
+  "fn": "cardAnnouncement",
+  "args": [
+   {
+    "pending": null,
+    "button": null,
+    "action": null,
+    "kbd": false,
+    "steps": null,
+    "arrow": false,
+    "keyInput": true,
+    "tone": "attn",
+    "secondary": false,
+    "kind": "apikey",
+    "title": "Add your OpenAI API key to start",
+    "body": "Sotto talks through OpenAI's gpt-live-1 voice model, billed to your OpenAI account at about $0.05 a minute. Paste a key from platform.openai.com/api-keys. Sotto checks it with OpenAI, then keeps it in your macOS Keychain. It is never shown again."
+   }
+  ],
+  "out": {
+   "text": "Add your OpenAI API key to start. Sotto talks through OpenAI's gpt-live-1 voice model, billed to your OpenAI account at about $0.05 a minute.",
+   "assertive": false
+  }
+ },
+ {
+  "fn": "windowTitle",
+  "args": [
+   "off",
+   false
+  ],
+  "out": "Sotto"
+ },
+ {
+  "fn": "pageView",
+  "args": [
+   {
+    "phase": "idle",
+    "state": "off",
+    "key": {
+     "present": false,
+     "source": null,
+     "file": null,
+     "hint": null,
+     "label": null,
+     "can_change": true,
+     "can_remove": false,
+     "keychain": true,
+     "setup": true
+    },
+    "host": "app"
+   }
+  ],
+  "out": {
+   "view": "card",
+   "dial": "small",
+   "floor": "off",
+   "word": "Voice is off",
+   "sub": null,
+   "wordTone": null,
+   "dialHint": null,
+   "steps": null,
+   "card": {
+    "pending": null,
+    "button": null,
+    "action": null,
+    "kbd": false,
+    "steps": null,
+    "arrow": false,
+    "keyInput": true,
+    "tone": "attn",
+    "secondary": false,
+    "kind": "apikey",
+    "title": "Add your OpenAI API key to start",
+    "body": "Sotto talks through OpenAI's gpt-live-1 voice model, billed to your OpenAI account at about $0.05 a minute. Paste a key from platform.openai.com/api-keys. Sotto checks it with OpenAI, then keeps it in your macOS Keychain. It is never shown again."
+   },
+   "header": {
+    "detail": null,
+    "key": "attention",
+    "label": "Key needed"
+   }
+  }
+ },
+ {
+  "fn": "cardAnnouncement",
+  "args": [
+   {
+    "pending": null,
+    "button": null,
+    "action": null,
+    "kbd": false,
+    "steps": null,
+    "arrow": false,
+    "keyInput": true,
+    "tone": "attn",
+    "secondary": false,
+    "kind": "apikey",
+    "title": "Add your OpenAI API key to start",
+    "body": "Sotto talks through OpenAI's gpt-live-1 voice model, billed to your OpenAI account at about $0.05 a minute. Paste a key from platform.openai.com/api-keys. Sotto checks it with OpenAI, then keeps it in your macOS Keychain. It is never shown again."
+   }
+  ],
+  "out": {
+   "text": "Add your OpenAI API key to start. Sotto talks through OpenAI's gpt-live-1 voice model, billed to your OpenAI account at about $0.05 a minute.",
+   "assertive": false
+  }
+ },
+ {
+  "fn": "windowTitle",
+  "args": [
+   "off",
+   false
+  ],
+  "out": "Sotto"
+ },
+ {
+  "fn": "pageView",
+  "args": [
+   {
+    "phase": "error",
+    "state": "paused",
+    "micFailure": "macos",
+    "host": "app"
+   }
+  ],
+  "out": {
+   "view": "card",
+   "dial": "small",
+   "floor": "error",
+   "word": "Stopped",
+   "sub": null,
+   "wordTone": null,
+   "dialHint": null,
+   "steps": null,
+   "card": {
+    "pending": null,
+    "button": "Try again",
+    "action": "resume",
+    "kbd": true,
+    "steps": [
+     "Click Open System Settings (or open System Settings, then Privacy & Security, then Microphone).",
+     "Turn on Sotto.",
+     "Quit Sotto from its menu-bar icon, then run /talk on."
+    ],
+    "arrow": false,
+    "keyInput": false,
+    "tone": "err",
+    "secondary": false,
+    "kind": "mic-macos",
+    "title": "Sotto can't use the microphone",
+    "body": "Allow it in System Settings > Privacy & Security > Microphone. Voice is paused and not billing.",
+    "link": {
+     "href": "x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone",
+     "label": "Open System Settings"
+    }
+   },
+   "header": {
+    "detail": null,
+    "key": "error",
+    "label": "Mic blocked"
+   }
+  }
+ },
+ {
+  "fn": "cardAnnouncement",
+  "args": [
+   {
+    "pending": null,
+    "button": "Try again",
+    "action": "resume",
+    "kbd": true,
+    "steps": [
+     "Click Open System Settings (or open System Settings, then Privacy & Security, then Microphone).",
+     "Turn on Sotto.",
+     "Quit Sotto from its menu-bar icon, then run /talk on."
+    ],
+    "arrow": false,
+    "keyInput": false,
+    "tone": "err",
+    "secondary": false,
+    "kind": "mic-macos",
+    "title": "Sotto can't use the microphone",
+    "body": "Allow it in System Settings > Privacy & Security > Microphone. Voice is paused and not billing.",
+    "link": {
+     "href": "x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone",
+     "label": "Open System Settings"
+    }
+   }
+  ],
+  "out": {
+   "text": "Sotto can't use the microphone. Allow it in System Settings > Privacy & Security > Microphone.",
+   "assertive": true
+  }
+ },
+ {
+  "fn": "windowTitle",
+  "args": [
+   "error",
+   false
+  ],
+  "out": "Sotto"
+ },
+ {
+  "fn": "pageView",
+  "args": [
+   {
+    "phase": "error",
+    "state": "paused",
+    "micFailure": "notfound",
+    "host": "app"
+   }
+  ],
+  "out": {
+   "view": "card",
+   "dial": "small",
+   "floor": "error",
+   "word": "Stopped",
+   "sub": null,
+   "wordTone": null,
+   "dialHint": null,
+   "steps": null,
+   "card": {
+    "pending": null,
+    "button": "Try again",
+    "action": "resume",
+    "kbd": true,
+    "steps": null,
+    "arrow": false,
+    "keyInput": false,
+    "tone": "err",
+    "secondary": false,
+    "kind": "mic-notfound",
+    "title": "No microphone found",
+    "body": "Connect a microphone or headset, then try again."
+   },
+   "header": {
+    "detail": null,
+    "key": "error",
+    "label": "No mic"
+   }
+  }
+ },
+ {
+  "fn": "cardAnnouncement",
+  "args": [
+   {
+    "pending": null,
+    "button": "Try again",
+    "action": "resume",
+    "kbd": true,
+    "steps": null,
+    "arrow": false,
+    "keyInput": false,
+    "tone": "err",
+    "secondary": false,
+    "kind": "mic-notfound",
+    "title": "No microphone found",
+    "body": "Connect a microphone or headset, then try again."
+   }
+  ],
+  "out": {
+   "text": "No microphone found. Connect a microphone or headset, then try again.",
+   "assertive": true
+  }
+ },
+ {
+  "fn": "windowTitle",
+  "args": [
+   "error",
+   false
+  ],
+  "out": "Sotto"
+ },
+ {
+  "fn": "pageView",
+  "args": [
+   {
+    "phase": "error",
+    "state": "off",
+    "micFailure": "busy",
+    "host": "app"
+   }
+  ],
+  "out": {
+   "view": "card",
+   "dial": "small",
+   "floor": "error",
+   "word": "Stopped",
+   "sub": null,
+   "wordTone": null,
+   "dialHint": null,
+   "steps": null,
+   "card": {
+    "pending": null,
+    "button": null,
+    "action": "resume",
+    "kbd": false,
+    "steps": null,
+    "arrow": false,
+    "keyInput": false,
+    "tone": "err",
+    "secondary": false,
+    "kind": "mic-busy",
+    "title": "The microphone is busy",
+    "body": "Another app may be using it. Close apps that use the microphone, then try again."
+   },
+   "header": {
+    "detail": null,
+    "key": "error",
+    "label": "Mic busy"
+   }
+  }
+ },
+ {
+  "fn": "cardAnnouncement",
+  "args": [
+   {
+    "pending": null,
+    "button": null,
+    "action": "resume",
+    "kbd": false,
+    "steps": null,
+    "arrow": false,
+    "keyInput": false,
+    "tone": "err",
+    "secondary": false,
+    "kind": "mic-busy",
+    "title": "The microphone is busy",
+    "body": "Another app may be using it. Close apps that use the microphone, then try again."
+   }
+  ],
+  "out": {
+   "text": "The microphone is busy. Another app may be using it.",
+   "assertive": true
+  }
+ },
+ {
+  "fn": "windowTitle",
+  "args": [
+   "error",
+   false
+  ],
+  "out": "Sotto"
+ },
+ {
+  "fn": "pageView",
+  "args": [
+   {
+    "phase": "error",
+    "state": "paused",
+    "errorText": "The voice session did not start.",
+    "host": "app"
+   }
+  ],
+  "out": {
+   "view": "card",
+   "dial": "small",
+   "floor": "error",
+   "word": "Stopped",
+   "sub": null,
+   "wordTone": null,
+   "dialHint": null,
+   "steps": null,
+   "card": {
+    "pending": null,
+    "button": "Try again",
+    "action": "resume",
+    "kbd": true,
+    "steps": null,
+    "arrow": false,
+    "keyInput": false,
+    "tone": "err",
+    "secondary": false,
+    "kind": "error",
+    "title": "Voice could not start",
+    "body": "The voice session did not start."
+   },
+   "header": {
+    "detail": null,
+    "key": "error",
+    "label": "Error"
+   }
+  }
+ },
+ {
+  "fn": "cardAnnouncement",
+  "args": [
+   {
+    "pending": null,
+    "button": "Try again",
+    "action": "resume",
+    "kbd": true,
+    "steps": null,
+    "arrow": false,
+    "keyInput": false,
+    "tone": "err",
+    "secondary": false,
+    "kind": "error",
+    "title": "Voice could not start",
+    "body": "The voice session did not start."
+   }
+  ],
+  "out": {
+   "text": "Voice could not start. The voice session did not start.",
+   "assertive": true
+  }
+ },
+ {
+  "fn": "windowTitle",
+  "args": [
+   "error",
+   false
+  ],
+  "out": "Sotto"
+ },
+ {
+  "fn": "pageView",
+  "args": [
+   {
+    "phase": "error",
+    "state": "off",
+    "host": "app"
+   }
+  ],
+  "out": {
+   "view": "card",
+   "dial": "small",
+   "floor": "error",
+   "word": "Stopped",
+   "sub": null,
+   "wordTone": null,
+   "dialHint": null,
+   "steps": null,
+   "card": {
+    "pending": null,
+    "button": null,
+    "action": "resume",
+    "kbd": false,
+    "steps": null,
+    "arrow": false,
+    "keyInput": false,
+    "tone": "err",
+    "secondary": false,
+    "kind": "error",
+    "title": "Voice could not start",
+    "body": "Something went wrong."
+   },
+   "header": {
+    "detail": null,
+    "key": "error",
+    "label": "Error"
+   }
+  }
+ },
+ {
+  "fn": "cardAnnouncement",
+  "args": [
+   {
+    "pending": null,
+    "button": null,
+    "action": "resume",
+    "kbd": false,
+    "steps": null,
+    "arrow": false,
+    "keyInput": false,
+    "tone": "err",
+    "secondary": false,
+    "kind": "error",
+    "title": "Voice could not start",
+    "body": "Something went wrong."
+   }
+  ],
+  "out": {
+   "text": "Voice could not start. Something went wrong.",
+   "assertive": true
+  }
+ },
+ {
+  "fn": "windowTitle",
+  "args": [
+   "error",
+   false
+  ],
+  "out": "Sotto"
+ },
+ {
+  "fn": "pageView",
+  "args": [
+   {
+    "phase": "connecting",
+    "state": "connecting",
+    "connectStage": "network",
+    "host": "app"
+   }
+  ],
+  "out": {
+   "view": "live",
+   "dial": "full",
+   "floor": "connecting",
+   "word": "Connecting",
+   "sub": "Connecting to the voice service…",
+   "wordTone": null,
+   "dialHint": null,
+   "steps": [
+    {
+     "key": "mic",
+     "label": "Microphone on",
+     "state": "done"
+    },
+    {
+     "key": "network",
+     "label": "Reaching the voice service",
+     "state": "active"
+    },
+    {
+     "key": "session",
+     "label": "Starting the session",
+     "state": "pending"
+    }
+   ],
+   "card": null,
+   "header": {
+    "key": "connecting",
+    "label": "Connecting",
+    "detail": null
+   }
+  }
+ },
+ {
+  "fn": "windowTitle",
+  "args": [
+   "connecting",
+   false
+  ],
+  "out": "Sotto"
+ },
+ {
+  "fn": "pageView",
+  "args": [
+   {
+    "phase": "connecting",
+    "state": "reconnecting",
+    "connectReason": "reconnect",
+    "host": "app"
+   }
+  ],
+  "out": {
+   "view": "live",
+   "dial": "full",
+   "floor": "reconnecting",
+   "word": "Reconnecting…",
+   "sub": "Your mute setting is kept.",
+   "wordTone": null,
+   "dialHint": null,
+   "steps": null,
+   "card": null,
+   "header": {
+    "key": "connecting",
+    "label": "Reconnecting",
+    "detail": null
+   }
+  }
+ },
+ {
+  "fn": "windowTitle",
+  "args": [
+   "reconnecting",
+   false
+  ],
+  "out": "Sotto"
+ },
+ {
+  "fn": "pageView",
+  "args": [
+   {
+    "phase": "live",
+    "state": "live",
+    "host": "app"
+   }
+  ],
+  "out": {
+   "view": "live",
+   "dial": "full",
+   "floor": "listening",
+   "word": "Listening",
+   "sub": null,
+   "wordTone": null,
+   "dialHint": null,
+   "steps": null,
+   "card": null,
+   "header": {
+    "key": "live",
+    "label": "Live",
+    "detail": null
+   }
+  }
+ },
+ {
+  "fn": "windowTitle",
+  "args": [
+   "listening",
+   false
+  ],
+  "out": "Sotto"
+ },
+ {
+  "fn": "pageView",
+  "args": [
+   {
+    "phase": "live",
+    "state": "live",
+    "floor": "you",
+    "host": "app"
+   }
+  ],
+  "out": {
+   "view": "live",
+   "dial": "full",
+   "floor": "you",
+   "word": "Hearing you",
+   "sub": null,
+   "wordTone": null,
+   "dialHint": null,
+   "steps": null,
+   "card": null,
+   "header": {
+    "key": "live",
+    "label": "Live",
+    "detail": null
+   }
+  }
+ },
+ {
+  "fn": "windowTitle",
+  "args": [
+   "you",
+   false
+  ],
+  "out": "Sotto"
+ },
+ {
+  "fn": "pageView",
+  "args": [
+   {
+    "phase": "live",
+    "state": "live",
+    "floor": "voice",
+    "host": "app"
+   }
+  ],
+  "out": {
+   "view": "live",
+   "dial": "full",
+   "floor": "voice",
+   "word": "Speaking",
+   "sub": null,
+   "wordTone": null,
+   "dialHint": null,
+   "steps": null,
+   "card": null,
+   "header": {
+    "key": "live",
+    "label": "Live",
+    "detail": null
+   }
+  }
+ },
+ {
+  "fn": "windowTitle",
+  "args": [
+   "voice",
+   false
+  ],
+  "out": "Sotto"
+ },
+ {
+  "fn": "pageView",
+  "args": [
+   {
+    "phase": "live",
+    "state": "live",
+    "muted": true,
+    "host": "app"
+   }
+  ],
+  "out": {
+   "view": "live",
+   "dial": "full",
+   "floor": "muted",
+   "word": "Muted",
+   "sub": "Sotto can't hear you. Still billing.",
+   "wordTone": null,
+   "dialHint": null,
+   "steps": null,
+   "card": null,
+   "header": {
+    "key": "muted",
+    "label": "Muted",
+    "detail": "Still billing"
+   }
+  }
+ },
+ {
+  "fn": "windowTitle",
+  "args": [
+   "muted",
+   false
+  ],
+  "out": "Muted · Sotto"
+ },
+ {
+  "fn": "pageView",
+  "args": [
+   {
+    "phase": "live",
+    "state": "live",
+    "attention": true,
+    "host": "app"
+   }
+  ],
+  "out": {
+   "view": "live",
+   "dial": "full",
+   "floor": "listening",
+   "word": "Approve in the terminal",
+   "sub": "Listening",
+   "wordTone": "attn",
+   "dialHint": null,
+   "steps": null,
+   "card": null,
+   "header": {
+    "key": "attention",
+    "label": "Approval needed",
+    "detail": null
+   }
+  }
+ },
+ {
+  "fn": "windowTitle",
+  "args": [
+   "listening",
+   true
+  ],
+  "out": "Approval needed · Sotto"
+ },
+ {
+  "fn": "pageView",
+  "args": [
+   {
+    "phase": "live",
+    "state": "live",
+    "muted": true,
+    "attention": true,
+    "host": "app"
+   }
+  ],
+  "out": {
+   "view": "live",
+   "dial": "full",
+   "floor": "muted",
+   "word": "Approve in the terminal",
+   "sub": "Muted · Sotto can't hear you",
+   "wordTone": "attn",
+   "dialHint": null,
+   "steps": null,
+   "card": null,
+   "header": {
+    "key": "attention",
+    "label": "Approval needed",
+    "detail": "Muted"
+   }
+  }
+ },
+ {
+  "fn": "windowTitle",
+  "args": [
+   "muted",
+   true
+  ],
+  "out": "Approval needed · Sotto"
+ },
+ {
+  "fn": "pageView",
+  "args": [
+   {
+    "phase": "connecting",
+    "state": "connecting",
+    "attention": true,
+    "host": "app"
+   }
+  ],
+  "out": {
+   "view": "live",
+   "dial": "full",
+   "floor": "connecting",
+   "word": "Connecting",
+   "sub": "Connecting to the voice service…",
+   "wordTone": null,
+   "dialHint": null,
+   "steps": [
+    {
+     "key": "mic",
+     "label": "Microphone on",
+     "state": "active"
+    },
+    {
+     "key": "network",
+     "label": "Reaching the voice service",
+     "state": "pending"
+    },
+    {
+     "key": "session",
+     "label": "Starting the session",
+     "state": "pending"
+    }
+   ],
+   "card": null,
+   "header": {
+    "key": "attention",
+    "label": "Approval needed",
+    "detail": null
+   }
+  }
+ },
+ {
+  "fn": "windowTitle",
+  "args": [
+   "connecting",
+   true
+  ],
+  "out": "Approval needed · Sotto"
+ },
+ {
+  "fn": "pageView",
+  "args": [
+   {
+    "phase": "idle",
+    "state": "off",
+    "sseDown": true,
+    "host": "app"
+   }
+  ],
+  "out": {
+   "view": "card",
+   "dial": "small",
+   "floor": "off",
+   "word": "Voice is off",
+   "sub": null,
+   "wordTone": null,
+   "dialHint": null,
+   "steps": null,
+   "card": {
+    "pending": null,
+    "button": null,
+    "action": null,
+    "kbd": false,
+    "steps": null,
+    "arrow": false,
+    "keyInput": false,
+    "tone": "warn",
+    "secondary": false,
+    "kind": "disconnected",
+    "title": "Disconnected",
+    "body": "Waiting for the sotto daemon…"
+   },
+   "header": {
+    "detail": null,
+    "key": "error",
+    "label": "Disconnected"
+   }
+  }
+ },
+ {
+  "fn": "cardAnnouncement",
+  "args": [
+   {
+    "pending": null,
+    "button": null,
+    "action": null,
+    "kbd": false,
+    "steps": null,
+    "arrow": false,
+    "keyInput": false,
+    "tone": "warn",
+    "secondary": false,
+    "kind": "disconnected",
+    "title": "Disconnected",
+    "body": "Waiting for the sotto daemon…"
+   }
+  ],
+  "out": {
+   "text": "Disconnected. Waiting for the sotto daemon…",
+   "assertive": false
+  }
+ },
+ {
+  "fn": "windowTitle",
+  "args": [
+   "off",
+   false
+  ],
+  "out": "Sotto"
+ },
+ {
+  "fn": "pageView",
+  "args": [
+   {
+    "phase": "idle",
+    "state": "off",
+    "host": "app"
+   }
+  ],
+  "out": {
+   "view": "card",
+   "dial": "small",
+   "floor": "off",
+   "word": "Voice is off",
+   "sub": null,
+   "wordTone": null,
+   "dialHint": null,
+   "steps": null,
+   "card": {
+    "pending": null,
+    "button": null,
+    "action": null,
+    "kbd": false,
+    "steps": null,
+    "arrow": false,
+    "keyInput": false,
+    "tone": "neutral",
+    "secondary": false,
+    "kind": "off",
+    "title": "Voice is off",
+    "body": "Turn it on from Claude Code with /talk on."
+   },
+   "header": {
+    "detail": null,
+    "key": "off",
+    "label": "Off"
+   }
+  }
+ },
+ {
+  "fn": "cardAnnouncement",
+  "args": [
+   {
+    "pending": null,
+    "button": null,
+    "action": null,
+    "kbd": false,
+    "steps": null,
+    "arrow": false,
+    "keyInput": false,
+    "tone": "neutral",
+    "secondary": false,
+    "kind": "off",
+    "title": "Voice is off",
+    "body": "Turn it on from Claude Code with /talk on."
+   }
+  ],
+  "out": {
+   "text": "Voice is off. Turn it on from Claude Code with /talk on.",
+   "assertive": false
+  }
+ },
+ {
+  "fn": "windowTitle",
+  "args": [
+   "off",
+   false
+  ],
+  "out": "Sotto"
+ },
+ {
+  "fn": "pageView",
+  "args": [
+   {
+    "phase": "idle",
+    "state": "closing",
+    "host": "app"
+   }
+  ],
+  "out": {
+   "view": "card",
+   "dial": "small",
+   "floor": "off",
+   "word": "Voice is off",
+   "sub": null,
+   "wordTone": null,
+   "dialHint": null,
+   "steps": null,
+   "card": {
+    "pending": null,
+    "button": null,
+    "action": null,
+    "kbd": false,
+    "steps": null,
+    "arrow": false,
+    "keyInput": false,
+    "tone": "neutral",
+    "secondary": false,
+    "kind": "closing",
+    "title": "Closing…",
+    "body": "Finishing the voice session."
+   },
+   "header": {
+    "detail": null,
+    "key": "off",
+    "label": "Closing"
+   }
+  }
+ },
+ {
+  "fn": "cardAnnouncement",
+  "args": [
+   {
+    "pending": null,
+    "button": null,
+    "action": null,
+    "kbd": false,
+    "steps": null,
+    "arrow": false,
+    "keyInput": false,
+    "tone": "neutral",
+    "secondary": false,
+    "kind": "closing",
+    "title": "Closing…",
+    "body": "Finishing the voice session."
+   }
+  ],
+  "out": {
+   "text": "Closing… Finishing the voice session.",
+   "assertive": false
+  }
+ },
+ {
+  "fn": "windowTitle",
+  "args": [
+   "off",
+   false
+  ],
+  "out": "Sotto"
+ },
+ {
+  "fn": "pageView",
+  "args": [
+   {
+    "phase": "idle",
+    "state": "sleeping",
+    "host": "app"
+   }
+  ],
+  "out": {
+   "view": "card",
+   "dial": "small",
+   "floor": "sleeping",
+   "word": "Sleeping",
+   "sub": "Speak to wake it",
+   "wordTone": null,
+   "dialHint": null,
+   "steps": null,
+   "card": {
+    "pending": null,
+    "button": "Wake now",
+    "action": "resume",
+    "kbd": true,
+    "steps": null,
+    "arrow": false,
+    "keyInput": false,
+    "tone": "neutral",
+    "secondary": true,
+    "kind": "sleeping",
+    "title": "Sleeping",
+    "body": "Voice wakes up when you speak. Nothing is sent or billed until then.",
+    "listening": false
+   },
+   "header": {
+    "detail": null,
+    "key": "sleeping",
+    "label": "Sleeping"
+   }
+  }
+ },
+ {
+  "fn": "cardAnnouncement",
+  "args": [
+   {
+    "pending": null,
+    "button": "Wake now",
+    "action": "resume",
+    "kbd": true,
+    "steps": null,
+    "arrow": false,
+    "keyInput": false,
+    "tone": "neutral",
+    "secondary": true,
+    "kind": "sleeping",
+    "title": "Sleeping",
+    "body": "Voice wakes up when you speak. Nothing is sent or billed until then.",
+    "listening": false
+   }
+  ],
+  "out": {
+   "text": "Sleeping. Voice wakes up when you speak.",
+   "assertive": false
+  }
+ },
+ {
+  "fn": "windowTitle",
+  "args": [
+   "sleeping",
+   false
+  ],
+  "out": "Sotto"
+ },
+ {
+  "fn": "pageView",
+  "args": [
+   {
+    "phase": "idle",
+    "state": "sleeping",
+    "sleep": {
+     "title": "Sleeping (muted)",
+     "body": "Not listening for your voice. Press M to listen again, or Space to resume.",
+     "listening": false
+    },
+    "pendingResult": "Done.",
+    "host": "app"
+   }
+  ],
+  "out": {
+   "view": "card",
+   "dial": "small",
+   "floor": "sleeping",
+   "word": "Sleeping",
+   "sub": "Speak to wake it",
+   "wordTone": null,
+   "dialHint": null,
+   "steps": null,
+   "card": {
+    "pending": "Done.",
+    "button": "Wake now",
+    "action": "resume",
+    "kbd": true,
+    "steps": null,
+    "arrow": false,
+    "keyInput": false,
+    "tone": "neutral",
+    "secondary": true,
+    "kind": "sleeping",
+    "title": "Sleeping (muted)",
+    "body": "Not listening for your voice. Press M to listen again, or Space to resume.",
+    "listening": false
+   },
+   "header": {
+    "detail": null,
+    "key": "sleeping",
+    "label": "Sleeping"
+   }
+  }
+ },
+ {
+  "fn": "cardAnnouncement",
+  "args": [
+   {
+    "pending": "Done.",
+    "button": "Wake now",
+    "action": "resume",
+    "kbd": true,
+    "steps": null,
+    "arrow": false,
+    "keyInput": false,
+    "tone": "neutral",
+    "secondary": true,
+    "kind": "sleeping",
+    "title": "Sleeping (muted)",
+    "body": "Not listening for your voice. Press M to listen again, or Space to resume.",
+    "listening": false
+   }
+  ],
+  "out": {
+   "text": "Sleeping (muted). Not listening for your voice.",
+   "assertive": false
+  }
+ },
+ {
+  "fn": "windowTitle",
+  "args": [
+   "sleeping",
+   false
+  ],
+  "out": "Sotto"
+ },
+ {
+  "fn": "pageView",
+  "args": [
+   {
+    "phase": "idle",
+    "state": "paused",
+    "pausedReason": "idle",
+    "idleMinutes": 5,
+    "pendingResult": "Done.",
+    "host": "app"
+   }
+  ],
+  "out": {
+   "view": "card",
+   "dial": "small",
+   "floor": "paused",
+   "word": "Paused",
+   "sub": null,
+   "wordTone": null,
+   "dialHint": null,
+   "steps": null,
+   "card": {
+    "pending": "Done.",
+    "button": "Resume",
+    "action": "resume",
+    "kbd": true,
+    "steps": null,
+    "arrow": false,
+    "keyInput": false,
+    "tone": "neutral",
+    "secondary": false,
+    "kind": "paused",
+    "title": "Paused after 5 minutes of silence",
+    "body": "Resume to keep talking with Claude Code. Nothing is billed while paused."
+   },
+   "header": {
+    "detail": null,
+    "key": "paused",
+    "label": "Paused"
+   }
+  }
+ },
+ {
+  "fn": "cardAnnouncement",
+  "args": [
+   {
+    "pending": "Done.",
+    "button": "Resume",
+    "action": "resume",
+    "kbd": true,
+    "steps": null,
+    "arrow": false,
+    "keyInput": false,
+    "tone": "neutral",
+    "secondary": false,
+    "kind": "paused",
+    "title": "Paused after 5 minutes of silence",
+    "body": "Resume to keep talking with Claude Code. Nothing is billed while paused."
+   }
+  ],
+  "out": {
+   "text": "Paused after 5 minutes of silence. Resume to keep talking with Claude Code.",
+   "assertive": false
+  }
+ },
+ {
+  "fn": "windowTitle",
+  "args": [
+   "paused",
+   false
+  ],
+  "out": "Sotto"
+ },
+ {
+  "fn": "pageView",
+  "args": [
+   {
+    "phase": "idle",
+    "state": "paused",
+    "pausedReason": "idle",
+    "idleSeconds": 45,
+    "host": "app"
+   }
+  ],
+  "out": {
+   "view": "card",
+   "dial": "small",
+   "floor": "paused",
+   "word": "Paused",
+   "sub": null,
+   "wordTone": null,
+   "dialHint": null,
+   "steps": null,
+   "card": {
+    "pending": null,
+    "button": "Resume",
+    "action": "resume",
+    "kbd": true,
+    "steps": null,
+    "arrow": false,
+    "keyInput": false,
+    "tone": "neutral",
+    "secondary": false,
+    "kind": "paused",
+    "title": "Paused after 45 seconds of silence",
+    "body": "Resume to keep talking with Claude Code. Nothing is billed while paused."
+   },
+   "header": {
+    "detail": null,
+    "key": "paused",
+    "label": "Paused"
+   }
+  }
+ },
+ {
+  "fn": "cardAnnouncement",
+  "args": [
+   {
+    "pending": null,
+    "button": "Resume",
+    "action": "resume",
+    "kbd": true,
+    "steps": null,
+    "arrow": false,
+    "keyInput": false,
+    "tone": "neutral",
+    "secondary": false,
+    "kind": "paused",
+    "title": "Paused after 45 seconds of silence",
+    "body": "Resume to keep talking with Claude Code. Nothing is billed while paused."
+   }
+  ],
+  "out": {
+   "text": "Paused after 45 seconds of silence. Resume to keep talking with Claude Code.",
+   "assertive": false
+  }
+ },
+ {
+  "fn": "windowTitle",
+  "args": [
+   "paused",
+   false
+  ],
+  "out": "Sotto"
+ },
+ {
+  "fn": "pageView",
+  "args": [
+   {
+    "phase": "idle",
+    "state": "paused",
+    "lastError": {
+     "code": "daily_cap"
+    },
+    "capMinutes": 120,
+    "host": "app"
+   }
+  ],
+  "out": {
+   "view": "card",
+   "dial": "small",
+   "floor": "paused",
+   "word": "Paused",
+   "sub": null,
+   "wordTone": null,
+   "dialHint": null,
+   "steps": null,
+   "card": {
+    "pending": null,
+    "button": null,
+    "action": "resume",
+    "kbd": false,
+    "steps": null,
+    "arrow": false,
+    "keyInput": false,
+    "tone": "attn",
+    "secondary": false,
+    "kind": "cap",
+    "title": "Paused: today's voice limit is reached",
+    "body": "You've used today's 2 hours of voice. Raise daily_cap_minutes in /config (sotto) to continue today."
+   },
+   "header": {
+    "detail": null,
+    "key": "attention",
+    "label": "Limit reached"
+   }
+  }
+ },
+ {
+  "fn": "cardAnnouncement",
+  "args": [
+   {
+    "pending": null,
+    "button": null,
+    "action": "resume",
+    "kbd": false,
+    "steps": null,
+    "arrow": false,
+    "keyInput": false,
+    "tone": "attn",
+    "secondary": false,
+    "kind": "cap",
+    "title": "Paused: today's voice limit is reached",
+    "body": "You've used today's 2 hours of voice. Raise daily_cap_minutes in /config (sotto) to continue today."
+   }
+  ],
+  "out": {
+   "text": "Paused: today's voice limit is reached. You've used today's 2 hours of voice.",
+   "assertive": true
+  }
+ },
+ {
+  "fn": "windowTitle",
+  "args": [
+   "paused",
+   false
+  ],
+  "out": "Sotto"
+ },
+ {
+  "fn": "pageView",
+  "args": [
+   {
+    "phase": "idle",
+    "state": "paused",
+    "lastError": {
+     "code": "mic_error",
+     "message": "The mic went away."
+    },
+    "host": "app"
+   }
+  ],
+  "out": {
+   "view": "card",
+   "dial": "small",
+   "floor": "paused",
+   "word": "Paused",
+   "sub": null,
+   "wordTone": null,
+   "dialHint": null,
+   "steps": null,
+   "card": {
+    "pending": null,
+    "button": "Resume",
+    "action": "resume",
+    "kbd": true,
+    "steps": null,
+    "arrow": false,
+    "keyInput": false,
+    "tone": "neutral",
+    "secondary": false,
+    "kind": "paused",
+    "title": "Paused",
+    "body": "The mic went away. Nothing is billed while paused."
+   },
+   "header": {
+    "detail": null,
+    "key": "paused",
+    "label": "Paused"
+   }
+  }
+ },
+ {
+  "fn": "cardAnnouncement",
+  "args": [
+   {
+    "pending": null,
+    "button": "Resume",
+    "action": "resume",
+    "kbd": true,
+    "steps": null,
+    "arrow": false,
+    "keyInput": false,
+    "tone": "neutral",
+    "secondary": false,
+    "kind": "paused",
+    "title": "Paused",
+    "body": "The mic went away. Nothing is billed while paused."
+   }
+  ],
+  "out": {
+   "text": "Paused. The mic went away.",
+   "assertive": false
+  }
+ },
+ {
+  "fn": "windowTitle",
+  "args": [
+   "paused",
+   false
+  ],
+  "out": "Sotto"
+ },
+ {
+  "fn": "pageView",
+  "args": [
+   {
+    "phase": "idle",
+    "state": "paused",
+    "pausedReason": "user",
+    "host": "app"
+   }
+  ],
+  "out": {
+   "view": "card",
+   "dial": "small",
+   "floor": "paused",
+   "word": "Paused",
+   "sub": null,
+   "wordTone": null,
+   "dialHint": null,
+   "steps": null,
+   "card": {
+    "pending": null,
+    "button": "Resume",
+    "action": "resume",
+    "kbd": true,
+    "steps": null,
+    "arrow": false,
+    "keyInput": false,
+    "tone": "neutral",
+    "secondary": false,
+    "kind": "paused",
+    "title": "Paused",
+    "body": "Resume to keep talking with Claude Code. Nothing is billed while paused."
+   },
+   "header": {
+    "detail": null,
+    "key": "paused",
+    "label": "Paused"
+   }
+  }
+ },
+ {
+  "fn": "cardAnnouncement",
+  "args": [
+   {
+    "pending": null,
+    "button": "Resume",
+    "action": "resume",
+    "kbd": true,
+    "steps": null,
+    "arrow": false,
+    "keyInput": false,
+    "tone": "neutral",
+    "secondary": false,
+    "kind": "paused",
+    "title": "Paused",
+    "body": "Resume to keep talking with Claude Code. Nothing is billed while paused."
+   }
+  ],
+  "out": {
+   "text": "Paused. Resume to keep talking with Claude Code.",
+   "assertive": false
+  }
+ },
+ {
+  "fn": "windowTitle",
+  "args": [
+   "paused",
+   false
+  ],
+  "out": "Sotto"
+ },
+ {
+  "fn": "pageView",
+  "args": [
+   {
+    "phase": "idle",
+    "state": "paused",
+    "pausedReason": "session_ended",
+    "host": "app"
+   }
+  ],
+  "out": {
+   "view": "card",
+   "dial": "small",
+   "floor": "paused",
+   "word": "Paused",
+   "sub": null,
+   "wordTone": null,
+   "dialHint": null,
+   "steps": null,
+   "card": {
+    "pending": null,
+    "button": "Resume",
+    "action": "resume",
+    "kbd": true,
+    "steps": null,
+    "arrow": false,
+    "keyInput": false,
+    "tone": "neutral",
+    "secondary": false,
+    "kind": "paused",
+    "title": "Paused (session ended)",
+    "body": "Resume to keep talking with Claude Code. Nothing is billed while paused."
+   },
+   "header": {
+    "detail": null,
+    "key": "paused",
+    "label": "Paused"
+   }
+  }
+ },
+ {
+  "fn": "cardAnnouncement",
+  "args": [
+   {
+    "pending": null,
+    "button": "Resume",
+    "action": "resume",
+    "kbd": true,
+    "steps": null,
+    "arrow": false,
+    "keyInput": false,
+    "tone": "neutral",
+    "secondary": false,
+    "kind": "paused",
+    "title": "Paused (session ended)",
+    "body": "Resume to keep talking with Claude Code. Nothing is billed while paused."
+   }
+  ],
+  "out": {
+   "text": "Paused (session ended). Resume to keep talking with Claude Code.",
+   "assertive": false
+  }
+ },
+ {
+  "fn": "windowTitle",
+  "args": [
+   "paused",
+   false
+  ],
+  "out": "Sotto"
+ },
+ {
+  "fn": "pageView",
+  "args": [
+   {
+    "phase": "idle",
+    "state": "waiting_page",
+    "host": "app"
+   }
+  ],
+  "out": {
+   "view": "live",
+   "dial": "full",
+   "floor": "connecting",
+   "word": "Connecting",
+   "sub": "Waiting for Claude Code…",
+   "wordTone": null,
+   "dialHint": null,
+   "steps": [
+    {
+     "key": "mic",
+     "label": "Microphone on",
+     "state": "pending"
+    },
+    {
+     "key": "network",
+     "label": "Reaching the voice service",
+     "state": "pending"
+    },
+    {
+     "key": "session",
+     "label": "Starting the session",
+     "state": "pending"
+    }
+   ],
+   "card": null,
+   "header": {
+    "key": "connecting",
+    "label": "Opening",
+    "detail": null
+   }
+  }
+ },
+ {
+  "fn": "windowTitle",
+  "args": [
+   "connecting",
+   false
+  ],
+  "out": "Sotto"
+ },
+ {
+  "fn": "pageView",
+  "args": [
+   {
+    "phase": "idle",
+    "state": "reconnecting",
+    "host": "app"
+   }
+  ],
+  "out": {
+   "view": "live",
+   "dial": "full",
+   "floor": "reconnecting",
+   "word": "Reconnecting…",
+   "sub": "Your mute setting is kept.",
+   "wordTone": null,
+   "dialHint": null,
+   "steps": null,
+   "card": null,
+   "header": {
+    "key": "connecting",
+    "label": "Reconnecting",
+    "detail": null
+   }
+  }
+ },
+ {
+  "fn": "windowTitle",
+  "args": [
+   "reconnecting",
+   false
+  ],
+  "out": "Sotto"
+ },
+ {
+  "fn": "pageView",
+  "args": [
+   {
+    "phase": "idle",
+    "state": "live",
+    "host": "app"
+   }
+  ],
+  "out": {
+   "view": "live",
+   "dial": "full",
+   "floor": "connecting",
+   "word": "Connecting",
+   "sub": "Waiting for Claude Code…",
+   "wordTone": null,
+   "dialHint": null,
+   "steps": [
+    {
+     "key": "mic",
+     "label": "Microphone on",
+     "state": "pending"
+    },
+    {
+     "key": "network",
+     "label": "Reaching the voice service",
+     "state": "pending"
+    },
+    {
+     "key": "session",
+     "label": "Starting the session",
+     "state": "pending"
+    }
+   ],
+   "card": null,
+   "header": {
+    "key": "connecting",
+    "label": "Live",
+    "detail": null
+   }
+  }
+ },
+ {
+  "fn": "windowTitle",
+  "args": [
+   "connecting",
+   false
+  ],
+  "out": "Sotto"
+ }
+]

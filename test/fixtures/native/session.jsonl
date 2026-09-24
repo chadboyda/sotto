@@ -1,0 +1,21 @@
+{"type":"live","event":{"type":"session.started","session":{"id":"sess_test_1","expires_at":1790000000}}}
+{"type":"caption","role":"assistant","text":"Hi, ","start_ms":100,"end_ms":300,"session":"sess_test_1"}
+{"type":"caption","role":"assistant","text":"I'm listening.","start_ms":300,"end_ms":900,"session":"sess_test_1"}
+{"type":"caption","role":"user","text":"List the files ","start_ms":2000,"end_ms":2600,"session":"sess_test_1"}
+{"type":"caption","role":"user","text":"in the daemon folder.","start_ms":2600,"end_ms":3400,"session":"sess_test_1"}
+{"type":"delegation","id":"del_1","status":"sent","text":"List the files in the daemon folder."}
+{"type":"activity","kind":"turn_start","text":""}
+{"type":"activity","kind":"tool","text":"Bash: ls daemon"}
+{"type":"activity","kind":"agents","text":"1 background agent","count":1}
+{"type":"notice","level":"warn","code":"cant_hear","text":"Sotto can't hear you. Check the microphone."}
+{"type":"notice_clear","code":"cant_hear"}
+{"type":"live","event":{"type":"session.input_audio.muted"}}
+{"type":"live","event":{"type":"session.usage.updated","usage":{"seconds":14}}}
+{"type":"activity","kind":"turn_end","text":"There are 34 files in daemon/."}
+{"type":"result_pending","text":"There are 34 files in daemon/."}
+{"type":"audio_flush","reason":"session_end"}
+{"type":"live","event":{"type":"session.closed","reason":"close_requested","usage":{"seconds":15}}}
+{"type":"command","command":"close_window","reason":"off"}
+{"type":"ping","t":1790000000000}
+{"type":"result","id":"c1","ok":true,"data":{"muted":true}}
+{"type":"result","id":"c2","ok":false,"error":{"code":"bad_voice","message":"Unknown voice"}}

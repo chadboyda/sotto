@@ -42,7 +42,7 @@ export const SESSION = (socket = "/tmp/clv-owner-a.sock", extra = {}) => ({
  *   d (createDaemon result), voice, clock, WS, fetchCalls, inboxSends, chrome,
  *   sse (captured broadcasts), exits, log, setFetch(fn), ownerAlive flag.
  */
-export async function makeHarness({ env = { OPENAI_API_KEY: "sk-test-key" }, clock, port, realClock = false, onRestart, dataDir, pageToken, daemonKey, keychain = createFakeKeychain(), userConfigKey } = {}) {
+export async function makeHarness({ env = { OPENAI_API_KEY: "sk-test-key" }, clock, port, realClock = false, onRestart, dataDir, pageToken, daemonKey, keychain = createFakeKeychain(), userConfigKey, WebSocketImpl } = {}) {
   const h = {
     clock: realClock ? undefined : clock || createFakeClock(),
     WS: createFakeWSClass(),
@@ -77,7 +77,7 @@ export async function makeHarness({ env = { OPENAI_API_KEY: "sk-test-key" }, clo
   };
   const opts = {
     dataDir: h.dataDir, port: h.port, pluginRoot: h.pluginRoot, env, keychain, userConfigKey,
-    fetchImpl: (...a) => h.fetchImpl(...a), WebSocketImpl: h.WS,
+    fetchImpl: (...a) => h.fetchImpl(...a), WebSocketImpl: WebSocketImpl || h.WS,
     inbox: { send: async (m) => { h.inboxSends.push(m); return h.inboxResult; } },
     chrome: h.chrome, log: h.log, onExit: (r) => h.exits.push(r), owner: probe,
     execFile: (cmd, args, o, cb) => cb(null, "main\n"),

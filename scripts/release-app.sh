@@ -5,7 +5,7 @@
 #   scripts/release-app.sh <version> [--upload] [--identity NAME] [--profile NAME] [--allow-dirty]
 #
 #   <version>      must equal the version in package.json, .claude-plugin/plugin.json
-#                  and app/Info.plist (CFBundleShortVersionString)
+#                  and app-native/Bundle/Info.plist (CFBundleShortVersionString)
 #   --upload       after everything verifies, `gh release create v<version>` with
 #                  dist/Sotto.zip and dist/Sotto.zip.sha256 (the tag must exist on
 #                  GitHub: push it first). Without it nothing leaves this machine
@@ -14,11 +14,11 @@
 #                  identity of team 6M6D2W72ZB in the keychain)
 #   --profile      notarytool keychain profile (default: sotto), created once with
 #                  `xcrun notarytool store-credentials sotto --apple-id ... --team-id ...`
-#   --allow-dirty  build even when app/ or scripts/build-app.sh have uncommitted
+#   --allow-dirty  build even when app-native/ or scripts/build-app.sh have uncommitted
 #                  changes (the release would not match any commit's sources hash)
 #
 # Steps: universal (arm64 + x86_64) release build through build-app.sh, signed
-# with the hardened runtime, a secure timestamp and app/Sotto.entitlements;
+# with the hardened runtime, a secure timestamp and app-native/Bundle/Sotto.entitlements;
 # notarytool submit --wait; stapler staple; codesign/spctl/stapler checks;
 # ditto zip + sha256. Output in dist/ (git-ignored): Sotto.zip,
 # Sotto.zip.sha256, release.json and the stapled dist/build/Sotto.app.
@@ -53,11 +53,11 @@ die() { printf 'release-app.sh: %s\n' "$*" >&2; exit 1; }
 json_version() { /usr/bin/plutil -extract version raw -o - "$1" 2>/dev/null; }
 [[ "$(json_version "$ROOT/package.json")" == "$VERSION" ]] || die "package.json version is $(json_version "$ROOT/package.json"), not $VERSION"
 [[ "$(json_version "$ROOT/.claude-plugin/plugin.json")" == "$VERSION" ]] || die ".claude-plugin/plugin.json version is not $VERSION"
-PLIST_VERSION="$(/usr/bin/plutil -extract CFBundleShortVersionString raw -o - "$ROOT/app/Info.plist" 2>/dev/null)"
-[[ "$PLIST_VERSION" == "$VERSION" ]] || die "app/Info.plist CFBundleShortVersionString is $PLIST_VERSION, not $VERSION"
+PLIST_VERSION="$(/usr/bin/plutil -extract CFBundleShortVersionString raw -o - "$ROOT/app-native/Bundle/Info.plist" 2>/dev/null)"
+[[ "$PLIST_VERSION" == "$VERSION" ]] || die "app-native/Bundle/Info.plist CFBundleShortVersionString is $PLIST_VERSION, not $VERSION"
 
 if [[ $ALLOW_DIRTY -eq 0 ]] && git -C "$ROOT" rev-parse --git-dir >/dev/null 2>&1; then
-  dirty="$(git -C "$ROOT" status --porcelain -- app scripts/build-app.sh .claude-plugin/plugin.json)"
+  dirty="$(git -C "$ROOT" status --porcelain -- app-native scripts/build-app.sh .claude-plugin/plugin.json)"
   [[ -z "$dirty" ]] || die "uncommitted changes in the app sources (commit them, or --allow-dirty):
 $dirty"
 fi
@@ -129,7 +129,7 @@ if [[ $UPLOAD -eq 1 ]]; then
   command -v gh >/dev/null 2>&1 || die "gh not found"
   say "uploading to https://github.com/$REPO/releases/tag/v$VERSION"
   gh release create "v$VERSION" "$ZIP" "$ZIP.sha256" --repo "$REPO" --verify-tag \
-    --title "Sotto $VERSION" --notes "Signed and notarized Sotto desktop app for macOS 13+ (universal). The plugin downloads and verifies it on first /talk; see the README." \
+    --title "Sotto $VERSION" --notes "Signed and notarized native Sotto desktop app for macOS 14+ (universal). The plugin downloads and verifies it on first /talk; see the README." \
     || die "gh release create failed"
 else
   say "not uploaded (pass --upload once the tag v$VERSION is on GitHub)"

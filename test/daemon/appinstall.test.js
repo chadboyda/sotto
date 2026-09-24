@@ -24,7 +24,10 @@ const VERSION = "4.5.6";
 /** A plugin copy (app sources, installer, a stub build script) behind a symlink. */
 function pluginViaSymlink(buildScript) {
   const real = tmp();
-  fs.cpSync(path.join(ROOT, "app"), path.join(real, "app"), { recursive: true });
+  // The app sources, without SwiftPM build products (appSourceHash skips them anyway).
+  fs.cpSync(path.join(ROOT, "app-native"), path.join(real, "app-native"), {
+    recursive: true, filter: (src) => !/\/\.(build|swiftpm)(\/|$)/.test(src),
+  });
   fs.mkdirSync(path.join(real, "daemon"));
   fs.copyFileSync(path.join(ROOT, "daemon/appfetch.js"), path.join(real, "daemon/appfetch.js"));
   fs.mkdirSync(path.join(real, "scripts"));

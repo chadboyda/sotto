@@ -1,7 +1,7 @@
-// Voice-window chooser (SPEC §6.16): the Sotto desktop app when it is
-// built and suitable, else the Chrome --app window (chrome.js), else the
-// default browser. Never blocks /control: building the app, checking the audio
-// route and launching all happen in the background.
+// Voice-window chooser (SPEC §6.16, docs/NATIVE.md §4.6): the native Sotto
+// desktop app when it is installed, else the Chrome --app window (chrome.js),
+// else the default browser. Never blocks /control: installing the app and
+// launching it happen in the background.
 import fs from "node:fs";
 import path from "node:path";
 import { createHash } from "node:crypto";
@@ -14,12 +14,13 @@ export const APP_BUNDLE = "Sotto.app";
 export const APP_EXE = "Sotto";
 /** Env values: the userConfig modes plus "none" (tests and probes). */
 export const ENV_MODES = Object.freeze([...WINDOW_MODES, "none"]);
-/** No page connected this long after launching the app: fall back to Chrome. */
+/** The app has not said hello on /api/native this long after its launch: fall back to Chrome. */
 export const APP_PAGE_TIMEOUT_MS = 15_000;
-/** Passed to a test-mode app launch (test/app/live.test.mjs). */
-export const APP_TEST_ENV = Object.freeze(["SOTTO_APP_DEBUG_LOG", "SOTTO_APP_MIC", "SOTTO_APP_MIC_FIXTURE", "SOTTO_APP_MIC_FIXTURE_LEAD_MS", "SOTTO_APP_ECHO_SIM_DB"]);
-/** How long a measured audio route stays valid for `auto`. */
-export const ROUTE_TTL_MS = 60_000;
+/** Passed to a test-mode app launch (test/app/*.test.mjs): fake audio in, output WAV out (docs/NATIVE.md §5.3). */
+export const APP_TEST_ENV = Object.freeze(["SOTTO_APP_DEBUG_LOG", "SOTTO_APP_MIC_FIXTURE", "SOTTO_APP_MIC_FIXTURE_LEAD_MS", "SOTTO_APP_OUT_WAV", "SOTTO_APP_ECHO_SIM_DB", "SOTTO_APP_TEST_MUTE_AFTER_MS", "SOTTO_APP_MIC_QUEUE_DIR"]);
+/** The SwiftPM package the app is built from, and the directories its hash skips (build products). */
+export const APP_SOURCE_DIR = "app-native";
+export const APP_SOURCE_SKIP = Object.freeze([".build", ".swiftpm"]);
 /**
  * How long open() holds the window for an app install in flight before it
  * opens Chrome instead (the install carries on; the next /talk uses the app).
@@ -51,8 +52,9 @@ export function appPaths(dataDir, pluginRoot) {
 
 /**
  * Hash of the app sources, identical to scripts/build-app.sh's source_hash:
- * sha256 over, for each file of app/** plus scripts/build-app.sh sorted by
- * path (byte order), "<relative path>\n<sha256 hex>\n". null if app/ is missing.
+ * sha256 over, for each file of app-native/** (minus .build/, .swiftpm/ and
+ * .DS_Store) plus scripts/build-app.sh sorted by path (byte order),
+ * "<relative path>\n<sha256 hex>\n". null if app-native/ is missing.
  */
 export function appSourceHash(pluginRoot, fsImpl = fs) {
   const files = [];
@@ -61,12 +63,12 @@ export function appSourceHash(pluginRoot, fsImpl = fs) {
     try { entries = fsImpl.readdirSync(path.join(pluginRoot, rel), { withFileTypes: true }); } catch { return false; }
     for (const e of entries) {
       const r = `${rel}/${e.name}`;
-      if (e.isDirectory()) walk(r);
+      if (e.isDirectory()) { if (!APP_SOURCE_SKIP.includes(e.name)) walk(r); }
       else if (e.isFile() && e.name !== ".DS_Store") files.push(r);
     }
     return true;
   };
-  if (!walk("app")) return null;
+  if (!walk(APP_SOURCE_DIR)) return null;
   files.push("scripts/build-app.sh");
   files.sort((a, b) => (Buffer.compare(Buffer.from(a), Buffer.from(b))));
   const outer = createHash("sha256");
@@ -90,7 +92,7 @@ const pidAlive = (pid, kill) => {
  *   missing  never built
  *   failed   the last build of these exact sources failed (not retried)
  *   building a build is running (build.lock names a live pid)
- *   nosource no app/ in the plugin (nothing to build)
+ *   nosource no app-native/ in the plugin (nothing to build)
  */
 export function appBuildState({ pluginRoot, dataDir, fsImpl = fs, kill = process.kill.bind(process), hash } = {}) {
   const p = appPaths(dataDir, pluginRoot);
@@ -134,18 +136,20 @@ export function resolveWant({ env = {}, preference } = {}) {
 }
 
 /**
- * Pure choice. Returns {mode, build, needRoute, reason}:
- *   mode       "app" | "chrome" | "default" | "none"
- *   build      start a background app build (missing or stale bundle)
- *   needRoute  `auto` with a ready app but no fresh audio route: the caller
- *              measures it, then asks again with `route`
- * `route` is {input:{bluetooth}, output:{bluetooth, headphones}, builtin_input, native_mic}
- * from `Sotto --audio-route`.
+ * Pure choice. Returns {mode, build, reason}:
+ *   mode   "app" | "chrome" | "default" | "none"
+ *   build  start a background app install (missing or stale bundle)
+ * `auto` and `app` pick the native app whenever it is ready on macOS. There
+ * is no audio-route rule any more: the native app never opens a Bluetooth
+ * input for capture (it records from a non-Bluetooth mic on headphones and
+ * uses voice processing on speakers, docs/NATIVE.md §5.3), so a headset keeps
+ * its high-quality profile. Chrome remains for other platforms, a missing or
+ * broken app, and `chrome`/`default`.
  */
-export function chooseWindow({ want, platform, app, chromeExists, route, appBroken = false }) {
-  const browser = (reason) => ({ mode: chromeExists ? "chrome" : "default", build: false, needRoute: false, reason });
-  if (want === "none") return { mode: "none", build: false, needRoute: false, reason: "none" };
-  if (want === "default") return { mode: "default", build: false, needRoute: false, reason: "requested" };
+export function chooseWindow({ want, platform, app, chromeExists, appBroken = false }) {
+  const browser = (reason) => ({ mode: chromeExists ? "chrome" : "default", build: false, reason });
+  if (want === "none") return { mode: "none", build: false, reason: "none" };
+  if (want === "default") return { mode: "default", build: false, reason: "requested" };
   if (want === "chrome") return browser(chromeExists ? "requested" : "no_chrome");
   // want is "app" or "auto".
   if (platform !== "darwin") return browser("app_needs_macos");
@@ -153,21 +157,7 @@ export function chooseWindow({ want, platform, app, chromeExists, route, appBrok
   if (appBroken) return browser("app_failed_to_open");
   if (state === "missing" || state === "stale") return { ...browser(`app_${state}`), build: true };
   if (state !== "ready") return browser(`app_${state}`);
-  if (want === "app") return { mode: "app", build: false, needRoute: false, reason: "requested" };
-  if (!route) return { mode: "app", build: false, needRoute: true, reason: "auto" };
-  // WebKit's capture opens the system default input first; a Bluetooth
-  // headset there drops to its hands-free profile for the whole session
-  // (see app/Sources/AudioRoute.swift). The app's native mic avoids that on
-  // headphones: it captures another input (the built-in mic) without voice
-  // processing (app/Sources/NativeMic.swift). Otherwise Chrome keeps the
-  // headset in high quality.
-  if (route.input?.bluetooth && chromeExists) {
-    if (route.native_mic === true && route.output?.headphones === true && route.builtin_input === true) {
-      return { mode: "app", build: false, needRoute: false, reason: "native_mic" };
-    }
-    return browser("bluetooth_input");
-  }
-  return { mode: "app", build: false, needRoute: false, reason: "auto" };
+  return { mode: "app", build: false, reason: want === "app" ? "requested" : "auto" };
 }
 
 /**
@@ -230,6 +220,8 @@ export function shouldWaitForInstall({ want, platform, appBroken, installing, wa
  * createWindow({dataDir, port, pluginRoot, env, platform, spawn, execFile, fsImpl, exists, kill, log,
  *               launchCode, clock, chrome, getPreference, pageConnected, wantsWindow})
  * → {open(): {mode}, kill(): Promise<number>, notify(text)}, the same surface as createChrome().
+ * `pageConnected()` is true once a page is on SSE or the native app has said
+ * hello on /api/native (index.js wires both, docs/NATIVE.md §4.6).
  */
 export function createWindow({
   dataDir, port, pluginRoot, env = process.env, platform = process.platform, spawn = spawnCb, execFile = execFileCb,
@@ -240,11 +232,9 @@ export function createWindow({
   const p = appPaths(dataDir, pluginRoot);
   const browser = chrome || createChrome({ dataDir, port, env, spawn, execFile, exists, kill, log, launchCode });
   const timers = clock || { setTimeout: (fn, ms) => { const h = setTimeout(fn, ms); h.unref?.(); return h; }, clearTimeout, now: () => Date.now() };
-  let route = null; // {at, value}
   let appBroken = false; // the app failed to open or never connected: Chrome for the rest of this daemon
   let appLaunched = false;
   let watchdog = null;
-  let routePending = false;
   let install = null; // {pid, at}: the installer this daemon spawned, while it runs
   let installError = null; // {reason, message, at}: the last install that ended without an app
   let pending = null; // {want, deadline, poll}: open() waiting for that install
@@ -450,9 +440,9 @@ export function createWindow({
     // -g: do not bring the app forward; its panel floats without taking
     // focus from the terminal. -a <bundle path>: this exact build, whatever
     // else LaunchServices knows under the sotto:// scheme.
-    // Test hook (test/app/live.test.mjs): run the app in its test mode
-    // (mock mic, hidden panel), since LaunchServices passes no arguments.
-    // The native-mic test settings (fixture, mode, echo simulation) ride along.
+    // Test hook (test/app/*.test.mjs): run the app in its test mode (fake
+    // audio, hidden panel), since LaunchServices passes no arguments. The
+    // fake-audio settings (fixture, output WAV, echo simulation) ride along.
     const testEnv = env.SOTTO_APP_TEST === "1"
       ? ["--env", "SOTTO_APP_TEST=1", ...APP_TEST_ENV.filter((k) => env[k]).flatMap((k) => ["--env", `${k}=${env[k]}`])]
       : [];
@@ -468,22 +458,12 @@ export function createWindow({
     }, APP_PAGE_TIMEOUT_MS);
   }
 
-  function measureRoute(done) {
-    execFile(p.exe, ["--audio-route"], { timeout: 4000, maxBuffer: 64 * 1024 }, (err, stdout) => {
-      let value = null;
-      if (!err) { try { value = JSON.parse(String(stdout)); } catch { /* bad output */ } }
-      if (value) route = { at: timers.now ? timers.now() : Date.now(), value };
-      else log?.warn("app.route_failed", { message: err ? String(err.message || err) : "bad output" });
-      done(value);
-    });
-  }
-
-  function openNow({ noWait = false, wantOverride, force = false } = {}) {
+  function openNow({ noWait = false, wantOverride } = {}) {
     const want = wantOverride || resolveWant({ env, preference: getPreference() });
     const appWanted = want === "app" || want === "auto";
     const app = appWanted && platform === "darwin" ? buildState() : null;
     const chromeExists = exists(CHROME_APP);
-    const c = chooseWindow({ want, platform, app, chromeExists, route: freshRoute(), appBroken });
+    const c = chooseWindow({ want, platform, app, chromeExists, appBroken });
     log?.info("window.choose", { want, mode: c.mode, reason: c.reason, app: app?.state ?? null });
     if (c.build) startInstall({ hash: app.hash });
     else if (app?.state === "failed") startInstall({ allowBuild: false, hash: app.hash });
@@ -497,21 +477,9 @@ export function createWindow({
       const failed = app ? api.appStatus() : null;
       return failed?.state === "failed" ? { ...r, installError: { reason: failed.reason, message: failed.message } } : r;
     }
-    if (!c.needRoute) { launchApp(); return { mode: "app" }; }
-    if (routePending) return { mode: "app" };
-    routePending = true;
-    measureRoute((value) => {
-      routePending = false;
-      if (!force && !wantsWindow()) return;
-      const again = chooseWindow({ want, platform, app, chromeExists, route: value || { input: { bluetooth: false } }, appBroken });
-      log?.info("window.choose", { want, mode: again.mode, reason: again.reason, route: value ? { input_bt: !!value.input?.bluetooth, output_bt: !!value.output?.bluetooth, headphones: !!value.output?.headphones, native_mic: !!value.native_mic } : null });
-      if (again.mode === "app") launchApp();
-      else browser.open(again.mode);
-    });
+    launchApp();
     return { mode: "app" };
   }
-
-  const freshRoute = () => (route && (timers.now ? timers.now() : Date.now()) - route.at < ROUTE_TTL_MS ? route.value : undefined);
 
   const api = {
     get url() { return browser.url; },
@@ -522,7 +490,7 @@ export function createWindow({
      * one), plus {pending: true} while it waits for an app install, and
      * {installError} when the app could not be installed.
      */
-    open({ force = false } = {}) { return openNow({ force }); },
+    open(opts = {}) { return openNow(opts.want ? { wantOverride: opts.want } : {}); },
 
     /** Start installing the app if it is missing (daemon start, every /talk); see ensure(). */
     ensureInstalled(opts = {}) {
@@ -616,6 +584,17 @@ export function createWindow({
       quitting = run.catch(() => {}).finally(() => { quitting = null; });
       await quitting;
       return pids.length;
+    },
+
+    /**
+     * Show the native app's panel (docs/NATIVE.md §5.1 `sotto://show`): the app
+     * is already connected to this daemon, so no launch code or new link is needed.
+     */
+    showApp() {
+      if (platform !== "darwin" || !exists(p.exe)) return false;
+      detached("open", ["-g", "-a", p.bundle, "sotto://show"]);
+      log?.info("app.show", {});
+      return true;
     },
 
     /** Self-update (§6.17): the successor learns that the app hosts the page, so kill() still closes it. */

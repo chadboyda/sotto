@@ -177,7 +177,11 @@ export class Sideband extends EventEmitter {
       if (evt.type === "session.output_audio.delta") this.lastOutputAudioAt = this.clock.now();
       return;
     }
+    this.handleEvent(evt);
+  }
 
+  /** One parsed non-audio server event (shared with the primary WebSocket, live-ws.js). */
+  handleEvent(evt) {
     this.logServerEvent(evt);
     const t = evt.type;
     if (t === "session.started") {

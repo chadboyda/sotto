@@ -1,0 +1,7 @@
+{"type":"status","status":{"state":"live","owner":{"project":"sotto","cwd":"/tmp/sotto"},"voice":"marin","speaking_policy":"milestones","idle_minutes":5,"idle_seconds":300,"echo_guard":"auto","echo_heard_ms_ago":1200,"wake":{"enabled":true,"sensitivity":"medium","boost_db":0,"not_before":0},"live":{"session_id":"sess_test_1","expires_at":1790000000,"usage_seconds":3.5,"muted":false},"today":{"seconds":12.5,"cap_minutes":60},"claude":{"busy":true},"last_error":null,"key":{"present":true,"source":"keychain","file":null,"hint":"ab12","label":"macOS Keychain","can_change":true,"can_remove":true,"keychain":true,"setup":false},"audio_client":"app"}}
+{"type":"settings","voices":{"voices":["alloy","marin","cedar"],"current":"cedar","live":true,"live_voice":"marin"},"window":"app","policies":["quiet","milestones","walkthrough"],"wake_sensitivities":["off","low","medium","high"],"data_dir":"/tmp/sotto-data","version":"0.3.0"}
+{"type":"wake_heard","text":"hey are you there"}
+{"type":"command","command":"play_echo_sample","reason":"echo_test"}
+{"type":"live","event":{"type":"error","error":{"code":"rate_limited","message":"Slow down"}}}
+{"type":"notice","level":"info","code":"app_took_over","text":"Voice is in the Sotto app"}
+{"type":"future_thing","x":1}
