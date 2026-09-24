@@ -309,7 +309,6 @@ SPEC §4.1, §5.8, §6.9, §6.10, §8.1 and §8.2 were updated in place and §6.
 7. **No idle nag after a mirror turn.** A `mirror_result` counts as spoken for the idle period, so Claude's `idle_prompt` after a "Noted." turn is not announced.
 8. **Status and counters.** `/status` `config.mirror`; counters `mirror_sent`, `mirror_failed`; logs `mirror.send`, `claude.awaiting`; `inbox.send` logs its priority.
 
-
 ## Round 2 fixes (fix/round2, 2026-09-24)
 
 SPEC §3, §6.4, §6.10.2, §6.14, §6.14.1 (new) and §8.2 were updated in place. Changes against the earlier behavior and why:
@@ -424,7 +423,6 @@ Found in use: after the plugin updated to 0.2.1, the desktop app's microphone de
 2. **Appearance.** Settings > Appearance is a System / Light / Dark segmented control (System by default). The choice is kept in the page's storage (`clv.theme`) and applied as `<html data-theme>` by an inline script in `<head>`, before the stylesheet, so a window never paints the other theme first; `styles.css` honours `data-theme` over `prefers-color-scheme` (the dark tokens appear twice, under `:root:not([data-theme="light"])` in the media query and under `:root[data-theme="dark"]`; `test/web/theme.test.js` keeps them identical). System leaves the attribute off, so the OS decides, live. The dial re-reads its colours when `data-theme` changes. Not yet in `prefs.json`: the daemon does not store or report the choice, so it is per window origin (the app and Chrome keep their own).
 3. **Can't hear you, only before the first words.** A user who went quiet mid-conversation was told "I can't hear you" (spoken and as a banner): `no_transcript` counted room noise since the last transcript, and every new Live session (a transparent reconnect, a wake) re-armed the silent check. The hearing monitor now warns only while the user has not been heard on the current mic since the last connect (start, resume) or mic change (chosen, followed, or replacing a lost device); a transparent reconnect and a wake onto the same device keep "heard", a wake onto a different device clears it. Digital silence (exact zeros, `mic_silent`) and a lost device are unchanged and work at any time, banner only; the spoken line comes only from `cant_hear`, which now means "not heard yet".
 
-
 ## Personas (feat/personas, 2026-09-24)
 
 New: SPEC §4.6, with §5.7, §5.9, §6.4, §6.14, §8.1, §8.3, §9.2 (status line) and §11 updated in place.
@@ -450,7 +448,6 @@ docs/NATIVE.md is the contract; these are the daemon-side choices it left open o
 8. **Mac sleep** (`system sleep`) closes a live session into `sleeping` (wake on) or `paused`, with pause reason `mac_sleep`.
 9. **Bun keeps the Chrome window.** Under Bun 1.3 (the fallback runtime) a `node:http` `upgrade` socket accepts writes that never reach the client, so `/api/native` cannot complete its handshake. A daemon running on Bun maps the window preference `auto`/`app` to `chrome` (`SOTTO_NATIVE_BUN=1` re-enables the app for probing).
 
-
 ## Native app shell and packaging (native/swift-app, B6, v0.3.0)
 
 1. **The desktop app is native.** `app/` (AppKit + WKWebView hosting the voice page) is deleted; `app-native/` (SwiftPM: SottoAudio, SottoClient, SottoUI, SottoApp) replaces it under the same bundle id, name, executable and URL scheme, so an installed Sotto.app is simply replaced (docs/NATIVE.md §5). The panel hosts SwiftUI, not the page; the audio is the app's own and the daemon owns the Live session.
@@ -472,3 +469,7 @@ The native app was built from the page as of #4, so #5 and #7 reached only the p
 3. **The Claude card is bounded in the app.** A 0.3.1 user saw the card grow with long output and a scroll bar over the text. The card now sits under the status word with room reserved for its tallest collapsed form; the summary is three lines with More, and the expanded summary scrolls in a box capped at 220 pt (less in a short panel), with the scroller in the card's padding. The dial takes what is left (120 to 264 pt), so the captions and footer never move.
 4. **The status word** stays "Hearing you" (the page's word), not "You".
 
+## Native input pacer: no late-frame debt (fix/pacer-late-lock, 2026-09-24)
+
+1. **The pacer no longer drops one app frame per filled silence frame.** After any gap whose audio never arrives (capture rebuild on a route change, sleep/wake, a stall), that debt never cleared: every later mic frame was dropped and silence sent instead, so the model heard nothing (live log: +1499 `fill_frames`, +1500 `dropped_late` per 30 s; 12,111 of 42,747 frames in one session). Latency is now bounded by trimming a queue that stays above 60 ms for 500 ms, and on a `route` message (NATIVE.md §2.3).
+2. **`pacer.drop_rate`** (warn) when over 5 % of frames are dropped or replaced by silence in 5 s.

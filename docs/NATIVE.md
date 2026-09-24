@@ -80,8 +80,9 @@ Little-endian, 16-byte header, then PCM:
 
 ### 2.3 Daemon input pacer (`daemon/pacer.js`)
 - It ticks every 20 ms while a PrimarySession is ready and forwards queued app frames as `session.input_audio.append`.
-- When the app falls more than 60 ms behind the wall clock, it sends silence to fill the gap (counter `pacer_fill_frames`). Late frames are then dropped up to the amount filled, so no time is double-counted.
+- When the app falls more than 60 ms behind the wall clock, it sends silence to fill the gap (counter `pacer_fill_frames`). Frames that arrive later are **not** charged against the filled gap (v0.3.1 did that, and after a capture rebuild, route change or sleep/wake, whose missing audio never arrives, it dropped every later frame and sent only silence). Instead the latency is bounded: a queue above 3 frames (60 ms) for 500 ms is trimmed back to 3 (counter `dropped_late`), and a `route` message trims it at once (`resync`). The timeline never counts time twice because frames only leave at wall-clock rate.
 - Queue cap: 10 frames (200 ms). Past that, drop the oldest (counter `pacer_dropped`).
+- Over each 5 s window, more than 5 % of the app's frames dropped, or silence sent for more than 5 % of the slots while the app was sending, logs `pacer.drop_rate` (warn) with the counts; `drop_warnings` counts them in `native.audio`.
 - If the app disconnects while live, the pacer keeps filling silence for up to 10 s (`APP_GRACE_MS`) and then calls `voice.pause("app_gone")`.
 - It exposes the session timeline `inputMs = framesSent × 20`.
 
