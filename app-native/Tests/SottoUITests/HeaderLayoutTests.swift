@@ -76,7 +76,7 @@ final class HeaderLayoutTests: XCTestCase {
         for s in Self.ticks + [35_999] {
             let p = ViewText.usagePills(sessionSeconds: s, todaySeconds: s, costSeconds: 0)
             let sz = size("Session", p.session!, .clock)
-            XCTAssertEqual(sz.height, 36, "36 pt tall")
+            XCTAssertEqual(sz.height, 16, "16 pt tall: a slot in the 24 pt capsule")
             widths[p.session!.wide, default: []].insert(sz.width)
         }
         XCTAssertEqual(widths[false]?.count, 1, "m:ss and mm:ss share one width: \(widths)")
@@ -93,7 +93,7 @@ final class HeaderLayoutTests: XCTestCase {
     }
 
     func testFiguresFitTheirBoxes() {
-        let font = NSFont.monospacedDigitSystemFont(ofSize: 13, weight: .semibold)
+        let font = NSFont.monospacedDigitSystemFont(ofSize: UsagePill.figureSize, weight: .medium)
         func w(_ s: String) -> CGFloat { (s as NSString).size(withAttributes: [.font: font]).width }
         for t in ["0:09", "9:59", "59:59", "00:00"] { XCTAssertLessThanOrEqual(w(t), UsagePill.figureWidth(.clock, wide: false)) }
         for t in ["1:00:00", "23:59:59"] { XCTAssertLessThanOrEqual(w(t), UsagePill.figureWidth(.clock, wide: true)) }

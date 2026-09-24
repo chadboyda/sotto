@@ -1064,8 +1064,8 @@
   "out": {
    "kind": "working",
    "title": "Claude is working",
-   "step": "Running npm test",
-   "secondary": true,
+   "step": "Old words",
+   "secondary": false,
    "request": null,
    "agents": null
   }
@@ -1085,6 +1085,25 @@
    "kind": "working",
    "title": "Claude is working",
    "step": "Fresh words",
+   "secondary": false,
+   "request": null,
+   "agents": null
+  }
+ },
+ {
+  "fn": "claudeView",
+  "args": [
+   {
+    "busy": true,
+    "kind": "tool",
+    "tool": "Screenshot only the Sotto app window",
+    "now": 25000
+   }
+  ],
+  "out": {
+   "kind": "working",
+   "title": "Claude is working",
+   "step": "Thinking",
    "secondary": false,
    "request": null,
    "agents": null

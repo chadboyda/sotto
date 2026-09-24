@@ -163,7 +163,7 @@ struct DialContainer: View {
 
 /// The header (web/index.html `.top`, SPEC-DEVIATIONS "header pills"): the status
 /// glyph and word with the detail and project under it on the left; on the right the
-/// usage pills (Session while live, Today, Cost) and the gear. Ticks once a second.
+/// usage readout (Session while live, Today, Cost; one quiet capsule) and the gear. Ticks once a second.
 struct HeaderView: View {
     let model: StateModel
     let view: ViewText.PageView
@@ -214,14 +214,7 @@ struct HeaderContent: View {
         HStack(alignment: .center, spacing: 0) {
             status(t, c).layoutPriority(1)
             Spacer(minLength: 12)
-            if let p = pills {
-                HStack(spacing: 4) {
-                    if c.session, let s = p.session { UsagePill(name: "Session", pill: s, kind: .clock, help: "This voice session") }
-                    if c.today { UsagePill(name: "Today", pill: p.today, kind: .clock, help: "Voice time billed today") }
-                    UsagePill(name: "Cost", pill: p.cost, kind: .cost, help: "Today's cost at $0.05 per minute")
-                }
-                .accessibilityElement(children: .combine)
-            }
+            if let p = pills { usage(t, p, c) }
             Button { openSettings?() } label: {
                 Image(systemName: "gearshape").font(.system(size: 16)).foregroundStyle(t.fg2)
                     .frame(width: 36, height: 36).contentShape(Rectangle())
@@ -233,6 +226,27 @@ struct HeaderContent: View {
             .disabled(openSettings == nil)
         }
         .frame(minHeight: 36)
+    }
+
+    /// The usage readout (design/pills-v2, variant D; web/styles.css `.usage`): one flat
+    /// capsule, the shown slots split by hairlines. Ambient metadata under the status:
+    /// no ring, no lift, nothing that reads as a button.
+    private func usage(_ t: Theme, _ p: ViewText.UsagePills, _ c: Shown) -> some View {
+        var slots: [UsagePill] = []
+        if c.session, let s = p.session { slots.append(UsagePill(name: "Session", pill: s, kind: .clock, help: "This voice session")) }
+        if c.today { slots.append(UsagePill(name: "Today", pill: p.today, kind: .clock, help: "Voice time billed today")) }
+        slots.append(UsagePill(name: "Cost", pill: p.cost, kind: .cost, help: "Today's cost at $0.05 per minute"))
+        return HStack(spacing: 0) {
+            ForEach(Array(slots.enumerated()), id: \.element.name) { i, slot in
+                if i > 0 { Rectangle().fill(t.hairline).frame(width: 1, height: 12).padding(.horizontal, 8).accessibilityHidden(true) }
+                slot
+            }
+        }
+        .padding(.horizontal, 10)
+        .frame(height: 24)
+        .background(Capsule(style: .continuous).fill(t.fill))
+        .fixedSize()
+        .accessibilityElement(children: .combine)
     }
 
     private func status(_ t: Theme, _ c: Shown) -> some View {
@@ -262,9 +276,10 @@ struct HeaderContent: View {
     }
 }
 
-/// One usage pill: an 11 pt label over a 13 pt semibold tabular figure in a box of fixed
-/// width, so a ticking figure never moves anything. The box widens once: a clock at the
-/// hour, the cost at $100 (lib.usagePills `wide`).
+/// One usage slot: an 11 pt SF Symbol in fg3 (timer, calendar; the cost's "$" is its
+/// own), then a 12 pt medium tabular figure in a box of fixed width, so a ticking figure
+/// never moves anything. The box widens once: a clock at the hour, the cost at $100
+/// (lib.usagePills `wide`). The name is spoken (accessibility label and tooltip), not shown.
 struct UsagePill: View {
     enum Kind { case clock, cost }
     let name: String
@@ -273,9 +288,15 @@ struct UsagePill: View {
     var help: String = ""
     @Environment(\.colorScheme) private var scheme
 
-    static let figureFont = Font.system(size: 13, weight: .semibold).monospacedDigit()
+    /// Session: timer; Today: calendar; Cost: none ("$" names it).
+    var symbol: String? {
+        switch name { case "Session": return "timer"; case "Today": return "calendar"; default: return nil }
+    }
 
-    /// The widest text each box must hold, measured once in the figure's font.
+    static let figureSize: CGFloat = 12
+    static let figureFont = Font.system(size: figureSize, weight: .medium).monospacedDigit()
+
+    /// The widest text each slot must hold, measured once in the figure's font.
     static func figureWidth(_ kind: Kind, wide: Bool) -> CGFloat {
         switch (kind, wide) {
         case (.clock, false): return clockNarrow
@@ -290,22 +311,22 @@ struct UsagePill: View {
     static let costWide = measure(["$000.00", "$0000.00"])
 
     static func measure(_ samples: [String]) -> CGFloat {
-        let font = NSFont.monospacedDigitSystemFont(ofSize: 13, weight: .semibold)
+        let font = NSFont.monospacedDigitSystemFont(ofSize: figureSize, weight: .medium)
         let w = samples.map { ($0 as NSString).size(withAttributes: [.font: font]).width }.max() ?? 0
         return (w + 1).rounded(.up)
     }
 
     var body: some View {
         let t = Theme.of(scheme)
-        VStack(alignment: .trailing, spacing: 0) {
-            Text(name).font(.system(size: 11)).tracking(0.1).foregroundStyle(t.fg2).lineLimit(1).fixedSize()
-                .frame(height: 13)
-            Text(pill.text).font(Self.figureFont).foregroundStyle(t.fg).lineLimit(1)
-                .frame(width: Self.figureWidth(kind, wide: pill.wide), height: 16, alignment: .trailing)
+        HStack(alignment: .center, spacing: 4) {
+            if let symbol {
+                Image(systemName: symbol).font(.system(size: 10, weight: .medium)).foregroundStyle(t.fg3)
+                    .frame(width: 11, height: 11).accessibilityHidden(true)
+            }
+            Text(pill.text).font(Self.figureFont).foregroundStyle(t.fg2).lineLimit(1)
+                .frame(width: Self.figureWidth(kind, wide: pill.wide), alignment: .trailing)
         }
-        .padding(.horizontal, 8)
-        .frame(height: 36)
-        .raised(t, radius: 8)
+        .frame(height: 16)
         .fixedSize()
         .background(GeometryReader { g in
             Color.clear.preference(key: PillFrames.self, value: [name: g.frame(in: .named(PillFrames.space))])

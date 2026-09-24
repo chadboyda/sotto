@@ -111,7 +111,7 @@ export function formatClock(seconds) {
  * The header's usage pills (SPEC-DEVIATIONS "header pills"): Session (only while
  * live), Today and Cost, each a label over a figure in a fixed-width box. `wide`
  * says when the box needs its one wider size: a clock from the first hour on
- * (h:mm:ss; styles.css reserves 5ch for m:ss/mm:ss and 7ch for h:mm:ss/hh:mm:ss),
+ * (h:mm:ss; styles.css reserves 4.6ch for m:ss/mm:ss and 7ch for h:mm:ss/hh:mm:ss),
  * the cost from $100 (6ch holds "$00.00" and "<$0.01"). Ticking within a magnitude
  * never changes a pill's width, so nothing in the header moves.
  */
@@ -1049,24 +1049,17 @@ export function claudeView(s) {
     };
   }
   if (s?.busy) {
-    // What Claude says comes first (SPEC-DEVIATIONS "Claude card"); the plain-words
-    // tool line only fills in when Claude has said nothing for a while.
+    // Claude's own latest words, however old (SPEC-DEVIATIONS "Claude card, words
+    // only"): a tool label ("Running a command", a Bash description) is never the
+    // card's line. Before Claude has said anything this turn the line is "Thinking".
     const says = stripMarkdown(s.says || "");
-    const fresh = says && (s.now == null || s.saysAt == null || s.now - s.saysAt < CLAUDE_SAYS_FRESH_MS);
-    const tool = stripMarkdown(s.tool || "");
-    let step = "Thinking";
-    let secondary = false;
-    if (fresh) step = says;
-    else if (tool) { step = tool; secondary = true; }
-    else if (says) step = says;
+    const step = says || "Thinking";
+    const secondary = false;
     return { kind: "working", title: "Claude is working", step: truncate(step, 180), secondary, request, agents };
   }
   if (s?.summary) return { kind: "finished", title: "Claude finished", summary: String(s.summary), request, agents };
   return { kind: "idle", title: "Claude is idle", request, agents };
 }
-
-/** Claude's words stay the card's line this long before a tool line may replace them. */
-export const CLAUDE_SAYS_FRESH_MS = 20_000;
 
 // ---- Claude's markdown, rendered safely (SPEC-DEVIATIONS "Claude card") -------------
 const ESC = { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" };

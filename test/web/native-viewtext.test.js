@@ -110,6 +110,7 @@ function cases() {
     { busy: true, says: "I'll check the **auth** spec first.", tool: "Bash: npm test", request: req, agents: 2 },
     { busy: true, says: "Old words", saysAt: 0, now: 25_000, tool: "Running `npm test`" },
     { busy: true, says: "Fresh words", saysAt: 10_000, now: 25_000, tool: "Bash: ls" },
+    { busy: true, kind: "tool", tool: "Screenshot only the Sotto app window", now: 25_000 },
     { busy: true, kind: "permission", text: "rm -rf build", request: req, agents: 1 },
     { busy: false, kind: "permission", text: "rm -rf build" },
     { busy: false, summary: "Fixed the flaky test.", request: { text: "Fix it", status: "answered" } },
