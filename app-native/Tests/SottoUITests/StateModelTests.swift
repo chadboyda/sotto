@@ -311,4 +311,16 @@ final class SnapshotTests: XCTestCase {
         }
         if env == nil { try? FileManager.default.removeItem(at: dir) }
     }
+
+    /// The parity set (docs/NATIVE.md "Parity with the page"): writes design/native/parity/
+    /// when SOTTO_UI_PARITY_DIR is set, else a temp dir. Includes very long Claude output,
+    /// collapsed and expanded, in light and dark.
+    func testRenderParityStates() throws {
+        let env = ProcessInfo.processInfo.environment["SOTTO_UI_PARITY_DIR"]
+        let dir = env.map { URL(fileURLWithPath: $0) } ?? FileManager.default.temporaryDirectory.appendingPathComponent("sotto-ui-parity-\(UUID().uuidString)")
+        let files = try UISnapshot.renderParity(to: dir)
+        XCTAssertEqual(files.count, (UISnapshot.parityNames.count + 3) * 2)
+        XCTAssertTrue(files.contains { $0.lastPathComponent == "26-claude-finished-long-expanded--420--dark.png" })
+        if env == nil { try? FileManager.default.removeItem(at: dir) }
+    }
 }

@@ -65,6 +65,21 @@ function cases() {
     add("formatDuration", [s, true], lib.formatDuration(s, { long: true }));
   }
   for (const s of [0, 5, 852, 3909]) add("formatClock", [s], lib.formatClock(s));
+  // The header pills (SPEC-DEVIATIONS "header pills"): the text and the one widening.
+  for (const p of [
+    { sessionSeconds: null, todaySeconds: 0, costSeconds: 0 },
+    { sessionSeconds: 9, todaySeconds: 600, costSeconds: 1 },
+    { sessionSeconds: 599, todaySeconds: 3599, costSeconds: 852 },
+    { sessionSeconds: 3600, todaySeconds: 36_000, costSeconds: 119_999 },
+    { sessionSeconds: 59.999, todaySeconds: 3600.4, costSeconds: 120_000 },
+  ]) add("usagePills", [p], lib.usagePills(p));
+  for (const [prev, s, now] of [[null, 30, 1000], [{ seconds: 30, at: 1000 }, 30, 5000], [{ seconds: 30, at: 1000 }, 45, 5000], [{ seconds: 30, at: 1000 }, 45, 11_000], [{ seconds: 30, at: 1000 }, 61, 2000], [{ seconds: 300, at: 1000 }, 12, 2000]]) {
+    add("stableUsage", [prev, s, now], lib.stableUsage(prev, s, now));
+  }
+  for (const [r, now, o] of [[null, 0, {}], [{ seconds: 100, at: 0 }, 4000, { live: true }], [{ seconds: 100, at: 0 }, 60_000, { live: true }], [{ seconds: 100, at: 0 }, 4000, { live: false }], [{ seconds: 100, at: 0 }, 0, { live: true, shown: 110 }], [{ seconds: 10, at: 0 }, 0, { live: true, shown: 900 }]]) {
+    add("tickingToday", [r, now, o], lib.tickingToday(r, now, o));
+  }
+  for (const t of ["system", "Light", " dark ", "sepia", null]) add("normalizeTheme", [t], lib.normalizeTheme(t));
   for (const s of [0, 1, 852, 90]) add("formatUsage", [s], lib.formatUsage(s));
   for (const d of [0, 0.004, 0.075, 0.71, 12.345]) add("formatMoney", [d], lib.formatMoney(d));
   for (const ms of [0, 42_000, 192_000, 3_720_000]) add("formatElapsed", [ms], lib.formatElapsed(ms));

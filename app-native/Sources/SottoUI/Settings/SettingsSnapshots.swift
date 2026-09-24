@@ -46,6 +46,7 @@ public enum SettingsSnapshots {
         m.hooks.openLogs = {}
         m.hooks.requestMicAccess = { .granted }
         m.hooks.openMicPrivacySettings = {}
+        m.hooks.setAppearance = { _ in }
         return m
     }
 
@@ -82,7 +83,7 @@ public enum SettingsSnapshots {
         let keyRejected = fixtureModel(status: fixtureStatus(state: "paused", key: badKey, lastError: "openai_auth"))
 
         return [
-            Shot(name: "settings", size: CGSize(width: 480, height: 1180), view: AnyView(SettingsView(model: settings))),
+            Shot(name: "settings", size: CGSize(width: 480, height: 1260), view: AnyView(SettingsView(model: settings))),
             Shot(name: "onboarding-mic", size: CGSize(width: 420, height: 320), view: AnyView(OnboardingView(model: micAsk))),
             Shot(name: "onboarding-mic-denied", size: CGSize(width: 420, height: 380), view: AnyView(OnboardingView(model: micDenied))),
             Shot(name: "onboarding-key", size: CGSize(width: 420, height: 360), view: AnyView(OnboardingView(model: keyFirst))),

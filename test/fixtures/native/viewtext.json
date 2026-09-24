@@ -182,6 +182,326 @@
   "out": "1:05:09"
  },
  {
+  "fn": "usagePills",
+  "args": [
+   {
+    "sessionSeconds": null,
+    "todaySeconds": 0,
+    "costSeconds": 0
+   }
+  ],
+  "out": {
+   "session": null,
+   "today": {
+    "text": "0:00",
+    "wide": false
+   },
+   "cost": {
+    "text": "$0.00",
+    "wide": false
+   }
+  }
+ },
+ {
+  "fn": "usagePills",
+  "args": [
+   {
+    "sessionSeconds": 9,
+    "todaySeconds": 600,
+    "costSeconds": 1
+   }
+  ],
+  "out": {
+   "session": {
+    "text": "0:09",
+    "wide": false
+   },
+   "today": {
+    "text": "10:00",
+    "wide": false
+   },
+   "cost": {
+    "text": "<$0.01",
+    "wide": false
+   }
+  }
+ },
+ {
+  "fn": "usagePills",
+  "args": [
+   {
+    "sessionSeconds": 599,
+    "todaySeconds": 3599,
+    "costSeconds": 852
+   }
+  ],
+  "out": {
+   "session": {
+    "text": "9:59",
+    "wide": false
+   },
+   "today": {
+    "text": "59:59",
+    "wide": false
+   },
+   "cost": {
+    "text": "$0.71",
+    "wide": false
+   }
+  }
+ },
+ {
+  "fn": "usagePills",
+  "args": [
+   {
+    "sessionSeconds": 3600,
+    "todaySeconds": 36000,
+    "costSeconds": 119999
+   }
+  ],
+  "out": {
+   "session": {
+    "text": "1:00:00",
+    "wide": true
+   },
+   "today": {
+    "text": "10:00:00",
+    "wide": true
+   },
+   "cost": {
+    "text": "$100.00",
+    "wide": true
+   }
+  }
+ },
+ {
+  "fn": "usagePills",
+  "args": [
+   {
+    "sessionSeconds": 59.999,
+    "todaySeconds": 3600.4,
+    "costSeconds": 120000
+   }
+  ],
+  "out": {
+   "session": {
+    "text": "0:59",
+    "wide": false
+   },
+   "today": {
+    "text": "1:00:00",
+    "wide": true
+   },
+   "cost": {
+    "text": "$100.00",
+    "wide": true
+   }
+  }
+ },
+ {
+  "fn": "stableUsage",
+  "args": [
+   null,
+   30,
+   1000
+  ],
+  "out": {
+   "seconds": 30,
+   "at": 1000
+  }
+ },
+ {
+  "fn": "stableUsage",
+  "args": [
+   {
+    "seconds": 30,
+    "at": 1000
+   },
+   30,
+   5000
+  ],
+  "out": {
+   "seconds": 30,
+   "at": 1000
+  }
+ },
+ {
+  "fn": "stableUsage",
+  "args": [
+   {
+    "seconds": 30,
+    "at": 1000
+   },
+   45,
+   5000
+  ],
+  "out": {
+   "seconds": 30,
+   "at": 1000
+  }
+ },
+ {
+  "fn": "stableUsage",
+  "args": [
+   {
+    "seconds": 30,
+    "at": 1000
+   },
+   45,
+   11000
+  ],
+  "out": {
+   "seconds": 45,
+   "at": 11000
+  }
+ },
+ {
+  "fn": "stableUsage",
+  "args": [
+   {
+    "seconds": 30,
+    "at": 1000
+   },
+   61,
+   2000
+  ],
+  "out": {
+   "seconds": 61,
+   "at": 2000
+  }
+ },
+ {
+  "fn": "stableUsage",
+  "args": [
+   {
+    "seconds": 300,
+    "at": 1000
+   },
+   12,
+   2000
+  ],
+  "out": {
+   "seconds": 12,
+   "at": 2000
+  }
+ },
+ {
+  "fn": "tickingToday",
+  "args": [
+   null,
+   0,
+   {}
+  ],
+  "out": 0
+ },
+ {
+  "fn": "tickingToday",
+  "args": [
+   {
+    "seconds": 100,
+    "at": 0
+   },
+   4000,
+   {
+    "live": true
+   }
+  ],
+  "out": 104
+ },
+ {
+  "fn": "tickingToday",
+  "args": [
+   {
+    "seconds": 100,
+    "at": 0
+   },
+   60000,
+   {
+    "live": true
+   }
+  ],
+  "out": 115
+ },
+ {
+  "fn": "tickingToday",
+  "args": [
+   {
+    "seconds": 100,
+    "at": 0
+   },
+   4000,
+   {
+    "live": false
+   }
+  ],
+  "out": 100
+ },
+ {
+  "fn": "tickingToday",
+  "args": [
+   {
+    "seconds": 100,
+    "at": 0
+   },
+   0,
+   {
+    "live": true,
+    "shown": 110
+   }
+  ],
+  "out": 110
+ },
+ {
+  "fn": "tickingToday",
+  "args": [
+   {
+    "seconds": 10,
+    "at": 0
+   },
+   0,
+   {
+    "live": true,
+    "shown": 900
+   }
+  ],
+  "out": 10
+ },
+ {
+  "fn": "normalizeTheme",
+  "args": [
+   "system"
+  ],
+  "out": "system"
+ },
+ {
+  "fn": "normalizeTheme",
+  "args": [
+   "Light"
+  ],
+  "out": "light"
+ },
+ {
+  "fn": "normalizeTheme",
+  "args": [
+   " dark "
+  ],
+  "out": "dark"
+ },
+ {
+  "fn": "normalizeTheme",
+  "args": [
+   "sepia"
+  ],
+  "out": "system"
+ },
+ {
+  "fn": "normalizeTheme",
+  "args": [
+   null
+  ],
+  "out": "system"
+ },
+ {
   "fn": "formatUsage",
   "args": [
    0

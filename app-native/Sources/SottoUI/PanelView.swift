@@ -21,17 +21,29 @@ public struct PanelView: View {
         let v = model.pageView
         VStack(spacing: 0) {
             HeaderView(model: model, view: v, stillAt: stillAt)
-                .padding(.horizontal, 16).padding(.top, 12).padding(.bottom, 4)
+                .padding(.leading, 16).padding(.trailing, 8).padding(.top, 12).padding(.bottom, 8)
             if let b = model.topBanner {
                 BannerView(model: model, banner: b, more: max(0, model.banners.count - (model.banners.first?.key == b.key ? 1 : 0)))
                     .padding(.horizontal, 16).padding(.bottom, 6)
                     .transition(.move(edge: .top).combined(with: .opacity))
             }
-            // ImageRenderer draws no ScrollView content, so a still frame lays out flat.
-            if stillAt != nil { middle(v, t); Spacer(minLength: 0) } else {
-                ScrollView(.vertical) { middle(v, t) }.scrollIndicators(.never)
+            // The dial takes the room that is left (the page's --dial clamp), so the Claude
+            // card, the captions and the footer keep their places.
+            // The Claude card sits under the word and has room reserved for its tallest
+            // collapsed form, so it grows into that room and the captions stay put.
+            GeometryReader { geo in
+                let cap = Self.summaryCap(v, region: geo.size.height)
+                let d = Self.dialSize(v, available: geo.size.height - reserve(cap))
+                // ImageRenderer draws no ScrollView content, so a still frame lays out flat.
+                Group {
+                    if stillAt != nil { middle(v, t, dial: d).frame(width: geo.size.width, height: geo.size.height, alignment: .top).clipped() } else {
+                        ScrollView(.vertical) { middle(v, t, dial: d) }.scrollIndicators(.never)
+                    }
+                }
+                .environment(\.sottoSummaryCap, cap)
             }
             CaptionsView(captions: model.captions)
+                .background(PanelFrames.reader("captions"))
                 .padding(.horizontal, 16).padding(.bottom, 10)
             Divider().overlay(t.line)
             FooterView(model: model, view: v)
@@ -39,6 +51,7 @@ public struct PanelView: View {
         }
         .background(t.bg)
         .foregroundStyle(t.fg)
+        .coordinateSpace(name: PanelFrames.space)
         .animation(.easeOut(duration: 0.2), value: model.topBanner?.key)
         // The root is focusable only to receive M / Space, and hides its own ring.
         // focusEffectDisabled propagates through the environment, so re-enable it for
@@ -62,25 +75,47 @@ public struct PanelView: View {
         .environment(\.sottoStill, stillAt != nil)
     }
 
-    private func middle(_ v: ViewText.PageView, _ t: Theme) -> some View {
+    private func middle(_ v: ViewText.PageView, _ t: Theme, dial size: CGFloat) -> some View {
         VStack(spacing: 14) {
-            if v.dial != "hidden" { dial(v, t) }
+            if v.dial != "hidden" { dial(v, t, size: size) }
             StatusWordView(view: v, model: model)
             if let steps = v.steps { StepsView(steps: steps) }
             if v.view == "card", let card = v.card { StateCardView(model: model, card: card) }
-            ClaudeCardView(model: model, stillAt: stillAt)
+            ClaudeCardView(model: model, stillAt: stillAt, live: v.view == "live")
+                .background(PanelFrames.reader("claude"))
         }
         .padding(.horizontal, 16).padding(.bottom, 12)
         .frame(maxWidth: .infinity)
     }
 
-    private func dial(_ v: ViewText.PageView, _ t: Theme) -> some View {
+    /// Room kept under the word for the Claude card: its tallest collapsed form, or the
+    /// expanded summary's capped scroller while "More" is open.
+    private func reserve(_ cap: CGFloat) -> CGFloat {
+        model.summaryExpanded && model.claudeCard.kind == "finished" ? ClaudeCardView.collapsedHeight - ClaudeCardView.collapsedSummary + cap : ClaudeCardView.collapsedHeight
+    }
+
+    /// The expanded summary's scroller: up to 220 pt, less in a short panel, so the dial at
+    /// its smallest, the word and the whole card still fit above the captions.
+    static func summaryCap(_ v: ViewText.PageView, region h: CGFloat) -> CGFloat {
+        let above: CGFloat = (v.dial == "full" ? 120 + 4 : v.dial == "hidden" ? 0 : 150) + 14 + 62 + 12
+        let chrome = ClaudeCardView.collapsedHeight - ClaudeCardView.collapsedSummary
+        return min(ClaudeCardView.expandedCap, max(60, (h - above - chrome).rounded(.down)))
+    }
+
+    /// The full dial fills the height left over after the word and its hint (120...264 pt);
+    /// the small one stays 150 pt over a state card.
+    static func dialSize(_ v: ViewText.PageView, available h: CGFloat) -> CGFloat {
+        guard v.dial == "full" else { return 150 }
+        return min(264, max(120, (h - 96).rounded(.down)))
+    }
+
+    private func dial(_ v: ViewText.PageView, _ t: Theme, size: CGFloat) -> some View {
         let full = v.dial == "full"
         return DialContainer(model: model, floor: v.floor, attention: model.attention && v.view == "live", stillAt: stillAt)
-            .frame(width: full ? 264 : 150, height: full ? 264 : 150)
+            .frame(width: size, height: size)
             .frame(maxWidth: .infinity)
             .padding(.top, full ? 4 : 0)
-            .animation(.spring(duration: 0.35), value: full)
+            .animation(.spring(duration: 0.35), value: size)
     }
 
     /// VoiceOver announcement (the page's aria-live regions).
@@ -126,80 +161,179 @@ struct DialContainer: View {
 
 // MARK: - Header
 
+/// The header (web/index.html `.top`, SPEC-DEVIATIONS "header pills"): the status
+/// glyph and word with the detail and project under it on the left; on the right the
+/// usage pills (Session while live, Today, Cost) and the gear. Ticks once a second.
 struct HeaderView: View {
     let model: StateModel
     let view: ViewText.PageView
     var stillAt: Double?
+
+    var body: some View {
+        TimelineView(.periodic(from: .now, by: 1)) { ctx in
+            let now = stillAt.map { Date(timeIntervalSinceReferenceDate: $0) } ?? ctx.date
+            HeaderContent(key: view.header.key, label: view.header.label, detail: view.header.detail, project: model.project,
+                          pills: model.status == nil ? nil : model.usagePills(at: now), openSettings: model.openSettings)
+        }
+    }
+}
+
+/// The header's layout, separate from the model so tests can tick the pills through
+/// fixed values (HeaderLayoutTests). When the row is short of room, whole items hide in
+/// the page's order (web/header.js fitHeader): the project, the detail, Today, then
+/// Session. Cost always stays.
+struct HeaderContent: View {
+    let key: String
+    let label: String
+    let detail: String?
+    let project: String?
+    let pills: ViewText.UsagePills?
+    var openSettings: (() -> Void)?
     @Environment(\.colorScheme) private var scheme
+
+    /// What one candidate row shows.
+    struct Shown: Equatable { var project = true, detail = true, session = true, today = true }
+
+    static let candidates: [Shown] = [
+        Shown(),
+        Shown(project: false),
+        Shown(project: false, detail: false),
+        Shown(project: false, detail: false, today: false),
+        Shown(project: false, detail: false, session: false, today: false),
+    ]
 
     var body: some View {
         let t = Theme.of(scheme)
-        HStack(alignment: .top, spacing: 10) {
-            VStack(alignment: .leading, spacing: 1) {
-                HStack(spacing: 7) {
-                    Circle().fill(t.headerColor(view.header.key)).frame(width: 9, height: 9)
-                        .accessibilityHidden(true)
-                    Text(view.header.label).font(.system(size: 15, weight: .semibold))
-                        .foregroundStyle(t.headerColor(view.header.key))
-                    if let d = view.header.detail {
-                        Text("· \(d)").font(.system(size: 13)).foregroundStyle(t.fg3)
-                    }
+        ViewThatFits(in: .horizontal) {
+            ForEach(Array(Self.candidates.enumerated()), id: \.offset) { _, c in row(t, c) }
+        }
+        .coordinateSpace(name: PillFrames.space)
+    }
+
+    private func row(_ t: Theme, _ c: Shown) -> some View {
+        HStack(alignment: .center, spacing: 0) {
+            status(t, c).layoutPriority(1)
+            Spacer(minLength: 12)
+            if let p = pills {
+                HStack(spacing: 4) {
+                    if c.session, let s = p.session { UsagePill(name: "Session", pill: s, kind: .clock, help: "This voice session") }
+                    if c.today { UsagePill(name: "Today", pill: p.today, kind: .clock, help: "Voice time billed today") }
+                    UsagePill(name: "Cost", pill: p.cost, kind: .cost, help: "Today's cost at $0.05 per minute")
                 }
-                if let p = model.project {
-                    Text(p).font(.system(size: 12)).foregroundStyle(t.fg3).lineLimit(1).truncationMode(.middle)
-                        .padding(.leading, 16)
-                }
+                .accessibilityElement(children: .combine)
             }
-            .accessibilityElement(children: .combine)
-            .accessibilityLabel("Status: \(view.header.label)\(view.header.detail.map { ", \($0)" } ?? "")\(model.project.map { ", project \($0)" } ?? "")")
-            Spacer(minLength: 8)
-            usage(t)
-            Button { model.openSettings?() } label: {
-                Image(systemName: "gearshape").font(.system(size: 15)).foregroundStyle(t.fg2)
-                    .frame(width: 28, height: 28).contentShape(Rectangle())
+            Button { openSettings?() } label: {
+                Image(systemName: "gearshape").font(.system(size: 16)).foregroundStyle(t.fg2)
+                    .frame(width: 36, height: 36).contentShape(Rectangle())
             }
             .buttonStyle(.plain)
+            .padding(.leading, 8)
             .accessibilityLabel("Settings")
             .help("Settings")
-            .disabled(model.openSettings == nil)
+            .disabled(openSettings == nil)
         }
+        .frame(minHeight: 36)
     }
 
-    @ViewBuilder private func usage(_ t: Theme) -> some View {
-        if model.status != nil {
-            TimelineView(.periodic(from: .now, by: 1)) { ctx in
-                let now = stillAt.map { Date(timeIntervalSinceReferenceDate: $0) } ?? ctx.date
-                let today = model.todaySeconds(at: now)
-                let session = model.sessionClock(at: now)
-                // Widest first; a long header label drops "Session", then the session clock.
-                ViewThatFits(in: .horizontal) {
-                    chip(t, session: session, sessionWord: true, today: today)
-                    chip(t, session: session, sessionWord: false, today: today)
-                    chip(t, session: nil, sessionWord: false, today: today)
+    private func status(_ t: Theme, _ c: Shown) -> some View {
+        let color = t.headerColor(key)
+        let detail = c.detail ? detail : nil
+        let project = c.project ? project : nil
+        return HStack(alignment: .top, spacing: 8) {
+            Circle().fill(color).frame(width: 9, height: 9).padding(.top, 6)
+                .accessibilityHidden(true)
+            VStack(alignment: .leading, spacing: 0) {
+                Text(label).font(.system(size: 15, weight: .semibold))
+                    .foregroundStyle(["live", "muted", "attention", "error"].contains(key) ? color : t.fg)
+                    .lineLimit(1).fixedSize()
+                if detail != nil || project != nil {
+                    HStack(spacing: 4) {
+                        if let d = detail { Text(d).fontWeight(.semibold).foregroundStyle(key == "muted" ? t.mute : t.fg2).fixedSize() }
+                        if detail != nil && project != nil { Text("·").foregroundStyle(t.fg3) }
+                        // Ideal width 56: a long name ellipsizes before the row gives it up.
+                        if let p = project { Text(p).lineLimit(1).truncationMode(.middle).foregroundStyle(t.fg2).frame(idealWidth: 56) }
+                    }
+                    .font(.system(size: 12))
                 }
-                .accessibilityElement(children: .ignore)
-                .accessibilityLabel("\(session.map { "Session \($0), " } ?? "")today \(ViewText.formatUsage(today))")
             }
+        }
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("Status: \(label)\(self.detail.map { ", \($0)" } ?? "")\(self.project.map { ", project \($0)" } ?? "")")
+    }
+}
+
+/// One usage pill: an 11 pt label over a 13 pt semibold tabular figure in a box of fixed
+/// width, so a ticking figure never moves anything. The box widens once: a clock at the
+/// hour, the cost at $100 (lib.usagePills `wide`).
+struct UsagePill: View {
+    enum Kind { case clock, cost }
+    let name: String
+    let pill: ViewText.Pill
+    let kind: Kind
+    var help: String = ""
+    @Environment(\.colorScheme) private var scheme
+
+    static let figureFont = Font.system(size: 13, weight: .semibold).monospacedDigit()
+
+    /// The widest text each box must hold, measured once in the figure's font.
+    static func figureWidth(_ kind: Kind, wide: Bool) -> CGFloat {
+        switch (kind, wide) {
+        case (.clock, false): return clockNarrow
+        case (.clock, true): return clockWide
+        case (.cost, false): return costNarrow
+        case (.cost, true): return costWide
         }
     }
+    static let clockNarrow = measure(["00:00"])
+    static let clockWide = measure(["00:00:00"])
+    static let costNarrow = measure(["$00.00", "<$0.01"])
+    static let costWide = measure(["$000.00", "$0000.00"])
 
-    private func chip(_ t: Theme, session: String?, sessionWord: Bool, today: Double) -> some View {
-        HStack(spacing: 4) {
-            if let s = session {
-                if sessionWord { Text("Session").foregroundStyle(t.fg3) }
-                Text(s).monospacedDigit().fontWeight(.semibold)
-                Text("·").foregroundStyle(t.fg3)
-            }
-            Text(ViewText.formatDuration(today)).monospacedDigit().fontWeight(.semibold)
-            Text("·").foregroundStyle(t.fg3)
-            Text(ViewText.formatCost(today)).monospacedDigit().fontWeight(.semibold)
-            Text("today").foregroundStyle(t.fg3)
+    static func measure(_ samples: [String]) -> CGFloat {
+        let font = NSFont.monospacedDigitSystemFont(ofSize: 13, weight: .semibold)
+        let w = samples.map { ($0 as NSString).size(withAttributes: [.font: font]).width }.max() ?? 0
+        return (w + 1).rounded(.up)
+    }
+
+    var body: some View {
+        let t = Theme.of(scheme)
+        VStack(alignment: .trailing, spacing: 0) {
+            Text(name).font(.system(size: 11)).tracking(0.1).foregroundStyle(t.fg2).lineLimit(1).fixedSize()
+                .frame(height: 13)
+            Text(pill.text).font(Self.figureFont).foregroundStyle(t.fg).lineLimit(1)
+                .frame(width: Self.figureWidth(kind, wide: pill.wide), height: 16, alignment: .trailing)
         }
-        .font(.system(size: 12))
-        .lineLimit(1)
+        .padding(.horizontal, 8)
+        .frame(height: 36)
+        .raised(t, radius: 8)
         .fixedSize()
-        .padding(.horizontal, 9).padding(.vertical, 5)
-        .background(RoundedRectangle(cornerRadius: 8).fill(t.surface2))
+        .background(GeometryReader { g in
+            Color.clear.preference(key: PillFrames.self, value: [name: g.frame(in: .named(PillFrames.space))])
+        })
+        .help(help)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("\(name) \(pill.text)")
+    }
+}
+
+/// Where the Claude card and the captions sit in the panel (ClaudeCardLayoutTests).
+struct PanelFrames: PreferenceKey {
+    static let space = "sotto.panel"
+    static let defaultValue: [String: CGRect] = [:]
+    static func reduce(value: inout [String: CGRect], nextValue: () -> [String: CGRect]) {
+        value.merge(nextValue()) { $1 }
+    }
+    static func reader(_ name: String) -> some View {
+        GeometryReader { g in Color.clear.preference(key: PanelFrames.self, value: [name: g.frame(in: .named(space))]) }
+    }
+}
+
+/// Where each pill sits in the header (tests read it through onPreferenceChange).
+struct PillFrames: PreferenceKey {
+    static let space = "sotto.header"
+    static let defaultValue: [String: CGRect] = [:]
+    static func reduce(value: inout [String: CGRect], nextValue: () -> [String: CGRect]) {
+        value.merge(nextValue()) { $1 }
     }
 }
 
@@ -211,34 +345,35 @@ struct BannerView: View {
     let more: Int
     @Environment(\.colorScheme) private var scheme
 
+    /// The page's banner (feat/ui-polish): a raised neutral surface; the tone is in the
+    /// icon alone (amber for warnings, red for errors), never a tinted wash or a warm ring.
     var body: some View {
         let t = Theme.of(scheme)
-        let color = banner.level == "error" ? t.err : banner.level == "warn" ? t.attn : t.fg2
-        let tint = banner.level == "error" ? t.errTint : banner.level == "warn" ? t.attnTint : t.surface2
+        let icon = banner.level == "error" ? t.err : banner.level == "warn" ? t.attnIcon : t.fg3
         HStack(alignment: .center, spacing: 8) {
-            Image(systemName: banner.level == "info" ? "info.circle" : "exclamationmark.triangle.fill")
-                .foregroundStyle(color).accessibilityHidden(true)
+            Image(systemName: banner.level == "info" ? "info.circle" : banner.level == "error" ? "exclamationmark.octagon.fill" : "exclamationmark.triangle.fill")
+                .font(.system(size: 15)).foregroundStyle(icon).frame(width: 18).accessibilityHidden(true)
             Text(banner.text).font(.system(size: 13)).foregroundStyle(t.fg).fixedSize(horizontal: false, vertical: true)
+                .padding(.vertical, 7)
             Spacer(minLength: 4)
-            if more > 0 { Text("+\(more)").font(.system(size: 11, weight: .semibold)).foregroundStyle(t.fg3).help("\(more) more") }
+            if more > 0 { Text("+\(more)").font(.system(size: 12)).foregroundStyle(t.fg2).help("\(more) more") }
             if let a = banner.action {
                 Button(Self.label(a)) { model.perform(a, banner: banner.key) }
-                    .buttonStyle(PanelButtonStyle(color: t.fg, edge: color.opacity(0.6), fill: t.surface1, compact: true))
+                    .buttonStyle(PanelButtonStyle(color: t.fg, edge: .clear, fill: t.dark ? Color.white.opacity(0.06) : Color.black.opacity(0.05), compact: true))
             }
             Button {
                 if banner.key == "cmd_error" { model.clearCommandError() } else { model.dismissBanner(key: banner.key) }
             } label: {
-                Image(systemName: "xmark").font(.system(size: 10, weight: .semibold)).foregroundStyle(t.fg3)
-                    .frame(width: 24, height: 24).contentShape(Rectangle())
+                Image(systemName: "xmark").font(.system(size: 11, weight: .semibold)).foregroundStyle(t.fg3)
+                    .frame(width: 32, height: 32).contentShape(Rectangle())
             }
                 .buttonStyle(.plain)
-                .padding(-3) // a 24 pt target without growing the banner
                 .accessibilityLabel("Dismiss")
                 .help("Dismiss")
         }
-        .padding(.horizontal, 10).padding(.vertical, 7)
-        .background(RoundedRectangle(cornerRadius: 10).fill(tint))
-        .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(color.opacity(0.35), lineWidth: 1))
+        .padding(.leading, 12).padding(.trailing, 4).padding(.vertical, 4)
+        .frame(minHeight: 48)
+        .raised(t, radius: 14, lifted: true)
         .accessibilityElement(children: .contain)
         .accessibilityAddTraits(banner.level == "error" ? [.isHeader] : [])
     }
@@ -261,15 +396,23 @@ struct StatusWordView: View {
 
     var body: some View {
         let t = Theme.of(scheme)
+        // In the live view the word is one line and the line under it keeps its height,
+        // so the Claude card and the captions never move when the floor changes
+        // (SPEC-DEVIATIONS "Claude card, status word and timers" 6).
+        let live = view.view == "live"
         VStack(spacing: 6) {
             Text(view.word)
-                .font(.system(size: view.word.count > 18 ? 22 : 28, weight: .semibold, design: .default))
+                .font(.system(size: live ? 28 : (view.word.count > 18 ? 22 : 28), weight: .semibold, design: .default))
                 .foregroundStyle(view.wordTone == "attn" ? t.attn : view.floor == "muted" ? t.mute : t.fg)
                 .multilineTextAlignment(.center)
+                .lineLimit(live ? 1 : nil)
+                .minimumScaleFactor(live ? 0.6 : 1)
                 .id(view.word)
                 .transition(.opacity)
                 .accessibilityAddTraits(.isHeader)
             subline(t)
+                .lineLimit(live ? 1 : nil)
+                .frame(height: live ? 22 : nil)
         }
         .animation(.easeInOut(duration: 0.25), value: view.word)
         .frame(maxWidth: .infinity)
@@ -345,10 +488,9 @@ struct StateCardView: View {
 
     var body: some View {
         let t = Theme.of(scheme)
-        let accent = t.toneColor(card.tone)
         VStack(alignment: .leading, spacing: 10) {
             HStack(spacing: 8) {
-                Image(systemName: Self.icon(card)).foregroundStyle(card.tone == "neutral" ? t.fg2 : accent).accessibilityHidden(true)
+                Image(systemName: Self.icon(card)).foregroundStyle(card.tone == "neutral" ? t.fg2 : card.tone == "err" ? t.err : t.attnIcon).accessibilityHidden(true)
                 Text(card.title).font(.system(size: 16, weight: .semibold)).fixedSize(horizontal: false, vertical: true)
             }
             Text(card.body).font(.system(size: 13)).foregroundStyle(t.fg2).fixedSize(horizontal: false, vertical: true)
@@ -375,9 +517,9 @@ struct StateCardView: View {
                     Text("Waiting for you").font(.system(size: 11, weight: .semibold)).foregroundStyle(t.fg3).textCase(.uppercase)
                     MarkdownText(markdown: pending, expanded: false).font(.system(size: 13))
                 }
-                .padding(10)
+                .padding(.horizontal, 16).padding(.vertical, 12)
                 .frame(maxWidth: .infinity, alignment: .leading)
-                .background(RoundedRectangle(cornerRadius: 8).fill(t.surface2))
+                .background(RoundedRectangle(cornerRadius: 12).fill(t.dark ? Color.white.opacity(0.06) : Color.black.opacity(0.05)))
             }
             if card.keyInput { keyInput(t) }
             if let b = card.button {
@@ -392,8 +534,8 @@ struct StateCardView: View {
         }
         .padding(14)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(RoundedRectangle(cornerRadius: 12).fill(card.tone == "neutral" ? t.surface1 : (card.tone == "err" ? t.errTint : t.attnTint)))
-        .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(card.tone == "neutral" ? t.line : accent.opacity(0.5), lineWidth: 1))
+        // A neutral raised surface in every tone (feat/ui-polish): the tone is in the icon.
+        .raised(t, radius: 18)
         .accessibilityElement(children: .contain)
     }
 
@@ -453,10 +595,27 @@ struct StateCardView: View {
 
 // MARK: - Claude card
 
+/// The Claude Code card (web `.claude`, one card, four states). Its height is bounded
+/// so it never pushes the captions or the footer: one line for Claude's words while it
+/// works, a summary clamped to three lines when it finishes, with "More" for the rest
+/// (then a capped, inset scroller). The ring is drawn outside the shape in every state,
+/// so a state change never nudges the layout by a point.
 struct ClaudeCardView: View {
     let model: StateModel
     var stillAt: Double?
+    /// The live view always shows the card ("Claude is idle" as a quiet line), like the page.
+    var live = false
     @Environment(\.colorScheme) private var scheme
+    @Environment(\.sottoStill) private var still
+    @Environment(\.sottoSummaryCap) private var cap
+
+    /// Collapsed summary: three 15 pt lines at the page's 1.45 line height.
+    static let summaryLine: CGFloat = 21
+    static let collapsedSummary: CGFloat = summaryLine * 3
+    /// Expanded summary: scrolls inside the card past this.
+    static let expandedCap: CGFloat = 220
+    /// The card's tallest forms (head, body, More, the request line, padding, the gap above).
+    static let collapsedHeight: CGFloat = 14 + 12 + 20 + 4 + collapsedSummary + 4 + 24 + 4 + 18 + 12
 
     var body: some View {
         TimelineView(.periodic(from: .now, by: 1)) { ctx in
@@ -465,75 +624,164 @@ struct ClaudeCardView: View {
         }
     }
 
+    static func isLong(_ summary: String) -> Bool {
+        summary.count >= 150 || summary.contains("```") || summary.range(of: "\n\\s*\n", options: .regularExpression) != nil
+    }
+
     @ViewBuilder private func content(now: Date) -> some View {
         let t = Theme.of(scheme)
         let card = model.claudeCard
         // The paused/sleeping card already shows the pending result: don't repeat it.
         let repeated = card.kind == "finished" && model.pageView.card?.pending != nil
-        if !repeated && (card.kind != "idle" || card.agents != nil || model.requestLine != nil) {
-            let accent = card.kind == "approval" ? t.attn : card.kind == "working" ? t.work : card.kind == "finished" ? t.live : t.fg3
-            VStack(alignment: .leading, spacing: 8) {
-                HStack(spacing: 8) {
-                    Group {
-                        switch card.kind {
-                        case "working": Spinner(color: t.work)
-                        case "approval": Image(systemName: "hand.raised.fill").foregroundStyle(t.attn)
-                        case "finished": Image(systemName: "checkmark.circle.fill").foregroundStyle(t.live)
-                        default: Image(systemName: "circle.dotted").foregroundStyle(t.fg3)
-                        }
-                    }
-                    .frame(width: 16, height: 16)
-                    .accessibilityHidden(true)
-                    Text(card.title).font(.system(size: 14, weight: .semibold))
-                        .foregroundStyle(card.kind == "finished" || card.kind == "idle" ? t.fg : accent)
-                    Spacer(minLength: 4)
-                    if let w = model.workingTime(at: now) { Text(w).font(.system(size: 12)).monospacedDigit().foregroundStyle(t.fg3) }
-                }
+        if !repeated && (live || card.kind != "idle" || card.agents != nil || model.requestLine != nil) {
+            let raised = card.kind != "idle"
+            VStack(alignment: .leading, spacing: 4) {
+                head(t, card, now: now)
                 if card.kind == "working", let step = card.step {
-                    Text(step).font(.system(size: 14)).foregroundStyle(card.secondary == true ? t.fg2 : t.fg)
-                        .lineLimit(3).fixedSize(horizontal: false, vertical: true)
+                    Text(step).font(.system(size: card.secondary == true ? 13 : 15)).foregroundStyle(card.secondary == true ? t.fg2 : t.fg)
+                        .lineLimit(1).truncationMode(.tail)
+                        .frame(maxWidth: .infinity, minHeight: 21, alignment: .leading)
                         .contentTransition(.opacity)
                         .animation(.easeInOut(duration: 0.2), value: step)
                 }
                 if card.kind == "approval" {
                     if let cmd = card.command {
-                        Text(cmd).font(.system(size: 12, design: .monospaced)).foregroundStyle(t.fg)
-                            .lineLimit(4).padding(8).frame(maxWidth: .infinity, alignment: .leading)
-                            .background(RoundedRectangle(cornerRadius: 6).fill(t.surface2))
+                        Text(cmd).font(.system(size: 13, weight: .medium, design: .monospaced)).foregroundStyle(t.fg)
+                            .lineLimit(5).padding(.horizontal, 12).padding(.vertical, 8).frame(maxWidth: .infinity, alignment: .leading)
+                            .background(RoundedRectangle(cornerRadius: 6).fill(t.dark ? Color.white.opacity(0.06) : Color.black.opacity(0.05)))
                             .textSelection(.enabled)
+                            .padding(.top, 4)
                     }
-                    if let note = card.note { Text(note).font(.system(size: 12)).foregroundStyle(t.attn) }
+                    if let note = card.note { Text(note).font(.system(size: 13)).foregroundStyle(t.fg) }
                 }
-                if card.kind == "finished", let summary = card.summary {
-                    let long = summary.count >= 150 || summary.contains("```") || summary.range(of: "\n\\s*\n", options: .regularExpression) != nil
-                    MarkdownText(markdown: summary, expanded: model.summaryExpanded)
-                        .font(.system(size: 14))
-                        .lineLimit(model.summaryExpanded ? nil : 4)
-                        .textSelection(.enabled)
-                    if long {
-                        Button { model.summaryExpanded.toggle() } label: {
-                            Text(model.summaryExpanded ? "Less" : "More").font(.system(size: 14, weight: .medium)).foregroundStyle(t.work)
-                        }
-                            .buttonStyle(.plain)
-                            .accessibilityValue(model.summaryExpanded ? "expanded" : "collapsed")
-                    }
-                }
+                if card.kind == "finished", let summary = card.summary { summaryView(t, summary) }
                 if let r = model.requestLine {
-                    Text(r.text).font(.system(size: 12)).foregroundStyle(r.tone == "error" ? t.err : r.tone == "warn" ? t.attn : t.fg3)
-                        .lineLimit(2)
-                }
-                if let a = card.agents {
-                    Label(a, systemImage: "person.2").font(.system(size: 11, weight: .medium)).foregroundStyle(t.fg2)
-                        .padding(.horizontal, 8).padding(.vertical, 3)
-                        .background(Capsule().fill(t.surface2))
+                    Text(r.text).font(.system(size: 13)).foregroundStyle(r.tone == "error" ? t.err : r.tone == "warn" ? t.attn : t.fg3)
+                        .lineLimit(1).truncationMode(.tail)
                 }
             }
-            .padding(14)
+            .padding(.horizontal, raised ? 12 : 0).padding(.vertical, 12)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .background(RoundedRectangle(cornerRadius: 12).fill(card.kind == "approval" ? t.attnTint : t.surface1))
-            .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(card.kind == "working" ? t.work.opacity(0.6) : card.kind == "approval" ? t.attnEdge : t.line, lineWidth: 1))
+            .modifier(CardSurface(theme: t, kind: card.kind))
             .accessibilityElement(children: .contain)
             .accessibilityLabel(card.title)
+        }
+    }
+
+    private func head(_ t: Theme, _ card: ViewText.ClaudeCard, now: Date) -> some View {
+        HStack(spacing: 8) {
+            Group {
+                switch card.kind {
+                // Static on purpose (as on the page): the dial's bezel chase already says "working".
+                case "working":
+                    Circle().trim(from: 0, to: 0.75).stroke(t.work, style: StrokeStyle(lineWidth: 2, lineCap: .round))
+                        .rotationEffect(.degrees(45)).frame(width: 12, height: 12)
+                case "approval": Image(systemName: "exclamationmark.triangle.fill").font(.system(size: 13)).foregroundStyle(t.attnIcon)
+                case "finished": Image(systemName: "checkmark.circle.fill").font(.system(size: 14)).foregroundStyle(t.live)
+                default: Circle().strokeBorder(t.fg3, lineWidth: 2).frame(width: 14, height: 14)
+                }
+            }
+            .frame(width: 16, height: 16)
+            .accessibilityHidden(true)
+            Text(card.title).font(.system(size: card.kind == "approval" ? 15 : 13, weight: card.kind == "idle" ? .regular : .semibold))
+                .foregroundStyle(card.kind == "working" ? t.work : card.kind == "approval" ? t.attn : card.kind == "idle" ? t.fg2 : t.fg)
+                .lineLimit(1).fixedSize()
+                .layoutPriority(1)
+            Spacer(minLength: 4)
+            if let a = card.agents {
+                // The background agents are a quiet chip; their work never reaches the card's
+                // text. Short of room it keeps the count ("2 agents").
+                let n = a.split(separator: " ").first.map(String.init) ?? ""
+                ViewThatFits(in: .horizontal) {
+                    agentsChip(t, a)
+                    agentsChip(t, n == "1" ? "1 agent" : "\(n) agents")
+                }
+                .help(a)
+                .accessibilityLabel(a)
+            }
+            if let w = model.workingTime(at: now) {
+                Text(w).font(.system(size: 12)).monospacedDigit().foregroundStyle(t.fg3).lineLimit(1).fixedSize()
+            }
+        }
+        .frame(minHeight: 20)
+    }
+
+    private func agentsChip(_ t: Theme, _ text: String) -> some View {
+        Label(text, systemImage: "person.2").labelStyle(.titleAndIcon)
+            .font(.system(size: 11, weight: .medium)).foregroundStyle(t.fg2).lineLimit(1)
+            .padding(.horizontal, 7).padding(.vertical, 2)
+            .background(Capsule().fill(t.surface2))
+            .fixedSize()
+    }
+
+    @ViewBuilder private func summaryView(_ t: Theme, _ summary: String) -> some View {
+        let long = Self.isLong(summary)
+        let expanded = model.summaryExpanded && long
+        Group {
+            if expanded {
+                // Short enough: no scroller. Longer: a capped scroll view whose scroller sits
+                // in the card's trailing padding, inset from the rounded corner, with the text
+                // padded clear of it, so nothing is under the bar or clipped by the radius.
+                ViewThatFits(in: .vertical) {
+                    MarkdownText(markdown: summary, expanded: true).padding(.trailing, 4)
+                    if still {
+                        // ImageRenderer draws no ScrollView content: the same frame, clipped,
+                        // with the overlay scroller where AppKit would draw it.
+                        MarkdownText(markdown: summary, expanded: true)
+                            .padding(.trailing, 16)
+                            .frame(maxWidth: .infinity, maxHeight: cap, alignment: .topLeading)
+                            .clipped()
+                            .overlay(alignment: .topTrailing) {
+                                Capsule().fill(t.fg3.opacity(0.45)).frame(width: 6, height: 70).padding(.top, 3).offset(x: 5)
+                            }
+                            .frame(height: cap)
+                    } else {
+                    ScrollView(.vertical) {
+                        MarkdownText(markdown: summary, expanded: true)
+                            .padding(.trailing, 16)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                    .scrollIndicators(.automatic)
+                    .frame(height: cap)
+                    .padding(.trailing, -8)
+                    }
+                }
+            } else {
+                MarkdownText(markdown: summary, expanded: false)
+                    .frame(maxWidth: .infinity, maxHeight: Self.collapsedSummary, alignment: .topLeading)
+                    .clipped()
+            }
+        }
+        .font(.system(size: 15))
+        .foregroundStyle(t.fg)
+        .textSelection(.enabled)
+        if long {
+            Button { model.summaryExpanded.toggle() } label: {
+                Text(model.summaryExpanded ? "Less" : "More").font(.system(size: 13, weight: .semibold)).foregroundStyle(t.work)
+                    .frame(minHeight: 24).contentShape(Rectangle())
+            }
+                .buttonStyle(.plain)
+                .accessibilityValue(model.summaryExpanded ? "expanded" : "collapsed")
+        }
+    }
+}
+
+/// The card's surface per state (web `body[data-claude=…] .claude`): idle is a quiet line
+/// under a hairline; working, finished and approval are raised (radius 18); working has a
+/// work-coloured ring, approval a 1.5 pt amber ring (neutral fill in light).
+struct CardSurface: ViewModifier {
+    let theme: Theme
+    let kind: String
+    func body(content: Content) -> some View {
+        switch kind {
+        case "idle":
+            content.overlay(alignment: .top) { Rectangle().fill(theme.line).frame(height: 1) }
+        case "working":
+            content.raised(theme, radius: 18, ring: theme.work.opacity(0.4))
+        case "approval":
+            content.raised(theme, radius: 18, fill: theme.attnTint, ring: theme.attnEdge, ringWidth: 1.5, lifted: true)
+        default:
+            content.raised(theme, radius: 18)
         }
     }
 }
@@ -729,7 +977,13 @@ struct Spinner: View {
 }
 
 private struct StillKey: EnvironmentKey { static let defaultValue = false }
+private struct SummaryCapKey: EnvironmentKey { static let defaultValue: CGFloat = ClaudeCardView.expandedCap }
 extension EnvironmentValues {
+    /// The expanded summary's height cap for the room the panel has.
+    var sottoSummaryCap: CGFloat {
+        get { self[SummaryCapKey.self] }
+        set { self[SummaryCapKey.self] = newValue }
+    }
     /// A still frame (snapshots): no timelines, no AppKit-backed controls.
     var sottoStill: Bool {
         get { self[StillKey.self] }

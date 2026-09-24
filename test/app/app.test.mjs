@@ -420,6 +420,12 @@ describe("native desktop app", { skip: SKIP }, () => {
       await waitFor(() => d.voice.state === "live" && d.voice.live?.persona === "moss", 10_000, "live in Moss");
       assert.ok(readLog(appLog).some((e) => e.ev === "audio_flush" && e.reason === "voice_change"), "the app dropped the old session's audio");
       assert.ok(!fs.existsSync(path.join(actions, "2-persona.json")), "the app consumed the action");
+      // Settings > Appearance: Dark sets NSApp.appearance (saved in the test defaults suite), System clears it.
+      act("3-dark", { action: "appearance", appearance: "dark" });
+      await waitFor(() => readLog(appLog).some((e) => e.ev === "appearance_applied" && e.app === "NSAppearanceNameDarkAqua"), 10_000, "dark appearance applied");
+      assert.ok(readLog(appLog).some((e) => e.ev === "appearance_applied" && e.effective === "NSAppearanceNameDarkAqua"), "the app resolves dark");
+      act("4-system", { action: "appearance", appearance: "system" });
+      await waitFor(() => readLog(appLog).some((e) => e.ev === "appearance_applied" && e.app === "system"), 10_000, "system appearance applied");
       // Voice off: close_window stops audio and hides the panel, then the app quits.
       const off = await ctl({ action: "off" });
       assert.equal(off.ok, true);

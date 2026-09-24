@@ -173,6 +173,15 @@ public struct SettingsView: View {
 
     private var appSection: some View {
         Section {
+            if model.hooks.setAppearance != nil {
+                VStack(alignment: .leading, spacing: 6) {
+                    Picker("Appearance", selection: Binding(get: { model.appearance }, set: { model.setAppearance($0) })) {
+                        ForEach(ViewText.themes, id: \.self) { Text(SettingsText.appearanceLabel($0)).tag($0) }
+                    }
+                    .pickerStyle(.segmented)
+                    FieldHelp(SettingsText.appearanceHelp)
+                }
+            }
             VStack(alignment: .leading, spacing: 6) {
                 Picker("Open voice in", selection: Binding(get: { model.window }, set: { model.setWindow($0) })) {
                     ForEach(model.windowModes, id: \.self) { Text(SettingsText.windowLabel($0)).tag($0) }

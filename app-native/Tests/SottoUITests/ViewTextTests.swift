@@ -36,6 +36,20 @@ final class ViewTextTests: XCTestCase {
         case "formatDuration": return .string(ViewText.formatDuration(a[0].num, long: a[1].boolean ?? false))
         case "formatClock": return .string(ViewText.formatClock(a[0].num))
         case "formatUsage": return .string(ViewText.formatUsage(a[0].num))
+        case "usagePills":
+            let o = a[0].obj ?? [:]
+            let p = ViewText.usagePills(sessionSeconds: o.number("sessionSeconds"), todaySeconds: o.number("todaySeconds") ?? 0, costSeconds: o.number("costSeconds") ?? 0)
+            func pill(_ x: ViewText.Pill?) -> JSONValue { x.map { .object(["text": .string($0.text), "wide": .bool($0.wide)]) } ?? .null }
+            return .object(["session": pill(p.session), "today": pill(p.today), "cost": pill(p.cost)])
+        case "stableUsage":
+            let prev = a[0].obj.map { ViewText.UsageReading(seconds: $0.number("seconds") ?? 0, at: $0.number("at") ?? 0) }
+            let r = ViewText.stableUsage(prev, seconds: a[1].num, now: a[2].num ?? 0)
+            return .object(["seconds": .number(r.seconds), "at": .number(r.at)])
+        case "tickingToday":
+            let r = a[0].obj.map { ViewText.UsageReading(seconds: $0.number("seconds") ?? 0, at: $0.number("at") ?? 0) }
+            let o = a[2].obj ?? [:]
+            return .number(ViewText.tickingToday(r, now: a[1].num ?? 0, live: o.bool("live") ?? false, shown: o.number("shown")))
+        case "normalizeTheme": return .string(ViewText.normalizeTheme(a[0].str))
         case "formatMoney": return .string(ViewText.formatMoney(a[0].num))
         case "formatElapsed": return .string(ViewText.formatElapsed(a[0].num))
         case "truncate": return .string(ViewText.truncate(a[0].str, Int(a[1].num ?? 160)))

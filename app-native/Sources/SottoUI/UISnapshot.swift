@@ -13,6 +13,8 @@ public enum UISnapshot {
         let mic: Float
         let speaker: Float
         let floor: String?
+        /// Seconds from the session start to the still frame.
+        var elapsed: TimeInterval = 252
     }
 
     static func status(_ state: String, muted: Bool = false, busy: Bool = false, lastError: [String: JSONValue]? = nil,
@@ -52,7 +54,7 @@ public enum UISnapshot {
         m.apply(object: ev("delegation", ["id": .string("d1"), "status": .string("delivered"), "text": .string("Fix the flaky auth test, then run the full suite")]))
         m.apply(object: ev("activity", ["kind": .string("turn_start"), "text": .string("")]))
         m.apply(object: ev("activity", ["kind": .string("text"), "text": .string("The auth spec shares a token cache with login. I'll isolate it, then run the suite.")]))
-        m.apply(object: ev("activity", ["kind": .string("tool"), "text": .string("Running npm test -- auth.spec.ts")]))
+        m.apply(object: ev("activity", ["kind": .string("tool"), "text": .string("Running the tests")]))
     }
 
     /// Every state the panel can show that the page's design/final covers.
@@ -104,7 +106,57 @@ public enum UISnapshot {
         State(name: "21-lost-daemon", build: { m in connected(m, status("live")); m.linkState = .backoff(seconds: 2) }, mic: 0, speaker: 0, floor: nil),
         State(name: "22-voice-off", build: { m in connected(m, status("off")) }, mic: 0, speaker: 0, floor: nil),
         State(name: "23-closed", build: { m in connected(m, status("off")); m.apply(object: ev("command", ["command": .string("close_window"), "reason": .string("off")])) }, mic: 0, speaker: 0, floor: nil),
+        State(name: "24-long-session", build: { m in
+            connected(m, status("live", todaySeconds: 4 * 3600 + 1234)); captions(m, "How long have we been at this?", "A little over an hour.")
+        }, mic: 0, speaker: 0, floor: nil, elapsed: 3600 + 125),
+        State(name: "25-claude-finished-long", build: finishedLong(expanded: false), mic: 0, speaker: 0, floor: nil),
+        State(name: "26-claude-finished-long-expanded", build: finishedLong(expanded: true), mic: 0, speaker: 0, floor: nil),
     ]
+
+    /// Claude's long final message (the user's report: the card grew and a scroller sat on the text).
+    static let longSummary = """
+    ## Auth cleanup done
+
+    Fixed the flaky auth test and tidied the session code around it. The **login** and **auth** specs shared a module-level token cache, so the order they ran in decided whether they passed.
+
+    - Each spec now builds its own cache in `beforeEach`
+    - `SessionStore` no longer keeps a static instance
+    - The retry helper waits on the clock instead of `setTimeout`
+    - Removed two dead fixtures (`old-user.json`, `legacy-token.json`)
+
+    ```js
+    const store = new SessionStore({ clock });
+    ```
+
+    `npm test` passes: 214 tests, 0 failures, in 38 s. I also ran the auth suite 50 times in a loop and it passed every time.
+
+    1. Review the diff in `src/auth/session.ts`
+    2. Merge when CI is green
+
+    See [the PR](https://github.com/example/pr/1) for the full list.
+    """
+
+    static func finishedLong(expanded: Bool) -> @MainActor @Sendable (StateModel) -> Void {
+        { m in
+            connected(m, status("live"))
+            m.apply(object: ev("delegation", ["id": .string("d1"), "status": .string("answered"), "text": .string("Clean up the auth code")]))
+            m.apply(object: ev("activity", ["kind": .string("turn_end"), "text": .string(""), "summary": .string(longSummary)]))
+            m.summaryExpanded = expanded
+            captions(m, "Great, what changed?")
+        }
+    }
+
+    /// The states in design/native/parity/ (docs/NATIVE.md "Parity with the page").
+    public static let parityNames = ["05-listening", "08-muted", "09-claude-working", "10-claude-needs-approval", "11-claude-finished", "12-background-agents",
+                                     "13-cant-hear", "24-long-session", "25-claude-finished-long", "26-claude-finished-long-expanded"]
+
+    /// Render the parity states at the default 420 x 720 panel and a narrow 360 x 640 one.
+    @discardableResult
+    public static func renderParity(to dir: URL) throws -> [URL] {
+        let picked = states.filter { parityNames.contains($0.name) }
+        return try render(to: dir, states: picked, size: CGSize(width: 420, height: 720), suffix: "420")
+            + render(to: dir, states: picked.filter { ["05-listening", "24-long-session", "09-claude-working"].contains($0.name) }, size: CGSize(width: 360, height: 640), suffix: "360")
+    }
 
     /// A model in the named state (for previews and tests).
     public static func model(_ s: State) -> StateModel {
@@ -113,7 +165,7 @@ public enum UISnapshot {
         m.now = { t0 }
         s.build(m)
         // The session and Claude started a little before the frame (fixed, so snapshots are stable).
-        m.now = { t0.addingTimeInterval(252) }
+        m.now = { t0.addingTimeInterval(s.elapsed) }
         m.micLevel = s.mic
         m.speakerLevel = s.speaker
         m.setFloorForPreview(s.floor)
@@ -123,10 +175,14 @@ public enum UISnapshot {
     /// Render every state in light and dark to `dir`; returns the files written.
     @discardableResult
     public static func render(to dir: URL, size: CGSize = CGSize(width: 420, height: 720), scale: CGFloat = 2) throws -> [URL] {
+        try render(to: dir, states: states, size: size, suffix: nil, scale: scale)
+    }
+
+    static func render(to dir: URL, states: [State], size: CGSize, suffix: String?, scale: CGFloat = 2) throws -> [URL] {
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         var out: [URL] = []
-        let still = Date(timeIntervalSinceReferenceDate: 780_000_000 + 252).timeIntervalSinceReferenceDate
         for s in states {
+            let still = Date(timeIntervalSinceReferenceDate: 780_000_000 + s.elapsed).timeIntervalSinceReferenceDate
             for scheme in [ColorScheme.light, .dark] {
                 let m = model(s)
                 let view = PanelView(model: m, stillAt: still)
@@ -137,7 +193,7 @@ public enum UISnapshot {
                 guard let cg = r.cgImage else { throw NSError(domain: "UISnapshot", code: 1, userInfo: [NSLocalizedDescriptionKey: "render failed: \(s.name)"]) }
                 let rep = NSBitmapImageRep(cgImage: cg)
                 guard let png = rep.representation(using: .png, properties: [:]) else { continue }
-                let url = dir.appendingPathComponent("\(s.name)--\(scheme == .dark ? "dark" : "light").png")
+                let url = dir.appendingPathComponent("\(s.name)\(suffix.map { "--\($0)" } ?? "")--\(scheme == .dark ? "dark" : "light").png")
                 try png.write(to: url)
                 out.append(url)
             }

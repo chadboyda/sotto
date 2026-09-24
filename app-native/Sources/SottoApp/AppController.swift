@@ -302,6 +302,13 @@ final class AppController: NSObject, NSApplicationDelegate, PanelControllerDeleg
                 let on = obj["on"] as? Bool ?? true
                 log.log("test_action", ["action": action, "on": on])
                 settings.setPersonaUseVoice(on)
+            case "appearance":
+                let choice = obj["appearance"] as? String ?? "system"
+                log.log("test_action", ["action": action, "appearance": choice])
+                settings.setAppearance(choice)
+                // What AppKit resolved, so a test can see the choice took effect.
+                log.log("appearance_applied", ["app": NSApp.appearance?.name.rawValue ?? "system",
+                                               "effective": NSApp.effectiveAppearance.bestMatch(from: [.aqua, .darkAqua])?.rawValue ?? ""])
             default:
                 log.log("test_action", ["action": action, "ok": false])
             }
@@ -686,8 +693,20 @@ final class AppController: NSObject, NSApplicationDelegate, PanelControllerDeleg
         settings.loginItem = LoginItem.current()
     }
 
+    /// Settings > Appearance: System (nil, follows macOS live), Light (.aqua) or Dark (.darkAqua)
+    /// for every window of the app. The panel and Settings read it through their colour scheme.
+    static func applyAppearance(_ choice: String) {
+        switch choice {
+        case "light": NSApp.appearance = NSAppearance(named: .aqua)
+        case "dark": NSApp.appearance = NSAppearance(named: .darkAqua)
+        default: NSApp.appearance = nil
+        }
+    }
+
     private func wireSettings() {
         let d = Prefs.store
+        settings.appearance = ViewText.normalizeTheme(d.string(forKey: "Appearance"))
+        AppController.applyAppearance(settings.appearance)
         settings.selectedInput = d.string(forKey: "InputDevice")
         settings.selectedOutput = d.string(forKey: "OutputDevice")
         settings.echoCancellation = audio?.echoCancellation.rawValue ?? "automatic"
@@ -727,6 +746,11 @@ final class AppController: NSObject, NSApplicationDelegate, PanelControllerDeleg
         h.openLogs = { [weak self] in self?.menuOpenLogs() }
         h.refreshDevices = { [weak self] in self?.refreshDevices() }
         h.openMicPrivacySettings = { MicAccess.openPrivacySettings() }
+        h.setAppearance = { [weak self] choice in
+            Prefs.store.set(choice == "system" ? nil : choice, forKey: "Appearance")
+            AppController.applyAppearance(choice)
+            self?.log.log("appearance", ["choice": choice])
+        }
         if !options.testMode {
             h.requestMicAccess = { [weak self] in
                 let p = await MicAccess.request()

@@ -212,10 +212,31 @@ public final class StateModel {
         return extra > 0 ? base + extra : base
     }
 
-    /// "Session 4:12" while live.
+    /// "4:12" while live (the Session pill), nil otherwise.
     public func sessionClock(at t: Date) -> String? {
+        sessionSeconds(at: t).map { ViewText.formatClock($0) }
+    }
+
+    public func sessionSeconds(at t: Date) -> Double? {
         guard phase == "live", let s = sessionStartedAt else { return nil }
-        return ViewText.formatClock(t.timeIntervalSince(s))
+        return max(0, t.timeIntervalSince(s))
+    }
+
+    // The header's usage reading, throttled like the page's (lib.stableUsage) and ticked
+    // by wall time while live (lib.tickingToday). Written while a frame is drawn, so it
+    // is not observed: the header's own 1 s timeline redraws it.
+    @ObservationIgnored private var usageShown: ViewText.UsageReading?
+    @ObservationIgnored private var todayShown: Double?
+
+    /// The header pills at `t` (web/app.js renderUsage): Session (live only), Today, Cost.
+    public func usagePills(at t: Date) -> ViewText.UsagePills {
+        let ms = t.timeIntervalSince1970 * 1000
+        let reading = ViewText.stableUsage(usageShown, seconds: todaySeconds(at: t), now: ms)
+        usageShown = reading
+        let session = sessionSeconds(at: t)
+        let today = ViewText.tickingToday(reading, now: ms, live: session != nil, shown: todayShown)
+        todayShown = today
+        return ViewText.usagePills(sessionSeconds: session, todaySeconds: today, costSeconds: reading.seconds)
     }
 
     public var project: String? {
@@ -575,7 +596,7 @@ public final class StateModel {
     public func resetForPreview() {
         captions = []; delegations = []; claudeBusy = false; claudeKind = nil; claudeText = ""; claudeSays = ""
         claudeSaysAt = nil; claudeTool = ""; summary = nil; agents = 0; workSince = nil; banners = []; pendingResult = nil
-        floor = nil; wordHold = WordHold(); floorTracker = FloorTracker()
+        floor = nil; wordHold = WordHold(); floorTracker = FloorTracker(); usageShown = nil; todayShown = nil
     }
 
     /// Force the shown floor (previews/snapshots, where the 1.3 s hold would never elapse).
