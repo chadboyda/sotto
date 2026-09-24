@@ -152,6 +152,51 @@ function cases() {
     if (v.card) add("cardAnnouncement", [v.card], lib.cardAnnouncement(v.card));
     add("windowTitle", [v.floor, !!s.attention], lib.windowTitle(v, !!s.attention));
   }
+  // The Filament + Orrery panel (docs/NATIVE.md "Hybrid panel"): the headline rule, the
+  // header word, the caption note, the Claude row's moon, and the milestone stars.
+  for (const t of ["Running the tests", "Editing 3 files", "Looking through the code", "Searching the web", "Building the project", "Installing packages", "Render the stills", "Using Slack", ""]) add("claudeVerb", [t], lib.claudeVerb(t));
+  const hv = (o) => lib.pageView({ phase: "live", state: "live", host: "app", ...o });
+  const now = 1_000_000;
+  for (const [v, c] of [
+    [hv({}), {}],
+    [hv({ floor: "you" }), { attention: true, busy: true }],
+    [hv({ floor: "voice" }), { busy: true, tool: "Running the tests" }],
+    [hv({ attention: true }), { attention: true, busy: true }],
+    [hv({ muted: true, attention: true }), { attention: true, busy: true }],
+    [hv({ muted: true }), { busy: true, tool: "Running the tests" }],
+    [hv({}), { busy: true, tool: "Editing a file" }],
+    [hv({}), { busy: true }],
+    [hv({}), { question: true, busy: true }],
+    [hv({}), { finishedAt: now - 29_000, now }],
+    [hv({}), { finishedAt: now - 30_000, now }],
+    [lib.pageView({ phase: "connecting", state: "connecting", host: "app" }), { busy: true }],
+    [lib.pageView({ phase: "idle", state: "sleeping", host: "app" }), {}],
+    [lib.pageView({ phase: "idle", state: "paused", pausedReason: "idle", idleMinutes: 5, host: "app" }), { busy: true }],
+    [lib.pageView({ phase: "error", state: "paused", micFailure: "notfound", host: "app" }), {}],
+  ]) {
+    add("headline", [v, c], lib.headline(v, c));
+    add("statusWord", [v], lib.statusWord(v));
+    add("captionNote", [v], lib.captionNote(v));
+  }
+  for (const s of [{ busy: false }, { busy: true }, { busy: true, kind: "permission", text: "rm -rf build" }, { busy: true, kind: "permission", agent: true, text: "x" }, { busy: false, summary: "Done." }]) {
+    const m = lib.claudeView(s);
+    add("claudeHead", [m], lib.claudeHead(m));
+  }
+  for (const ms of [0, 10_000, 60_000, 600_000]) add("beadPosition", [ms], lib.beadPosition(ms));
+  for (const ms of [0, 60_000, 1_200_000, 36_000_000]) add("starAlpha", [ms], lib.starAlpha(ms));
+  const text = { kind: "text", text: "Found the race." };
+  let st = { stars: [], lastAt: null };
+  for (const [ev, ctx] of [
+    [{ kind: "tool", text: "Running the tests" }, { busy: true, now: 1000, workSince: 0 }],
+    [text, { busy: false, now: 2000, workSince: 0 }],
+    [text, { busy: true, now: 30_000, workSince: 0 }],
+    [text, { busy: true, now: 45_000, workSince: 0 }],
+    [text, { busy: true, now: 50_000, workSince: 0 }],
+  ]) {
+    const next = lib.milestoneStars(st, ev, ctx);
+    add("milestoneStars", [st, ev, ctx], next);
+    st = next;
+  }
   return JSON.parse(JSON.stringify(out));
 }
 

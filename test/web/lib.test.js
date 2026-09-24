@@ -667,3 +667,70 @@ test("createDigitalSilenceDetector: fires once after 4 s of EXACT zeros, never o
   assert.equal(d2.sample({ rms: 0, now: 5000 }), null, "stopped");
 });
 
+
+// ---- The Filament + Orrery panel (design/concepts-v2/hybrid) ----
+test("claudeVerb: one quiet verb for a tool line, never the tool line itself", () => {
+  assert.equal(lib.claudeVerb("Running the tests"), "testing");
+  assert.equal(lib.claudeVerb("Editing 3 files"), "editing");
+  assert.equal(lib.claudeVerb("Looking through the code"), "reading");
+  assert.equal(lib.claudeVerb("Searching the web"), "searching");
+  assert.equal(lib.claudeVerb("Render every concept at both sizes"), "working");
+  assert.equal(lib.claudeVerb("Using Slack"), "working");
+  assert.equal(lib.claudeVerb(""), "working");
+  assert.equal(lib.claudeVerb(null), "working");
+});
+
+test("headline: the floor, then the approval, then Muted, then Claude's news, else Listening", () => {
+  const live = (o = {}) => lib.pageView({ phase: "live", state: "live", ...o });
+  const now = 1_000_000;
+  assert.equal(lib.headline(live()).word, "Listening");
+  assert.equal(lib.headline(live({ floor: "you" }), { attention: true, busy: true }).word, "Hearing you");
+  assert.equal(lib.headline(live({ floor: "voice" }), { busy: true }).word, "Speaking");
+  assert.deepEqual(lib.headline(live({ attention: true }), { attention: true, busy: true }), { word: "Approve in the terminal", tone: "attn", news: true });
+  assert.equal(lib.headline(live({ muted: true, attention: true }), { attention: true, busy: true }).word, "Approve in the terminal");
+  assert.deepEqual(lib.headline(live({ muted: true }), { busy: true, tool: "Running the tests" }), { word: "Muted", tone: "muted", news: false });
+  assert.deepEqual(lib.headline(live(), { busy: true, tool: "Running the tests" }), { word: "Claude is testing", tone: null, news: true });
+  assert.equal(lib.headline(live(), { busy: true }).word, "Claude is working");
+  assert.equal(lib.headline(live(), { question: true, busy: true }).word, "Answer in the terminal");
+  assert.equal(lib.headline(live(), { finishedAt: now - 29_000, now }).word, "Claude finished");
+  assert.equal(lib.headline(live(), { finishedAt: now - 31_000, now }).word, "Listening");
+  // Connecting keeps its word; a card view names the state in one short word.
+  assert.equal(lib.headline(lib.pageView({ phase: "connecting", state: "connecting" }), { busy: true }).word, "Connecting");
+  assert.equal(lib.headline(lib.pageView({ phase: "idle", state: "paused", pausedReason: "idle", idleMinutes: 5 })).word, "Paused");
+  assert.equal(lib.headline(lib.pageView({ phase: "idle", state: "sleeping" })).word, "Sleeping");
+});
+
+test("statusWord, captionNote, claudeHead", () => {
+  assert.equal(lib.statusWord(lib.pageView({ phase: "live", state: "live", attention: true })), "Needs you");
+  assert.equal(lib.statusWord(lib.pageView({ phase: "live", state: "live" })), "Live");
+  assert.equal(lib.captionNote(lib.pageView({ phase: "live", state: "live", muted: true })), "Sotto can't hear you. Still billing. Press M to listen.");
+  assert.equal(lib.captionNote(lib.pageView({ phase: "live", state: "live" })), null);
+  assert.equal(lib.captionNote(lib.pageView({ phase: "connecting", state: "reconnecting", connectReason: "reconnect" })), "Your mute setting is kept.");
+  assert.deepEqual(lib.claudeHead(lib.claudeView({ busy: true })), { phase: "waxing", label: "Claude", detail: "Working", need: false });
+  assert.equal(lib.claudeHead(lib.claudeView({ busy: true, kind: "permission", text: "rm x" })).label, "Claude is waiting for you");
+  assert.equal(lib.claudeHead(lib.claudeView({ busy: true, kind: "permission", agent: true })).label, "A background agent is waiting for you");
+  assert.equal(lib.claudeHead(lib.claudeView({ busy: false, summary: "Done." })).phase, "full");
+  assert.equal(lib.claudeHead(lib.claudeView({ busy: false })).phase, "new");
+});
+
+test("milestone stars: one per 20 s of Claude's own words, 12 at most, where the bead is", () => {
+  assert.equal(lib.beadPosition(0), 0.05);
+  assert.ok(lib.beadPosition(60_000) > 0.58 && lib.beadPosition(60_000) < 0.59);
+  assert.ok(lib.beadPosition(1e9) <= 0.9);
+  assert.equal(lib.starAlpha(0), 0.92);
+  assert.equal(lib.starAlpha(20 * 60_000), 0.46);
+  assert.equal(lib.starAlpha(10 * 60 * 60_000), 0.3);
+  let st = { stars: [], lastAt: null };
+  const text = { kind: "text", text: "Found the race." };
+  st = lib.milestoneStars(st, { kind: "tool", text: "Running the tests" }, { busy: true, now: 1000, workSince: 0 });
+  assert.equal(st.stars.length, 0);
+  st = lib.milestoneStars(st, text, { busy: false, now: 1000, workSince: 0 });
+  assert.equal(st.stars.length, 0, "not while idle");
+  st = lib.milestoneStars(st, text, { busy: true, now: 30_000, workSince: 0 });
+  assert.deepEqual(st.stars, [{ s: lib.beadPosition(30_000), born: 30_000 }]);
+  const same = lib.milestoneStars(st, text, { busy: true, now: 45_000, workSince: 0 });
+  assert.equal(same, st, "rate-limited to one per 20 s");
+  for (let i = 1; i <= 20; i++) st = lib.milestoneStars(st, text, { busy: true, now: 30_000 + i * 20_000, workSince: 0 });
+  assert.equal(st.stars.length, 12);
+  assert.equal(st.stars[11].born, 430_000);
+});

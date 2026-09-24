@@ -4069,5 +4069,1621 @@
    false
   ],
   "out": "Sotto"
+ },
+ {
+  "fn": "claudeVerb",
+  "args": [
+   "Running the tests"
+  ],
+  "out": "testing"
+ },
+ {
+  "fn": "claudeVerb",
+  "args": [
+   "Editing 3 files"
+  ],
+  "out": "editing"
+ },
+ {
+  "fn": "claudeVerb",
+  "args": [
+   "Looking through the code"
+  ],
+  "out": "reading"
+ },
+ {
+  "fn": "claudeVerb",
+  "args": [
+   "Searching the web"
+  ],
+  "out": "searching"
+ },
+ {
+  "fn": "claudeVerb",
+  "args": [
+   "Building the project"
+  ],
+  "out": "building"
+ },
+ {
+  "fn": "claudeVerb",
+  "args": [
+   "Installing packages"
+  ],
+  "out": "installing"
+ },
+ {
+  "fn": "claudeVerb",
+  "args": [
+   "Render the stills"
+  ],
+  "out": "working"
+ },
+ {
+  "fn": "claudeVerb",
+  "args": [
+   "Using Slack"
+  ],
+  "out": "working"
+ },
+ {
+  "fn": "claudeVerb",
+  "args": [
+   ""
+  ],
+  "out": "working"
+ },
+ {
+  "fn": "headline",
+  "args": [
+   {
+    "view": "live",
+    "dial": "full",
+    "floor": "listening",
+    "word": "Listening",
+    "sub": null,
+    "wordTone": null,
+    "dialHint": null,
+    "steps": null,
+    "card": null,
+    "header": {
+     "key": "live",
+     "label": "Live",
+     "detail": null
+    }
+   },
+   {}
+  ],
+  "out": {
+   "word": "Listening",
+   "tone": null,
+   "news": false
+  }
+ },
+ {
+  "fn": "statusWord",
+  "args": [
+   {
+    "view": "live",
+    "dial": "full",
+    "floor": "listening",
+    "word": "Listening",
+    "sub": null,
+    "wordTone": null,
+    "dialHint": null,
+    "steps": null,
+    "card": null,
+    "header": {
+     "key": "live",
+     "label": "Live",
+     "detail": null
+    }
+   }
+  ],
+  "out": "Live"
+ },
+ {
+  "fn": "captionNote",
+  "args": [
+   {
+    "view": "live",
+    "dial": "full",
+    "floor": "listening",
+    "word": "Listening",
+    "sub": null,
+    "wordTone": null,
+    "dialHint": null,
+    "steps": null,
+    "card": null,
+    "header": {
+     "key": "live",
+     "label": "Live",
+     "detail": null
+    }
+   }
+  ],
+  "out": null
+ },
+ {
+  "fn": "headline",
+  "args": [
+   {
+    "view": "live",
+    "dial": "full",
+    "floor": "you",
+    "word": "Hearing you",
+    "sub": null,
+    "wordTone": null,
+    "dialHint": null,
+    "steps": null,
+    "card": null,
+    "header": {
+     "key": "live",
+     "label": "Live",
+     "detail": null
+    }
+   },
+   {
+    "attention": true,
+    "busy": true
+   }
+  ],
+  "out": {
+   "word": "Hearing you",
+   "tone": "you",
+   "news": false
+  }
+ },
+ {
+  "fn": "statusWord",
+  "args": [
+   {
+    "view": "live",
+    "dial": "full",
+    "floor": "you",
+    "word": "Hearing you",
+    "sub": null,
+    "wordTone": null,
+    "dialHint": null,
+    "steps": null,
+    "card": null,
+    "header": {
+     "key": "live",
+     "label": "Live",
+     "detail": null
+    }
+   }
+  ],
+  "out": "Live"
+ },
+ {
+  "fn": "captionNote",
+  "args": [
+   {
+    "view": "live",
+    "dial": "full",
+    "floor": "you",
+    "word": "Hearing you",
+    "sub": null,
+    "wordTone": null,
+    "dialHint": null,
+    "steps": null,
+    "card": null,
+    "header": {
+     "key": "live",
+     "label": "Live",
+     "detail": null
+    }
+   }
+  ],
+  "out": null
+ },
+ {
+  "fn": "headline",
+  "args": [
+   {
+    "view": "live",
+    "dial": "full",
+    "floor": "voice",
+    "word": "Speaking",
+    "sub": null,
+    "wordTone": null,
+    "dialHint": null,
+    "steps": null,
+    "card": null,
+    "header": {
+     "key": "live",
+     "label": "Live",
+     "detail": null
+    }
+   },
+   {
+    "busy": true,
+    "tool": "Running the tests"
+   }
+  ],
+  "out": {
+   "word": "Speaking",
+   "tone": null,
+   "news": false
+  }
+ },
+ {
+  "fn": "statusWord",
+  "args": [
+   {
+    "view": "live",
+    "dial": "full",
+    "floor": "voice",
+    "word": "Speaking",
+    "sub": null,
+    "wordTone": null,
+    "dialHint": null,
+    "steps": null,
+    "card": null,
+    "header": {
+     "key": "live",
+     "label": "Live",
+     "detail": null
+    }
+   }
+  ],
+  "out": "Live"
+ },
+ {
+  "fn": "captionNote",
+  "args": [
+   {
+    "view": "live",
+    "dial": "full",
+    "floor": "voice",
+    "word": "Speaking",
+    "sub": null,
+    "wordTone": null,
+    "dialHint": null,
+    "steps": null,
+    "card": null,
+    "header": {
+     "key": "live",
+     "label": "Live",
+     "detail": null
+    }
+   }
+  ],
+  "out": null
+ },
+ {
+  "fn": "headline",
+  "args": [
+   {
+    "view": "live",
+    "dial": "full",
+    "floor": "listening",
+    "word": "Approve in the terminal",
+    "sub": "Listening",
+    "wordTone": "attn",
+    "dialHint": null,
+    "steps": null,
+    "card": null,
+    "header": {
+     "key": "attention",
+     "label": "Approval needed",
+     "detail": null
+    }
+   },
+   {
+    "attention": true,
+    "busy": true
+   }
+  ],
+  "out": {
+   "word": "Approve in the terminal",
+   "tone": "attn",
+   "news": true
+  }
+ },
+ {
+  "fn": "statusWord",
+  "args": [
+   {
+    "view": "live",
+    "dial": "full",
+    "floor": "listening",
+    "word": "Approve in the terminal",
+    "sub": "Listening",
+    "wordTone": "attn",
+    "dialHint": null,
+    "steps": null,
+    "card": null,
+    "header": {
+     "key": "attention",
+     "label": "Approval needed",
+     "detail": null
+    }
+   }
+  ],
+  "out": "Needs you"
+ },
+ {
+  "fn": "captionNote",
+  "args": [
+   {
+    "view": "live",
+    "dial": "full",
+    "floor": "listening",
+    "word": "Approve in the terminal",
+    "sub": "Listening",
+    "wordTone": "attn",
+    "dialHint": null,
+    "steps": null,
+    "card": null,
+    "header": {
+     "key": "attention",
+     "label": "Approval needed",
+     "detail": null
+    }
+   }
+  ],
+  "out": null
+ },
+ {
+  "fn": "headline",
+  "args": [
+   {
+    "view": "live",
+    "dial": "full",
+    "floor": "muted",
+    "word": "Approve in the terminal",
+    "sub": "Muted · Sotto can't hear you",
+    "wordTone": "attn",
+    "dialHint": null,
+    "steps": null,
+    "card": null,
+    "header": {
+     "key": "attention",
+     "label": "Approval needed",
+     "detail": "Muted"
+    }
+   },
+   {
+    "attention": true,
+    "busy": true
+   }
+  ],
+  "out": {
+   "word": "Approve in the terminal",
+   "tone": "attn",
+   "news": true
+  }
+ },
+ {
+  "fn": "statusWord",
+  "args": [
+   {
+    "view": "live",
+    "dial": "full",
+    "floor": "muted",
+    "word": "Approve in the terminal",
+    "sub": "Muted · Sotto can't hear you",
+    "wordTone": "attn",
+    "dialHint": null,
+    "steps": null,
+    "card": null,
+    "header": {
+     "key": "attention",
+     "label": "Approval needed",
+     "detail": "Muted"
+    }
+   }
+  ],
+  "out": "Needs you"
+ },
+ {
+  "fn": "captionNote",
+  "args": [
+   {
+    "view": "live",
+    "dial": "full",
+    "floor": "muted",
+    "word": "Approve in the terminal",
+    "sub": "Muted · Sotto can't hear you",
+    "wordTone": "attn",
+    "dialHint": null,
+    "steps": null,
+    "card": null,
+    "header": {
+     "key": "attention",
+     "label": "Approval needed",
+     "detail": "Muted"
+    }
+   }
+  ],
+  "out": "Sotto can't hear you. Still billing. Press M to listen."
+ },
+ {
+  "fn": "headline",
+  "args": [
+   {
+    "view": "live",
+    "dial": "full",
+    "floor": "muted",
+    "word": "Muted",
+    "sub": "Sotto can't hear you. Still billing.",
+    "wordTone": null,
+    "dialHint": null,
+    "steps": null,
+    "card": null,
+    "header": {
+     "key": "muted",
+     "label": "Muted",
+     "detail": "Still billing"
+    }
+   },
+   {
+    "busy": true,
+    "tool": "Running the tests"
+   }
+  ],
+  "out": {
+   "word": "Muted",
+   "tone": "muted",
+   "news": false
+  }
+ },
+ {
+  "fn": "statusWord",
+  "args": [
+   {
+    "view": "live",
+    "dial": "full",
+    "floor": "muted",
+    "word": "Muted",
+    "sub": "Sotto can't hear you. Still billing.",
+    "wordTone": null,
+    "dialHint": null,
+    "steps": null,
+    "card": null,
+    "header": {
+     "key": "muted",
+     "label": "Muted",
+     "detail": "Still billing"
+    }
+   }
+  ],
+  "out": "Muted"
+ },
+ {
+  "fn": "captionNote",
+  "args": [
+   {
+    "view": "live",
+    "dial": "full",
+    "floor": "muted",
+    "word": "Muted",
+    "sub": "Sotto can't hear you. Still billing.",
+    "wordTone": null,
+    "dialHint": null,
+    "steps": null,
+    "card": null,
+    "header": {
+     "key": "muted",
+     "label": "Muted",
+     "detail": "Still billing"
+    }
+   }
+  ],
+  "out": "Sotto can't hear you. Still billing. Press M to listen."
+ },
+ {
+  "fn": "headline",
+  "args": [
+   {
+    "view": "live",
+    "dial": "full",
+    "floor": "listening",
+    "word": "Listening",
+    "sub": null,
+    "wordTone": null,
+    "dialHint": null,
+    "steps": null,
+    "card": null,
+    "header": {
+     "key": "live",
+     "label": "Live",
+     "detail": null
+    }
+   },
+   {
+    "busy": true,
+    "tool": "Editing a file"
+   }
+  ],
+  "out": {
+   "word": "Claude is editing",
+   "tone": null,
+   "news": true
+  }
+ },
+ {
+  "fn": "statusWord",
+  "args": [
+   {
+    "view": "live",
+    "dial": "full",
+    "floor": "listening",
+    "word": "Listening",
+    "sub": null,
+    "wordTone": null,
+    "dialHint": null,
+    "steps": null,
+    "card": null,
+    "header": {
+     "key": "live",
+     "label": "Live",
+     "detail": null
+    }
+   }
+  ],
+  "out": "Live"
+ },
+ {
+  "fn": "captionNote",
+  "args": [
+   {
+    "view": "live",
+    "dial": "full",
+    "floor": "listening",
+    "word": "Listening",
+    "sub": null,
+    "wordTone": null,
+    "dialHint": null,
+    "steps": null,
+    "card": null,
+    "header": {
+     "key": "live",
+     "label": "Live",
+     "detail": null
+    }
+   }
+  ],
+  "out": null
+ },
+ {
+  "fn": "headline",
+  "args": [
+   {
+    "view": "live",
+    "dial": "full",
+    "floor": "listening",
+    "word": "Listening",
+    "sub": null,
+    "wordTone": null,
+    "dialHint": null,
+    "steps": null,
+    "card": null,
+    "header": {
+     "key": "live",
+     "label": "Live",
+     "detail": null
+    }
+   },
+   {
+    "busy": true
+   }
+  ],
+  "out": {
+   "word": "Claude is working",
+   "tone": null,
+   "news": true
+  }
+ },
+ {
+  "fn": "statusWord",
+  "args": [
+   {
+    "view": "live",
+    "dial": "full",
+    "floor": "listening",
+    "word": "Listening",
+    "sub": null,
+    "wordTone": null,
+    "dialHint": null,
+    "steps": null,
+    "card": null,
+    "header": {
+     "key": "live",
+     "label": "Live",
+     "detail": null
+    }
+   }
+  ],
+  "out": "Live"
+ },
+ {
+  "fn": "captionNote",
+  "args": [
+   {
+    "view": "live",
+    "dial": "full",
+    "floor": "listening",
+    "word": "Listening",
+    "sub": null,
+    "wordTone": null,
+    "dialHint": null,
+    "steps": null,
+    "card": null,
+    "header": {
+     "key": "live",
+     "label": "Live",
+     "detail": null
+    }
+   }
+  ],
+  "out": null
+ },
+ {
+  "fn": "headline",
+  "args": [
+   {
+    "view": "live",
+    "dial": "full",
+    "floor": "listening",
+    "word": "Listening",
+    "sub": null,
+    "wordTone": null,
+    "dialHint": null,
+    "steps": null,
+    "card": null,
+    "header": {
+     "key": "live",
+     "label": "Live",
+     "detail": null
+    }
+   },
+   {
+    "question": true,
+    "busy": true
+   }
+  ],
+  "out": {
+   "word": "Answer in the terminal",
+   "tone": "attn",
+   "news": true
+  }
+ },
+ {
+  "fn": "statusWord",
+  "args": [
+   {
+    "view": "live",
+    "dial": "full",
+    "floor": "listening",
+    "word": "Listening",
+    "sub": null,
+    "wordTone": null,
+    "dialHint": null,
+    "steps": null,
+    "card": null,
+    "header": {
+     "key": "live",
+     "label": "Live",
+     "detail": null
+    }
+   }
+  ],
+  "out": "Live"
+ },
+ {
+  "fn": "captionNote",
+  "args": [
+   {
+    "view": "live",
+    "dial": "full",
+    "floor": "listening",
+    "word": "Listening",
+    "sub": null,
+    "wordTone": null,
+    "dialHint": null,
+    "steps": null,
+    "card": null,
+    "header": {
+     "key": "live",
+     "label": "Live",
+     "detail": null
+    }
+   }
+  ],
+  "out": null
+ },
+ {
+  "fn": "headline",
+  "args": [
+   {
+    "view": "live",
+    "dial": "full",
+    "floor": "listening",
+    "word": "Listening",
+    "sub": null,
+    "wordTone": null,
+    "dialHint": null,
+    "steps": null,
+    "card": null,
+    "header": {
+     "key": "live",
+     "label": "Live",
+     "detail": null
+    }
+   },
+   {
+    "finishedAt": 971000,
+    "now": 1000000
+   }
+  ],
+  "out": {
+   "word": "Claude finished",
+   "tone": null,
+   "news": true
+  }
+ },
+ {
+  "fn": "statusWord",
+  "args": [
+   {
+    "view": "live",
+    "dial": "full",
+    "floor": "listening",
+    "word": "Listening",
+    "sub": null,
+    "wordTone": null,
+    "dialHint": null,
+    "steps": null,
+    "card": null,
+    "header": {
+     "key": "live",
+     "label": "Live",
+     "detail": null
+    }
+   }
+  ],
+  "out": "Live"
+ },
+ {
+  "fn": "captionNote",
+  "args": [
+   {
+    "view": "live",
+    "dial": "full",
+    "floor": "listening",
+    "word": "Listening",
+    "sub": null,
+    "wordTone": null,
+    "dialHint": null,
+    "steps": null,
+    "card": null,
+    "header": {
+     "key": "live",
+     "label": "Live",
+     "detail": null
+    }
+   }
+  ],
+  "out": null
+ },
+ {
+  "fn": "headline",
+  "args": [
+   {
+    "view": "live",
+    "dial": "full",
+    "floor": "listening",
+    "word": "Listening",
+    "sub": null,
+    "wordTone": null,
+    "dialHint": null,
+    "steps": null,
+    "card": null,
+    "header": {
+     "key": "live",
+     "label": "Live",
+     "detail": null
+    }
+   },
+   {
+    "finishedAt": 970000,
+    "now": 1000000
+   }
+  ],
+  "out": {
+   "word": "Listening",
+   "tone": null,
+   "news": false
+  }
+ },
+ {
+  "fn": "statusWord",
+  "args": [
+   {
+    "view": "live",
+    "dial": "full",
+    "floor": "listening",
+    "word": "Listening",
+    "sub": null,
+    "wordTone": null,
+    "dialHint": null,
+    "steps": null,
+    "card": null,
+    "header": {
+     "key": "live",
+     "label": "Live",
+     "detail": null
+    }
+   }
+  ],
+  "out": "Live"
+ },
+ {
+  "fn": "captionNote",
+  "args": [
+   {
+    "view": "live",
+    "dial": "full",
+    "floor": "listening",
+    "word": "Listening",
+    "sub": null,
+    "wordTone": null,
+    "dialHint": null,
+    "steps": null,
+    "card": null,
+    "header": {
+     "key": "live",
+     "label": "Live",
+     "detail": null
+    }
+   }
+  ],
+  "out": null
+ },
+ {
+  "fn": "headline",
+  "args": [
+   {
+    "view": "live",
+    "dial": "full",
+    "floor": "connecting",
+    "word": "Connecting",
+    "sub": "Connecting to the voice service…",
+    "wordTone": null,
+    "dialHint": null,
+    "steps": [
+     {
+      "key": "mic",
+      "label": "Microphone on",
+      "state": "active"
+     },
+     {
+      "key": "network",
+      "label": "Reaching the voice service",
+      "state": "pending"
+     },
+     {
+      "key": "session",
+      "label": "Starting the session",
+      "state": "pending"
+     }
+    ],
+    "card": null,
+    "header": {
+     "key": "connecting",
+     "label": "Connecting",
+     "detail": null
+    }
+   },
+   {
+    "busy": true
+   }
+  ],
+  "out": {
+   "word": "Connecting",
+   "tone": null,
+   "news": false
+  }
+ },
+ {
+  "fn": "statusWord",
+  "args": [
+   {
+    "view": "live",
+    "dial": "full",
+    "floor": "connecting",
+    "word": "Connecting",
+    "sub": "Connecting to the voice service…",
+    "wordTone": null,
+    "dialHint": null,
+    "steps": [
+     {
+      "key": "mic",
+      "label": "Microphone on",
+      "state": "active"
+     },
+     {
+      "key": "network",
+      "label": "Reaching the voice service",
+      "state": "pending"
+     },
+     {
+      "key": "session",
+      "label": "Starting the session",
+      "state": "pending"
+     }
+    ],
+    "card": null,
+    "header": {
+     "key": "connecting",
+     "label": "Connecting",
+     "detail": null
+    }
+   }
+  ],
+  "out": "Connecting"
+ },
+ {
+  "fn": "captionNote",
+  "args": [
+   {
+    "view": "live",
+    "dial": "full",
+    "floor": "connecting",
+    "word": "Connecting",
+    "sub": "Connecting to the voice service…",
+    "wordTone": null,
+    "dialHint": null,
+    "steps": [
+     {
+      "key": "mic",
+      "label": "Microphone on",
+      "state": "active"
+     },
+     {
+      "key": "network",
+      "label": "Reaching the voice service",
+      "state": "pending"
+     },
+     {
+      "key": "session",
+      "label": "Starting the session",
+      "state": "pending"
+     }
+    ],
+    "card": null,
+    "header": {
+     "key": "connecting",
+     "label": "Connecting",
+     "detail": null
+    }
+   }
+  ],
+  "out": "Connecting to the voice service…"
+ },
+ {
+  "fn": "headline",
+  "args": [
+   {
+    "view": "card",
+    "dial": "small",
+    "floor": "sleeping",
+    "word": "Sleeping",
+    "sub": "Speak to wake it",
+    "wordTone": null,
+    "dialHint": null,
+    "steps": null,
+    "card": {
+     "pending": null,
+     "button": "Wake now",
+     "action": "resume",
+     "kbd": true,
+     "steps": null,
+     "arrow": false,
+     "keyInput": false,
+     "tone": "neutral",
+     "secondary": true,
+     "kind": "sleeping",
+     "title": "Sleeping",
+     "body": "Voice wakes up when you speak. Nothing is sent or billed until then.",
+     "listening": false
+    },
+    "header": {
+     "detail": null,
+     "key": "sleeping",
+     "label": "Sleeping"
+    }
+   },
+   {}
+  ],
+  "out": {
+   "word": "Sleeping",
+   "tone": null,
+   "news": false
+  }
+ },
+ {
+  "fn": "statusWord",
+  "args": [
+   {
+    "view": "card",
+    "dial": "small",
+    "floor": "sleeping",
+    "word": "Sleeping",
+    "sub": "Speak to wake it",
+    "wordTone": null,
+    "dialHint": null,
+    "steps": null,
+    "card": {
+     "pending": null,
+     "button": "Wake now",
+     "action": "resume",
+     "kbd": true,
+     "steps": null,
+     "arrow": false,
+     "keyInput": false,
+     "tone": "neutral",
+     "secondary": true,
+     "kind": "sleeping",
+     "title": "Sleeping",
+     "body": "Voice wakes up when you speak. Nothing is sent or billed until then.",
+     "listening": false
+    },
+    "header": {
+     "detail": null,
+     "key": "sleeping",
+     "label": "Sleeping"
+    }
+   }
+  ],
+  "out": "Sleeping"
+ },
+ {
+  "fn": "captionNote",
+  "args": [
+   {
+    "view": "card",
+    "dial": "small",
+    "floor": "sleeping",
+    "word": "Sleeping",
+    "sub": "Speak to wake it",
+    "wordTone": null,
+    "dialHint": null,
+    "steps": null,
+    "card": {
+     "pending": null,
+     "button": "Wake now",
+     "action": "resume",
+     "kbd": true,
+     "steps": null,
+     "arrow": false,
+     "keyInput": false,
+     "tone": "neutral",
+     "secondary": true,
+     "kind": "sleeping",
+     "title": "Sleeping",
+     "body": "Voice wakes up when you speak. Nothing is sent or billed until then.",
+     "listening": false
+    },
+    "header": {
+     "detail": null,
+     "key": "sleeping",
+     "label": "Sleeping"
+    }
+   }
+  ],
+  "out": null
+ },
+ {
+  "fn": "headline",
+  "args": [
+   {
+    "view": "card",
+    "dial": "small",
+    "floor": "paused",
+    "word": "Paused",
+    "sub": null,
+    "wordTone": null,
+    "dialHint": null,
+    "steps": null,
+    "card": {
+     "pending": null,
+     "button": "Resume",
+     "action": "resume",
+     "kbd": true,
+     "steps": null,
+     "arrow": false,
+     "keyInput": false,
+     "tone": "neutral",
+     "secondary": false,
+     "kind": "paused",
+     "title": "Paused after 5 minutes of silence",
+     "body": "Resume to keep talking with Claude Code. Nothing is billed while paused."
+    },
+    "header": {
+     "detail": null,
+     "key": "paused",
+     "label": "Paused"
+    }
+   },
+   {
+    "busy": true
+   }
+  ],
+  "out": {
+   "word": "Paused",
+   "tone": null,
+   "news": false
+  }
+ },
+ {
+  "fn": "statusWord",
+  "args": [
+   {
+    "view": "card",
+    "dial": "small",
+    "floor": "paused",
+    "word": "Paused",
+    "sub": null,
+    "wordTone": null,
+    "dialHint": null,
+    "steps": null,
+    "card": {
+     "pending": null,
+     "button": "Resume",
+     "action": "resume",
+     "kbd": true,
+     "steps": null,
+     "arrow": false,
+     "keyInput": false,
+     "tone": "neutral",
+     "secondary": false,
+     "kind": "paused",
+     "title": "Paused after 5 minutes of silence",
+     "body": "Resume to keep talking with Claude Code. Nothing is billed while paused."
+    },
+    "header": {
+     "detail": null,
+     "key": "paused",
+     "label": "Paused"
+    }
+   }
+  ],
+  "out": "Paused"
+ },
+ {
+  "fn": "captionNote",
+  "args": [
+   {
+    "view": "card",
+    "dial": "small",
+    "floor": "paused",
+    "word": "Paused",
+    "sub": null,
+    "wordTone": null,
+    "dialHint": null,
+    "steps": null,
+    "card": {
+     "pending": null,
+     "button": "Resume",
+     "action": "resume",
+     "kbd": true,
+     "steps": null,
+     "arrow": false,
+     "keyInput": false,
+     "tone": "neutral",
+     "secondary": false,
+     "kind": "paused",
+     "title": "Paused after 5 minutes of silence",
+     "body": "Resume to keep talking with Claude Code. Nothing is billed while paused."
+    },
+    "header": {
+     "detail": null,
+     "key": "paused",
+     "label": "Paused"
+    }
+   }
+  ],
+  "out": null
+ },
+ {
+  "fn": "headline",
+  "args": [
+   {
+    "view": "card",
+    "dial": "small",
+    "floor": "error",
+    "word": "Stopped",
+    "sub": null,
+    "wordTone": null,
+    "dialHint": null,
+    "steps": null,
+    "card": {
+     "pending": null,
+     "button": "Try again",
+     "action": "resume",
+     "kbd": true,
+     "steps": null,
+     "arrow": false,
+     "keyInput": false,
+     "tone": "err",
+     "secondary": false,
+     "kind": "mic-notfound",
+     "title": "No microphone found",
+     "body": "Connect a microphone or headset, then try again."
+    },
+    "header": {
+     "detail": null,
+     "key": "error",
+     "label": "No mic"
+    }
+   },
+   {}
+  ],
+  "out": {
+   "word": "No mic",
+   "tone": "err",
+   "news": false
+  }
+ },
+ {
+  "fn": "statusWord",
+  "args": [
+   {
+    "view": "card",
+    "dial": "small",
+    "floor": "error",
+    "word": "Stopped",
+    "sub": null,
+    "wordTone": null,
+    "dialHint": null,
+    "steps": null,
+    "card": {
+     "pending": null,
+     "button": "Try again",
+     "action": "resume",
+     "kbd": true,
+     "steps": null,
+     "arrow": false,
+     "keyInput": false,
+     "tone": "err",
+     "secondary": false,
+     "kind": "mic-notfound",
+     "title": "No microphone found",
+     "body": "Connect a microphone or headset, then try again."
+    },
+    "header": {
+     "detail": null,
+     "key": "error",
+     "label": "No mic"
+    }
+   }
+  ],
+  "out": "No mic"
+ },
+ {
+  "fn": "captionNote",
+  "args": [
+   {
+    "view": "card",
+    "dial": "small",
+    "floor": "error",
+    "word": "Stopped",
+    "sub": null,
+    "wordTone": null,
+    "dialHint": null,
+    "steps": null,
+    "card": {
+     "pending": null,
+     "button": "Try again",
+     "action": "resume",
+     "kbd": true,
+     "steps": null,
+     "arrow": false,
+     "keyInput": false,
+     "tone": "err",
+     "secondary": false,
+     "kind": "mic-notfound",
+     "title": "No microphone found",
+     "body": "Connect a microphone or headset, then try again."
+    },
+    "header": {
+     "detail": null,
+     "key": "error",
+     "label": "No mic"
+    }
+   }
+  ],
+  "out": null
+ },
+ {
+  "fn": "claudeHead",
+  "args": [
+   {
+    "kind": "idle",
+    "title": "Claude is idle",
+    "request": null,
+    "agents": null
+   }
+  ],
+  "out": {
+   "phase": "new",
+   "label": "Claude",
+   "detail": "Idle",
+   "need": false
+  }
+ },
+ {
+  "fn": "claudeHead",
+  "args": [
+   {
+    "kind": "working",
+    "title": "Claude is working",
+    "step": "Thinking",
+    "secondary": false,
+    "request": null,
+    "agents": null
+   }
+  ],
+  "out": {
+   "phase": "waxing",
+   "label": "Claude",
+   "detail": "Working",
+   "need": false
+  }
+ },
+ {
+  "fn": "claudeHead",
+  "args": [
+   {
+    "kind": "approval",
+    "title": "Claude needs your approval",
+    "command": "rm -rf build",
+    "note": "Waiting for your approval in the terminal",
+    "request": null,
+    "agents": null
+   }
+  ],
+  "out": {
+   "phase": "eclipse",
+   "label": "Claude is waiting for you",
+   "detail": null,
+   "need": true
+  }
+ },
+ {
+  "fn": "claudeHead",
+  "args": [
+   {
+    "kind": "approval",
+    "title": "A background agent needs your approval",
+    "command": "x",
+    "note": "Waiting for your approval in the terminal",
+    "request": null,
+    "agents": null
+   }
+  ],
+  "out": {
+   "phase": "eclipse",
+   "label": "A background agent is waiting for you",
+   "detail": null,
+   "need": true
+  }
+ },
+ {
+  "fn": "claudeHead",
+  "args": [
+   {
+    "kind": "finished",
+    "title": "Claude finished",
+    "summary": "Done.",
+    "request": null,
+    "agents": null
+   }
+  ],
+  "out": {
+   "phase": "full",
+   "label": "Claude",
+   "detail": "Done",
+   "need": false
+  }
+ },
+ {
+  "fn": "beadPosition",
+  "args": [
+   0
+  ],
+  "out": 0.05
+ },
+ {
+  "fn": "beadPosition",
+  "args": [
+   10000
+  ],
+  "out": 0.1805
+ },
+ {
+  "fn": "beadPosition",
+  "args": [
+   60000
+  ],
+  "out": 0.5873
+ },
+ {
+  "fn": "beadPosition",
+  "args": [
+   600000
+  ],
+  "out": 0.9
+ },
+ {
+  "fn": "starAlpha",
+  "args": [
+   0
+  ],
+  "out": 0.92
+ },
+ {
+  "fn": "starAlpha",
+  "args": [
+   60000
+  ],
+  "out": 0.889
+ },
+ {
+  "fn": "starAlpha",
+  "args": [
+   1200000
+  ],
+  "out": 0.46
+ },
+ {
+  "fn": "starAlpha",
+  "args": [
+   36000000
+  ],
+  "out": 0.3
+ },
+ {
+  "fn": "milestoneStars",
+  "args": [
+   {
+    "stars": [],
+    "lastAt": null
+   },
+   {
+    "kind": "tool",
+    "text": "Running the tests"
+   },
+   {
+    "busy": true,
+    "now": 1000,
+    "workSince": 0
+   }
+  ],
+  "out": {
+   "stars": [],
+   "lastAt": null
+  }
+ },
+ {
+  "fn": "milestoneStars",
+  "args": [
+   {
+    "stars": [],
+    "lastAt": null
+   },
+   {
+    "kind": "text",
+    "text": "Found the race."
+   },
+   {
+    "busy": false,
+    "now": 2000,
+    "workSince": 0
+   }
+  ],
+  "out": {
+   "stars": [],
+   "lastAt": null
+  }
+ },
+ {
+  "fn": "milestoneStars",
+  "args": [
+   {
+    "stars": [],
+    "lastAt": null
+   },
+   {
+    "kind": "text",
+    "text": "Found the race."
+   },
+   {
+    "busy": true,
+    "now": 30000,
+    "workSince": 0
+   }
+  ],
+  "out": {
+   "stars": [
+    {
+     "s": 0.3844,
+     "born": 30000
+    }
+   ],
+   "lastAt": 30000
+  }
+ },
+ {
+  "fn": "milestoneStars",
+  "args": [
+   {
+    "stars": [
+     {
+      "s": 0.3844,
+      "born": 30000
+     }
+    ],
+    "lastAt": 30000
+   },
+   {
+    "kind": "text",
+    "text": "Found the race."
+   },
+   {
+    "busy": true,
+    "now": 45000,
+    "workSince": 0
+   }
+  ],
+  "out": {
+   "stars": [
+    {
+     "s": 0.3844,
+     "born": 30000
+    }
+   ],
+   "lastAt": 30000
+  }
+ },
+ {
+  "fn": "milestoneStars",
+  "args": [
+   {
+    "stars": [
+     {
+      "s": 0.3844,
+      "born": 30000
+     }
+    ],
+    "lastAt": 30000
+   },
+   {
+    "kind": "text",
+    "text": "Found the race."
+   },
+   {
+    "busy": true,
+    "now": 50000,
+    "workSince": 0
+   }
+  ],
+  "out": {
+   "stars": [
+    {
+     "s": 0.3844,
+     "born": 30000
+    },
+    {
+     "s": 0.5306,
+     "born": 50000
+    }
+   ],
+   "lastAt": 50000
+  }
  }
 ]

@@ -1421,3 +1421,135 @@ export function formatElapsed(ms) {
   if (t < 3600) return `${Math.floor(t / 60)} min ${t % 60} sec`;
   return formatDuration(t);
 }
+
+// ---- The Filament + Orrery panel (design/concepts-v2/hybrid; SPEC-DEVIATIONS "hybrid panel") ----
+// Pure rules shared with the native app's ViewText (docs/NATIVE.md §5.4, pinned by
+// test/fixtures/native/viewtext.json), so the page and the app say the same words.
+
+/** How long "Claude finished" stays the headline after a turn ends (hybrid §6). */
+export const FINISHED_HEADLINE_MS = 30_000;
+/** A new approval becomes the headline at totality, when the moon covers the peg (hybrid §4.1). */
+export const ECLIPSE_TOTALITY_MS = 750;
+
+// The daemon's plain-words tool lines (daemon/policy.js toolActivity) as one quiet
+// verb. Never a tool line: "Running the tests" is "testing", a Bash description is "working".
+const VERBS = [
+  [/^Running the tests\b/i, "testing"],
+  [/^Editing\b/i, "editing"],
+  [/^(?:Looking through|Reading)\b/i, "reading"],
+  [/^Searching\b/i, "searching"],
+  [/^Building\b/i, "building"],
+  [/^Installing\b/i, "installing"],
+  [/^Checking the code\b/i, "checking"],
+  [/^Committing\b/i, "committing"],
+  [/^Pushing\b/i, "pushing"],
+  [/^Fetching\b/i, "fetching"],
+  [/^Validating\b/i, "validating"],
+  [/^Updating\b/i, "updating"],
+  [/^Downloading\b/i, "downloading"],
+];
+
+/** "Claude is <verb>": the verb for the current tool line, "working" when there is none. */
+export function claudeVerb(tool) {
+  const t = String(tool ?? "").trim();
+  for (const [re, v] of VERBS) if (re.test(t)) return v;
+  return "working";
+}
+
+/**
+ * The headline (the floor word) in the live view (hybrid §6): the floor wins while
+ * someone is talking; otherwise an approval; then Muted (it must never hide behind
+ * Claude's news: the user would talk to a mic that is off); then Claude's news
+ * ("Claude is testing", "Claude finished" for 30 s); else the word pageView chose.
+ * A card view shows its short header label; connecting keeps pageView's word.
+ *
+ * @param {{view:string, floor:string, word:string, wordTone?:string|null}} v  lib.pageView() output
+ * @param {{attention?:boolean, question?:boolean, busy?:boolean, tool?:string, finishedAt?:number|null, now?:number}} c
+ * @returns {{word:string, tone:"attn"|"muted"|"you"|"err"|null, news:boolean}}
+ */
+export function headline(v, c = {}) {
+  const floor = v?.floor;
+  // A card view (paused, sleeping, an error, the key) names the state in one short
+  // word; the card below it carries the sentence.
+  if (v?.view !== "live") return { word: v?.header?.label || v?.word || "", tone: v?.card?.tone === "err" ? "err" : null, news: false };
+  if (!["listening", "you", "voice", "muted"].includes(floor)) return { word: v.word || "", tone: v.wordTone || null, news: false };
+  if (floor === "you") return { word: STAGE_WORDS.you[0], tone: "you", news: false };
+  if (floor === "voice") return { word: STAGE_WORDS.voice[0], tone: null, news: false };
+  if (c.attention) return { word: APPROVAL_WORD, tone: "attn", news: true };
+  if (c.question && c.busy) return { word: "Answer in the terminal", tone: "attn", news: true };
+  if (floor === "muted") return { word: STAGE_WORDS.muted[0], tone: "muted", news: false };
+  if (c.busy) return { word: `Claude is ${claudeVerb(c.tool)}`, tone: null, news: true };
+  const now = Number(c.now) || 0;
+  if (c.finishedAt != null && now >= c.finishedAt && now - c.finishedAt < FINISHED_HEADLINE_MS) return { word: "Claude finished", tone: null, news: true };
+  return { word: STAGE_WORDS.listening[0], tone: null, news: false };
+}
+
+/** The header's status word: pageView's, but an approval reads "Needs you" (hybrid §1). */
+export function statusWord(v) {
+  return v?.header?.key === "attention" && v?.view === "live" ? "Needs you" : v?.header?.label || "";
+}
+
+/**
+ * The one line under the string (hybrid "caption"): a note when the state has one
+ * (muted, reconnecting, waiting), else null and the latest caption shows there.
+ */
+export function captionNote(v) {
+  if (v?.view !== "live") return null;
+  if (v.floor === "muted") return "Sotto can't hear you. Still billing. Press M to listen.";
+  if (v.floor === "connecting" || v.floor === "reconnecting") return v.sub || null;
+  return null;
+}
+
+/**
+ * The Claude row's head (hybrid §3 MoonGlyph): a moon phase instead of a state dot,
+ * "Claude · Working" instead of a title. `m` is lib.claudeView() output.
+ * @returns {{phase:"new"|"waxing"|"eclipse"|"full", label:string, detail:string|null, need:boolean}}
+ */
+export function claudeHead(m) {
+  switch (m?.kind) {
+    case "approval":
+      return { phase: "eclipse", label: String(m.title || "").startsWith("A background agent") ? "A background agent is waiting for you" : "Claude is waiting for you", detail: null, need: true };
+    case "working":
+      return { phase: "waxing", label: "Claude", detail: "Working", need: false };
+    case "finished":
+      return { phase: "full", label: "Claude", detail: "Done", need: false };
+    default:
+      return { phase: "new", label: "Claude", detail: "Idle", need: false };
+  }
+}
+
+// ---- Milestone stars (hybrid §6): each finished Claude step leaves a star on the string ----
+export const STAR_GAP_MS = 20_000;
+export const STAR_MAX = 12;
+export const STAR_HALF_LIFE_MS = 20 * 60_000;
+export const BEAD_TAU_MS = 60_000;
+
+/** Where Claude's bead is on the string (0 = your peg, 1 = the bridge) after `elapsedMs` of work. */
+export function beadPosition(elapsedMs) {
+  const t = Math.max(0, Number(elapsedMs) || 0);
+  return Math.round((0.05 + 0.85 * (1 - Math.exp(-t / BEAD_TAU_MS))) * 10_000) / 10_000;
+}
+
+/** A star's brightness: halves every 20 minutes, never below 0.3. */
+export function starAlpha(ageMs) {
+  const a = Math.max(0, Number(ageMs) || 0);
+  return Math.round(Math.max(0.3, 0.92 * 2 ** (-a / STAR_HALF_LIFE_MS)) * 1000) / 1000;
+}
+
+/**
+ * Fold one `activity` message into the stars (native: StateModel derives the same).
+ * A star is born where the bead is when Claude reports a step in its own words
+ * (kind "text" while busy), at most one per 20 s, at most 12 (oldest out first).
+ * `state` = {stars:[{s, born}], lastAt}; returns a new state (or the same one).
+ * @param {{kind:string, text?:string}} ev
+ * @param {{busy:boolean, now:number, workSince:number|null}} ctx
+ */
+export function milestoneStars(state, ev, ctx) {
+  const st = state && Array.isArray(state.stars) ? state : { stars: [], lastAt: null };
+  if (ev?.kind !== "text" || !String(ev.text || "").trim() || !ctx?.busy) return st;
+  const now = Number(ctx.now) || 0;
+  if (st.lastAt != null && now - st.lastAt < STAR_GAP_MS) return st;
+  const s = beadPosition(ctx.workSince == null ? 0 : now - ctx.workSince);
+  const stars = [...st.stars, { s, born: now }].slice(-STAR_MAX);
+  return { stars, lastAt: now };
+}

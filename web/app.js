@@ -8,8 +8,9 @@
 import * as lib from "./lib.js";
 import * as wakeLib from "./wake.js";
 import * as echoLib from "./echo.js";
-import { createDial } from "./dial.js";
+import { createString, chipWavePath } from "./string.js";
 import * as header from "./header.js";
+import * as panel from "./panel.js";
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -46,7 +47,9 @@ const el = {
   usageCost: $("usage-cost"),
   theme: $("theme"),
   banners: $("banners"),
-  dialCanvas: $("dial-canvas"),
+  stringCanvas: $("string-canvas"),
+  dial: $("dial"),
+  footer: document.querySelector(".bottom"),
   muteBtn: $("mute-btn"),
   stageWord: $("stage-word"),
   stageSub: $("stage-sub"),
@@ -83,6 +86,18 @@ const el = {
   claudeTitle: $("claude-title"),
   claudeAgents: $("claude-agents"),
   claudeTime: $("claude-time"),
+  claudeTimeValue: $("claude-time-value"),
+  claudeMoon: $("claude-moon"),
+  claudeDetail: $("claude-detail"),
+  claudePage: $("claude-page"),
+  claudeFlow: $("claude-flow"),
+  claudeHistory: $("claude-history"),
+  claudeAsk: $("claude-ask"),
+  claudeWhy: $("claude-why"),
+  personaChip: $("persona-chip"),
+  chipWave: $("chip-wave"),
+  chipName: $("chip-name"),
+  chipVoice: $("chip-voice"),
   claudeStep: $("claude-step"),
   claudeCommand: $("claude-command"),
   claudeNote: $("claude-note"),
@@ -119,15 +134,37 @@ const el = {
   stopBtn: $("stop-btn"),
 };
 
-// The voice instrument around the mute button (web/dial.js). Decoration must never
-// take the voice client down: if the canvas cannot be created (no 2D context, a
-// WebKit without an API it uses), the page runs with a dial that draws nothing.
+// The string (web/string.js): the peg, the string, Claude's bead and stars, the
+// eclipse. Decoration must never take the voice client down: if the canvas cannot
+// be created (no 2D context, a WebKit without an API it uses) or throws, the page
+// runs with a string that draws nothing. Its geometry comes from the layout.
+function stringGeometry() {
+  const c = el.stringCanvas.getBoundingClientRect();
+  const peg = el.muteBtn.getBoundingClientRect();
+  const row = el.dial.getBoundingClientRect();
+  const foot = el.footer.getBoundingClientRect();
+  if (!peg.width || !row.width) return null;
+  const pegR = parseFloat(getComputedStyle(document.documentElement).getPropertyValue("--peg-r")) || 22;
+  const pegY = peg.top + peg.height / 2 - c.top;
+  // The static lift behind the string follows it (styles.css body background).
+  document.body.style.setProperty("--lift-y", `${Math.round(pegY)}px`);
+  return { w: c.width, h: c.height, pegX: peg.left + peg.width / 2 - c.left, pegY, pegR, x1: row.right - c.left, frameB: foot.top - c.top - 12 };
+}
 let dial;
 try {
-  dial = createDial(el.dialCanvas);
+  dial = createString(el.stringCanvas, { measure: stringGeometry });
 } catch (err) {
-  console.warn("[sotto] dial unavailable:", err?.message || err);
-  dial = { set() {}, input() {} };
+  console.warn("[sotto] string unavailable:", err?.message || err);
+  dial = { set() {}, input() {}, relayout() {} };
+}
+/** Every call into the string is guarded too: a visual failure never breaks the page. */
+function drawString(method, ...args) {
+  try {
+    dial[method]?.(...args);
+  } catch (err) {
+    console.warn("[sotto] string failed; drawing stops:", err?.message || err);
+    dial = { set() {}, input() {}, relayout() {} };
+  }
 }
 
 // Inside the Sotto desktop app (SPEC §6.16) the bridge defines this before
@@ -267,6 +304,14 @@ const S = {
   agents: 0, // background agents working (SSE activity "agents")
   workSince: null,
   summaryExpanded: false,
+  // The hybrid panel (design/concepts-v2/hybrid): Claude's words this turn (older
+  // ones dim above the newest), milestone stars, and the timing of the eclipse and
+  // of "Claude finished" as the headline.
+  claudeWords: [],
+  stars: { stars: [], lastAt: null },
+  attnAt: null, // when the current approval arrived (the eclipse starts; totality 750 ms later)
+  finishedAt: null,
+  cantHear: false,
   voices: null, // GET /api/voices
   personas: null, // GET /api/personas
   personaBusy: false, // a persona POST is in flight (keeps its help text)
@@ -447,10 +492,22 @@ function handleDaemonMessage(msg) {
       }
       const v = lib.activityView(msg);
       S.activity = { text: v.text, tone: v.tone };
+      // Claude's page: the words said earlier this turn stay above the newest, dimmed.
+      if (msg.kind === "turn_start") S.claudeWords = [];
+      if ((msg.kind === "text" || msg.kind === "turn_end") && S.claudeSays) S.claudeWords = [...S.claudeWords, S.claudeSays].slice(-3);
       if (msg.kind === "turn_start" || msg.kind === "turn_end") { S.claudeSays = ""; S.claudeSaysAt = null; S.claudeTool = ""; }
       if (msg.kind === "text") { S.claudeSays = msg.text || ""; S.claudeSaysAt = Date.now(); }
       if (msg.kind === "tool") S.claudeTool = msg.text || "";
       if (v.busy !== null) setBusy(v.busy);
+      // A step Claude reports in its own words leaves a star on the string (lib.milestoneStars).
+      S.stars = lib.milestoneStars(S.stars, msg, { busy: !!S.busy, now: Date.now(), workSince: S.workSince });
+      if (msg.kind === "turn_end") {
+        // "Claude finished" is the headline for 30 s, then the floor word returns.
+        S.finishedAt = Date.now();
+        clearTimeout(finishedTimer);
+        finishedTimer = setTimeout(render, lib.FINISHED_HEADLINE_MS + 50);
+      }
+      if (msg.kind === "turn_start") S.finishedAt = null;
       if (v.summary) {
         S.summary = v.summary;
         S.summaryExpanded = false;
@@ -890,7 +947,7 @@ const meter = {
     this.detector.reset();
     this.floor.reset();
     wordHold.reset(null);
-    dial.input(0, 0, null, null);
+    drawString("input", 0, 0);
     setFloor(null);
   },
 
@@ -907,18 +964,8 @@ const meter = {
       if (voice > this.vPeak) this.vPeak = voice;
     }
     const live = S.phase === "live";
-    // Spectra only when there is something to show: a quiet window costs two RMS sums per frame.
-    let mBands = null;
-    let vBands = null;
-    if (live && mic > 0.12) {
-      this.analyser.getByteFrequencyData(this.freq);
-      mBands = lib.bandLevels(this.freq, 48, { minBin: 2, maxBin: 120 });
-    }
-    if (live && voice > 0.08) {
-      this.vAnalyser.getByteFrequencyData(this.vFreq);
-      vBands = lib.symmetricProfile(lib.bandLevels(this.vFreq, 12, { minBin: 2, maxBin: 90 }), 72);
-    }
-    dial.input(live ? lib.gateLevel(mic) : 0, live ? lib.gateLevel(voice, 0.08) : 0, mBands, vBands);
+    // A quiet window costs two RMS sums per frame; the string draws only while it moves.
+    drawString("input", live ? lib.gateLevel(mic) : 0, live ? lib.gateLevel(voice, 0.08) : 0);
     if (live) setFloor(this.floor.update(S.muted ? 0 : mic, voice, performance.now()));
     if (live && !S.muted && this.detector.update(value, performance.now())) post("activity");
     if (live) {
@@ -929,7 +976,7 @@ const meter = {
     const zero = silence.sample({ rms: value, now: performance.now(), running: this.ctx?.state === "running" });
     if (zero) micSilent(zero);
     // Quiet: poll at 20 Hz (enough for the floor word and the activity detector);
-    // sound: every frame, so the dial follows the voice.
+    // sound: every frame, so the string follows the voice.
     const quiet = lib.gateLevel(mic) === 0 && lib.gateLevel(voice, 0.08) === 0;
     if (quiet) this.raf = -setTimeout(this.tick, 50);
     else this.raf = requestAnimationFrame(this.tick);
@@ -1709,12 +1756,12 @@ const wake = {
     post("wake_timing", f);
   },
 
-  /** Sleeping: the dial's inner ring shows what the wake detector hears (no audio leaves the machine). */
+  /** Sleeping: the string shivers with what the wake detector hears (no audio leaves the machine). */
   paint(level) {
     const q = Math.round(level * 25) / 25;
     if (q === this.shown) return;
     this.shown = q;
-    if (S.phase !== "live") dial.input(lib.gateLevel(q), 0, null, null);
+    if (S.phase !== "live") drawString("input", 0, 0, q);
   },
 };
 
@@ -2117,6 +2164,25 @@ function attention() {
   return S.claudeKind === "permission" && !!S.busy;
 }
 
+// The eclipse (hybrid §4.1): the string starts it the moment an approval arrives; the
+// words change at totality, 750 ms later, when the moon covers the peg. What is on
+// screen at load, or under Reduce Motion, is shown at once.
+let attnTimer = 0;
+let finishedTimer = 0;
+const reducedMotion = () => !!window.matchMedia?.("(prefers-reduced-motion: reduce)")?.matches;
+function syncAttention() {
+  const a = attention();
+  if (a && S.attnAt == null) {
+    const settled = document.documentElement.dataset.motion === "on";
+    S.attnAt = settled && !reducedMotion() ? Date.now() : Date.now() - lib.ECLIPSE_TOTALITY_MS;
+    clearTimeout(attnTimer);
+    if (settled) attnTimer = setTimeout(render, lib.ECLIPSE_TOTALITY_MS + 20);
+  } else if (!a) S.attnAt = null;
+}
+function totality() {
+  return attention() && S.attnAt != null && Date.now() - S.attnAt >= lib.ECLIPSE_TOTALITY_MS - 5;
+}
+
 function viewMuted() {
   return S.mutePending ? S.mutePending.muted : S.muted;
 }
@@ -2144,7 +2210,7 @@ function computeView() {
     capMinutes: S.status?.today?.cap_minutes,
     pendingResult: S.pendingResult,
     lastError: S.status?.last_error,
-    attention: attention(),
+    attention: totality(),
     host: HOST,
     sleep:
       st === "sleeping"
@@ -2196,6 +2262,9 @@ function announceCard(v) {
 
 function render() {
   syncWake();
+  syncAttention();
+  // The stars are this voice session's: they go when voice ends.
+  if (daemonState() === "off" && S.stars.stars.length) S.stars = { stars: [], lastAt: null };
   const prevFocus = document.activeElement;
   const hadFocus = prevFocus && prevFocus !== document.body && !el.settings.contains(prevFocus);
   const v = computeView();
@@ -2265,35 +2334,45 @@ function renderKeyHint() {
   el.keyHintSpace.hidden = !!a && a.tagName === "BUTTON" && a.matches(":focus-visible");
 }
 
+let lastLayoutKey = "";
 function renderStage(v = computeView()) {
   S.view = v;
   const b = el.body.dataset;
   b.view = v.view;
   b.dial = v.dial;
   b.floor = v.floor;
+  const layoutKey = `${v.view}|${v.card?.kind || ""}|${v.dial}`;
   b.card = v.card?.kind || "";
   b.listening = String(!!v.card?.listening);
+  // A view change can move the peg (the permission card leaves room for its pointer).
+  if (layoutKey !== lastLayoutKey) {
+    lastLayoutKey = layoutKey;
+    drawString("relayout");
+  }
   const linking = v.floor === "connecting" || v.floor === "reconnecting";
-  dial.set({
+  const live = v.view === "live";
+  // The eclipse: crossing (the moon on its way to the peg) until totality, then approval.
+  b.eclipsing = String(live && attention() && !totality());
+  b.eclipse = String(live && totality());
+  drawString("set", {
+    view: v.view,
     floor: v.floor,
-    working: !!S.busy && v.view === "live",
-    attention: attention() && v.view === "live" && !linking,
-    hint: v.dialHint,
-    voiceDown: linking,
+    working: !!S.busy,
+    workSince: S.workSince,
+    attention: attention() && live && !linking,
+    persona: currentPersona(),
+    cantHear: !!S.cantHear,
+    stars: S.stars.stars,
   });
 
-  if (el.stageWord.textContent !== v.word) {
-    // Crossfade instead of a jump: restart a short fade-in on the new word.
-    el.stageWord.dataset.fade = "false";
-    el.stageWord.textContent = v.word;
-    if (v.view === "live") requestAnimationFrame(() => (el.stageWord.dataset.fade = "true"));
-  }
-  el.stageWord.dataset.tone = v.wordTone || "";
-  // In the live view the line under the word keeps its height (CSS min-height), so a
-  // state that has one and a state that has none never move what is below.
-  el.stageSub.hidden = v.view === "live" ? false : !v.sub;
-  el.stageSub.textContent = v.sub || "";
-  el.keyHint.hidden = S.phase !== "live";
+  // The headline: the floor while someone talks, else the approval, Muted, or
+  // Claude's news (lib.headline). It fades in its fixed slot; nothing else moves.
+  const h = lib.headline(v, { attention: totality(), question: S.claudeKind === "question", busy: !!S.busy, tool: S.claudeTool, finishedAt: S.finishedAt, now: Date.now() });
+  panel.paintHeadline(el.stageWord, h, { fade: live });
+  // The line under the string: a note (muted, connecting) or the latest caption.
+  const note = lib.captionNote(v);
+  el.stageSub.hidden = !note || !!v.steps;
+  el.stageSub.textContent = note || "";
   el.keyHintVerb.textContent = v.floor === "muted" ? "to unmute" : "to mute";
   renderKeyHint();
   el.connectSteps.hidden = !v.steps;
@@ -2313,6 +2392,8 @@ function renderStage(v = computeView()) {
   if (!c) return;
   el.overlay.dataset.tone = c.tone;
   el.overlayTitle.textContent = c.title;
+  // The headline already names it ("Sleeping"): the card's title stays for screen readers only.
+  el.overlayTitle.classList.toggle("sr-only", c.title === h.word);
   el.overlayBody.textContent = c.body || "";
   el.overlayBody.hidden = !c.body;
   el.overlaySteps.hidden = !c.steps;
@@ -2367,41 +2448,41 @@ const REQUEST_ACTIVE = new Set(["collecting", "sent", "delivered", "held_suspect
 
 function renderClaude() {
   const d = S.delegations[0] || null;
-  const m = lib.claudeView({
+  const m0 = lib.claudeView({
     busy: !!S.busy, kind: S.claudeKind, text: S.claudeText, agent: !!S.claudeAgent, says: S.claudeSays, saysAt: S.claudeSaysAt,
     tool: S.claudeTool, now: Date.now(), agents: S.agents, summary: S.summary, request: d,
   });
-  el.body.dataset.claude = m.kind;
-  el.claudeTitle.textContent = m.title;
-  el.claudeAgents.hidden = !m.agents;
-  el.claudeAgents.textContent = m.agents || "";
-  el.claudeStep.hidden = m.kind !== "working";
-  if (el.claudeStep.textContent !== (m.step || "")) el.claudeStep.textContent = m.step || "";
-  el.claudeStep.dataset.secondary = String(!!m.secondary);
-  el.claudeCommand.hidden = !(m.kind === "approval" && m.command);
-  el.claudeCommand.textContent = m.command || "";
-  el.claudeNote.hidden = m.kind !== "approval";
-  // While the paused card shows the pending result, don't repeat it.
-  const showSummary = m.kind === "finished";
-  el.summary.hidden = !showSummary;
-  // Claude's markdown, escaped first and then a whitelist of tags (lib.renderMarkdown);
-  // code blocks only in the expanded view.
-  const html = showSummary ? lib.renderMarkdown(m.summary, { code: S.summaryExpanded ? "block" : "omit" }) : "";
-  if (el.summary.dataset.html !== html) { el.summary.innerHTML = html; el.summary.dataset.html = html; }
-  el.claude.dataset.expanded = String(S.summaryExpanded);
-  el.moreBtn.hidden = !showSummary || (m.summary.length < 150 && !/\n\s*\n|```/.test(m.summary));
-  el.moreBtn.textContent = S.summaryExpanded ? "Less" : "More";
-  el.moreBtn.setAttribute("aria-expanded", String(S.summaryExpanded));
+  // Until totality the page stays exactly as it was (the moon is still crossing).
+  const m = m0.kind === "approval" && !totality() ? { ...m0, kind: "working" } : m0;
   const req = m.request;
   const showReq = !!req && (m.kind === "working" || m.kind === "approval" || REQUEST_ACTIVE.has(d?.status));
-  el.claudeRequest.hidden = !showReq;
-  el.claudeRequest.dataset.tone = req?.tone || "";
-  el.claudeRequest.textContent = showReq ? `${req.tone === "error" || req.tone === "warn" ? req.label : "Asked"}: “${req.text}”` : "";
-  renderClaudeTime();
+  // Words already in the final summary are not repeated above it.
+  const flat = (t) => lib.stripMarkdown(t).toLowerCase();
+  const summaryFlat = m.kind === "finished" ? flat(m.summary || "") : "";
+  const history = S.claudeWords.filter((w) => !summaryFlat || !summaryFlat.includes(flat(w)));
+  panel.paintClaude(el, {
+    m,
+    head: lib.claudeHead(m),
+    history,
+    says: S.claudeSays,
+    summary: m.summary || null,
+    expanded: S.summaryExpanded,
+    time: claudeTimeText(),
+    requestLine: showReq ? { tone: req.tone || "", text: `${req.tone === "error" || req.tone === "warn" ? req.label : "Asked"}: “${req.text}”` } : null,
+  });
+}
+
+/** Claude's time: how long it has worked, or in approval how long it has waited. m:ss, tabular. */
+function claudeTimeText() {
+  if (totality()) return lib.formatClock((Date.now() - S.attnAt) / 1000);
+  if (S.busy && S.workSince) return lib.formatClock((Date.now() - S.workSince) / 1000);
+  return null;
 }
 
 function renderClaudeTime() {
-  el.claudeTime.textContent = S.busy && S.workSince ? lib.formatElapsed(Date.now() - S.workSince) : "";
+  const t = claudeTimeText();
+  el.claudeTime.hidden = !t;
+  if (el.claudeTimeValue.textContent !== (t || "")) el.claudeTimeValue.textContent = t || "";
 }
 
 // One 1 s ticker for the session line, the usage chip and the working time; stopped when none shows.
@@ -2424,14 +2505,14 @@ function syncTicker() {
   }
 }
 
-// Captions (design/c-ambient): exactly two lines, the previous one dimmer and the
-// latest one large. No fade mask and no scroller: a line that does not fit is dropped
-// whole, and a latest line that is too long for the room keeps its newest words.
+// Captions: one line under the string (the hybrid panel). No fade mask and no
+// scroller: a line too long for the box keeps its newest words. The voice is named
+// by its persona ("June"), you by "You".
 function fillLine(li, line) {
   li.hidden = !line;
   if (!line) return;
   li.className = `line ${line.role}${li === el.capLatest ? " latest" : ""}`;
-  li.firstElementChild.textContent = lib.speakerLabel(line.role);
+  li.firstElementChild.textContent = line.role === "assistant" ? personaName() : lib.speakerLabel(line.role);
   li.lastElementChild.textContent = line.text;
 }
 
@@ -2478,7 +2559,18 @@ const POLICY_HELP = {
   walkthrough: "Narrates Claude's progress as it goes.",
 };
 
+/** The live persona's id and display name (status first; the picker's list names it). */
+function currentPersona() {
+  return S.personas?.current || S.status?.persona || "sotto";
+}
+function personaName() {
+  const id = currentPersona();
+  const p = S.personas?.personas?.find((x) => x.id === id);
+  return p?.name || (id ? id[0].toUpperCase() + id.slice(1) : "Sotto");
+}
+
 function renderFooter(v = S.view || computeView()) {
+  panel.paintChip(el, { name: personaName(), voice: S.voices?.current || S.status?.voice || "", wave: chipWavePath(currentPersona()) });
   const policy = S.status?.speaking_policy || "milestones";
   for (const b of el.policy.querySelectorAll("button[data-policy]")) {
     const on = b.dataset.policy === policy;
@@ -2573,6 +2665,12 @@ function dismissBanner(b) {
 let bannerShown = "";
 
 function renderBanners() {
+  // "I can't hear you" also shows on the string: it is drawn broken (calm, never red).
+  const ch = banners.some((x) => x.key === "cant_hear");
+  if (ch !== S.cantHear) {
+    S.cantHear = ch;
+    renderStage();
+  }
   const b = banners[0];
   if (!b) {
     bannerShown = "";
@@ -3071,11 +3169,17 @@ el.keyRemoveBtn.addEventListener("click", async () => {
 });
 
 // Settings drawer: a modal <dialog> gives Esc-to-close and focus return for free.
-el.settingsBtn.addEventListener("click", () => {
-  if (el.settings.open) return;
+function openSettings() {
+  if (el.settings.open) return false;
   el.settings.showModal();
   if (!S.voices && S.token) loadVoices();
   if (S.token) loadPersonas(); // custom persona files may have changed
+  return true;
+}
+el.settingsBtn.addEventListener("click", openSettings);
+// The persona chip opens Settings at the persona picker.
+el.personaChip.addEventListener("click", () => {
+  if (openSettings()) requestAnimationFrame(() => el.personaSelect.focus());
 });
 el.settingsClose.addEventListener("click", () => el.settings.close());
 el.settings.addEventListener("close", () => {
@@ -3196,6 +3300,14 @@ renderCaptions();
 // The caption panel's height comes from the layout, not its content, so refitting on
 // resize cannot loop.
 if (typeof ResizeObserver === "function") new ResizeObserver(() => fitCaptions()).observe(el.captionsPanel);
+// Claude's page is a fixed box: a new size re-fits its flow (panel.fitPage), and the
+// string re-measures the peg and the frame.
+if (typeof ResizeObserver === "function") {
+  new ResizeObserver(() => {
+    panel.fitPage(el, el.body.dataset.claude, S.summaryExpanded);
+    drawString("relayout");
+  }).observe(el.claudePage);
+}
 startEvents();
 // Enter animations (banners, cards, Claude's lines) only once the first render has
 // settled: whatever is on screen when the window opens is simply there.

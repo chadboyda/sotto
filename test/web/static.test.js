@@ -78,7 +78,7 @@ test("the voice meter reads an unplayed clone; nothing in web/ plays through Web
   const app = read("app.js");
   assert.ok(app.includes("track.clone()"), "voice meter must meter a clone of the remote track");
   assert.ok(app.includes("el.audio.srcObject = new MediaStream([e.track])"), "the <audio> element plays the remote track");
-  for (const name of ["app.js", "dial.js"]) {
+  for (const name of ["app.js", "string.js", "panel.js"]) {
     const src = stripComments(name, read(name));
     assert.ok(!/\.destination\b/.test(src), `${name}: no WebAudio playback path`);
   }
@@ -101,20 +101,29 @@ test("the page keeps one polite announcer and no live region on the caption stre
   assert.ok(!read("app.js").includes("Unmute microphone"));
 });
 
-test("a dial failure cannot take the page down (createDial is guarded)", () => {
+test("a string failure cannot take the page down (createString and every call are guarded)", () => {
   const app = stripComments("app.js", read("app.js"));
-  assert.match(app, /try\s*\{\s*dial = createDial\(el\.dialCanvas\);\s*\}\s*catch/);
-  assert.doesNotMatch(app, /const dial = createDial/);
-  const dial = stripComments("dial.js", read("dial.js"));
-  assert.match(dial, /if \(!box \|\| !ctx\) return nullDial\(\);/);
-  assert.match(dial, /typeof g\.createConicGradient === "function"/);
+  assert.match(app, /try\s*\{\s*dial = createString\(el\.stringCanvas, \{ measure: stringGeometry \}\);\s*\}\s*catch/);
+  assert.doesNotMatch(app, /const dial = createString/);
+  // Every later call goes through drawString, which swaps in a no-op on a throw.
+  assert.doesNotMatch(app, /\bdial\.(set|input|relayout)\(/);
+  assert.match(app, /function drawString\(method, \.\.\.args\) \{\s*try \{/);
+  const str = stripComments("string.js", read("string.js"));
+  assert.match(str, /if \(!ctx \|\| typeof opts\.measure !== "function"\) return nullString\(\);/);
 });
 
-test("the dial keeps a clear channel between the two voices", async () => {
-  const { GEOMETRY: G } = await import("../../web/dial.js");
-  const innerMax = G.inR + G.inRest + G.inMax;
-  assert.ok(G.outR - innerMax >= 0.05, `channel ${(G.outR - innerMax).toFixed(3)} R`);
-  assert.ok(G.outR + G.outRest + G.outMax < G.bezelR - G.bezelMajor + 0.01, "outer ring stays inside the bezel");
+test("string.js: no context gives a string that draws nothing; personas are tunings", async () => {
+  const s = await import("../../web/string.js");
+  const n = s.createString(null, { measure: () => null });
+  for (const k of ["set", "input", "relayout", "refreshColors", "frame"]) assert.equal(typeof n[k], "function", k);
+  assert.equal(n.animating, false);
+  // Every built-in persona has its own tuning and detent; a custom one borrows a built-in.
+  const ids = ["sotto", "june", "moss", "tempo", "koan", "vic", "pip", "fern"];
+  assert.equal(new Set(ids.map((id) => s.detentFor(id))).size, 8);
+  assert.equal(new Set(ids.map((id) => s.chipWavePath(id))).size, 8);
+  assert.ok(s.tuningFor("my-custom").w.length > 0);
+  assert.equal(s.detentFor("my-custom"), s.detentFor("my-custom"));
+  assert.match(s.chipWavePath("sotto"), /^M8\.00 [\d.]+(L[\d.]+ [\d.]+){22}$/);
 });
 
 test("captions: no fade mask over live text, and no live region on the stream", () => {
