@@ -8,7 +8,7 @@ import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import {
   appBuildState, appPaths, appSourceHash, chooseWindow, createWindow, installPlan, resolveWant, APP_PAGE_TIMEOUT_MS,
-  INSTALL_WAIT_MS, INSTALL_POLL_MS, installFailure, shouldWaitForInstall,
+  INSTALL_WAIT_MS, INSTALL_POLL_MS, installFailure, shouldWaitForInstall, parseAppProcesses, staleAppProcesses, APP_QUIT_WAIT_MS,
 } from "../../daemon/window.js";
 import { RETRY_MS } from "../../daemon/appfetch.js";
 import { CHROME_APP } from "../../daemon/chrome.js";
@@ -146,7 +146,7 @@ describe("app build state and sources hash", () => {
 });
 
 /** createWindow with fakes: records spawns, answers --audio-route and ps. */
-function harness({ env = {}, built = true, release = false, route = { input: { bluetooth: false }, output: { bluetooth: true } }, running = false, platform = "darwin", chrome = true, installWaitMs } = {}) {
+function harness({ env = {}, built = true, release = false, route = { input: { bluetooth: false }, output: { bluetooth: true } }, running = false, platform = "darwin", chrome = true, installWaitMs, procs = null, kill } = {}) {
   const root = fakePlugin();
   if (release) {
     // A versioned plugin with the fetcher: the release download applies.
@@ -186,6 +186,7 @@ function harness({ env = {}, built = true, release = false, route = { input: { b
     execFile: (file, args, opts, cb) => {
       execCalls.push([file, ...args]);
       if (args[0] === "--audio-route") return setImmediate(() => cb(null, JSON.stringify(route)));
+      if (file === "ps" && args[1] === "pid=,lstart=,args=") return setImmediate(() => cb(null, procs ? procs(p.exe) : ""));
       if (file === "ps") return setImmediate(() => cb(null, running ? `/sbin/launchd\n${p.exe}\n` : "/sbin/launchd\n"));
       return setImmediate(() => cb(new Error("unexpected")));
     },
@@ -194,6 +195,7 @@ function harness({ env = {}, built = true, release = false, route = { input: { b
     pageConnected: () => state.page,
     wantsWindow: () => state.wants,
     installWaitMs,
+    ...(kill ? { kill } : {}),
     onInstallResult: (r) => results.push(r),
     log: { info: (ev, o) => logs.push([ev, o]), warn: (ev, o) => logs.push([ev, o]), error: (ev, o) => logs.push([ev, o]) },
   });
@@ -492,5 +494,92 @@ describe("createWindow", () => {
     const never = harness();
     assert.equal(await never.w.kill(), 0);
     assert.equal(never.execCalls.length, 0);
+  });
+});
+
+describe("stale app (SPEC §6.16 \"Stale app\")", () => {
+  const EXE = "/data/app/Sotto.app/Contents/MacOS/Sotto";
+  const PS = [
+    "    1 Thu Sep 17 10:37:03 2026     /sbin/launchd",
+    ` 4957 Thu Sep 24 11:03:35 2026     ${EXE}`,
+    ` 5001 Thu Sep  4 09:00:00 2026     ${EXE} --test`,
+    ` 5002 Thu Sep 24 11:03:35 2026     ${EXE}2`,
+    "garbage line",
+  ].join("\n");
+
+  test("parseAppProcesses finds our executable (with or without arguments) and its start time", () => {
+    const procs = parseAppProcesses(PS, EXE);
+    assert.deepEqual(procs.map((x) => x.pid), [4957, 5001]);
+    assert.equal(procs[0].startMs, new Date(2026, 8, 24, 11, 3, 35).getTime());
+    assert.equal(procs[1].startMs, new Date(2026, 8, 4, 9, 0, 0).getTime());
+    assert.deepEqual(parseAppProcesses("", EXE), []);
+  });
+
+  test("staleAppProcesses: started at least 1 s before the executable was installed", () => {
+    const installed = new Date(2026, 8, 24, 11, 27, 53, 711).getTime();
+    const procs = [{ pid: 1, startMs: installed - 3600_000 }, { pid: 2, startMs: installed - 500 }, { pid: 3, startMs: installed + 5000 }, { pid: 4, startMs: null }];
+    assert.deepEqual(staleAppProcesses(procs, installed).map((x) => x.pid), [1]);
+    assert.deepEqual(staleAppProcesses(procs, NaN), []);
+  });
+
+  test("quitStaleApps: SIGTERM to an app older than the bundle; a launch waits until it is gone", async () => {
+    const signals = [];
+    const alive = new Set([4957]);
+    const kill = (pid, sig) => {
+      if (sig === 0 || sig === undefined) { if (alive.has(pid)) return true; throw Object.assign(new Error("ESRCH"), { code: "ESRCH" }); }
+      signals.push([pid, sig]);
+      alive.delete(pid);
+      return true;
+    };
+    const h = harness({ env: { SOTTO_BROWSER: "app" }, kill, procs: (exe) => ` 4957 Thu Sep 24 11:03:35 2020     ${exe}\n` });
+    const quit = h.w.quitStaleApps("start");
+    h.w.open();
+    assert.equal(h.spawned.length, 0, "the launch waits for the stale app to quit");
+    assert.equal(await quit, 1);
+    await tick();
+    assert.deepEqual(signals, [[4957, "SIGTERM"]]);
+    assert.equal(h.spawned.length, 1);
+    assert.equal(h.spawned[0][0], "open");
+    const l = h.logs.find(([ev]) => ev === "app.stale_quit");
+    assert.deepEqual(l[1].pids, [4957]);
+  });
+
+  test("quitStaleApps: an app started after the install is left alone", async () => {
+    const signals = [];
+    const kill = (pid, sig) => { if (sig) signals.push([pid, sig]); return true; };
+    const h = harness({ kill, procs: (exe) => ` 4957 Thu Sep 24 11:03:35 2099     ${exe}\n` });
+    assert.equal(await h.w.quitStaleApps("start"), 0);
+    assert.deepEqual(signals, []);
+    assert.deepEqual(await h.w.staleApps(), []);
+  });
+
+  test("an app that ignores SIGTERM gets SIGKILL after APP_QUIT_WAIT_MS", async () => {
+    const signals = [];
+    const kill = (pid, sig) => {
+      if (sig === 0 || sig === undefined) { if (!signals.some(([, s]) => s === "SIGKILL")) return true; throw Object.assign(new Error("ESRCH"), { code: "ESRCH" }); }
+      signals.push([pid, sig]);
+      return true;
+    };
+    const h = harness({ kill, procs: (exe) => ` 4957 Thu Sep 24 11:03:35 2020     ${exe}\n` });
+    const quit = h.w.quitStaleApps("install");
+    for (let i = 0; i < 5; i++) await tick();
+    assert.deepEqual(signals, [[4957, "SIGTERM"]]);
+    await h.clock.advance(APP_QUIT_WAIT_MS + 200);
+    assert.equal(await quit, 1);
+    assert.deepEqual(signals, [[4957, "SIGTERM"], [4957, "SIGKILL"]]);
+  });
+
+  test("replaceApp({chrome}): quits the app, and later opens go to Chrome", async () => {
+    const signals = [];
+    const kill = (pid, sig) => { if (sig === 0 || sig === undefined) throw Object.assign(new Error("ESRCH"), { code: "ESRCH" }); signals.push([pid, sig]); return true; };
+    const h = harness({ env: { SOTTO_BROWSER: "app" }, kill, procs: (exe) => ` 777 Thu Sep 24 11:03:35 2099     ${exe}\n` });
+    h.w.open();
+    assert.equal(h.w.appLaunched, true);
+    assert.equal(await h.w.replaceApp({ reason: "mic_silent", chrome: true }), 1);
+    assert.deepEqual(signals, [[777, "SIGTERM"]], "a fresh app quits too: its mic is silent");
+    assert.equal(h.w.appLaunched, false);
+    h.w.open({ force: true });
+    assert.deepEqual(h.browserCalls, ["chrome"]);
+    assert.ok(h.logs.some(([ev, o]) => ev === "app.fallback" && o.reason === "mic_silent"));
   });
 });

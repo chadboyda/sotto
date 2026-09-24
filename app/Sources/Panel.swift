@@ -29,6 +29,8 @@ protocol PanelControllerDelegate: AnyObject {
 }
 
 final class PanelController: NSObject, NSWindowDelegate, WKNavigationDelegate, WKUIDelegate, WKScriptMessageHandler {
+    /// web/lib.js MIC_SETTINGS_URL: System Settings > Privacy & Security > Microphone.
+    static let micSettingsURL = "x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone"
     static let expandedSize = PanelGeometry.defaultSize
     static let pillSize = NSSize(width: 290, height: 44)
     private static let frameKey = "PanelFrame"
@@ -440,6 +442,12 @@ final class PanelController: NSObject, NSWindowDelegate, WKNavigationDelegate, W
         }
         // Anything else leaves the panel and opens in the default browser.
         if action.navigationType == .linkActivated, url.scheme == "https" || url.scheme == "http" { NSWorkspace.shared.open(url) }
+        // The mic-blocked card's "Open System Settings" (Privacy & Security >
+        // Microphone), and only that pane.
+        if action.navigationType == .linkActivated, url.absoluteString == PanelController.micSettingsURL {
+            log.log("open_mic_settings")
+            NSWorkspace.shared.open(url)
+        }
         decisionHandler(.cancel)
     }
 

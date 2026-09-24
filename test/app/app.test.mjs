@@ -240,6 +240,38 @@ describe("desktop app", { skip: SKIP }, () => {
     console.log(`# native mic: gUM ${hidden.gumMs} ms, transport p95 ${p95} ms, peak RMS ${hidden.peakRms.toFixed(3)}`);
   });
 
+  test("silent native capture (exact zeros) falls back to WebKit's capture under the same track", { timeout: 60_000 }, async () => {
+    // SOTTO_APP_MIC_FIXTURE=silence: the app's native capture sends only
+    // exact zeros, what a stale app delivers (SPEC §6.16 "Silent mic").
+    // mic.js must switch to WebKit's (mock) capture after 2 s.
+    const log = path.join(tmp, "silent.jsonl");
+    const child = spawn(EXE, ["--port", String(port), "--k", daemon.issueLaunchCode(), "--data-dir", path.join(tmp, "data"),
+      "--debug-log", log, "--test", "--probe-media", "--probe-seconds", "4", "--exit-after", "12"], {
+      stdio: "ignore",
+      env: { ...process.env, SOTTO_APP_MIC: "native", SOTTO_APP_MIC_FIXTURE: "silence" },
+    });
+    const exited = new Promise((r) => child.on("exit", (c) => r(c)));
+    assert.equal(await Promise.race([exited, sleep(40_000).then(() => "timeout")]), 0);
+    const ev = readLog(log);
+    const find = (name, pred = () => true) => ev.find((e) => e.ev === name && pred(e));
+    const hidden = find("probe_hidden")?.result;
+    assert.ok(hidden && !hidden.error, hidden?.error);
+    const silent = find("native_mic_silent");
+    assert.ok(silent, "the app logged why it left the native capture");
+    assert.equal(silent.reason, "zeros");
+    assert.ok(silent.ms >= 2000, `${silent.ms} ms of zeros`);
+    assert.equal(silent.permission, "granted");
+    assert.equal(silent.bundle_replaced, false);
+    assert.ok(find("media_permission", (e) => e.granted === true), "WebKit capture requested for our origin");
+    assert.equal(hidden.source, "webkit_fallback");
+    assert.equal(hidden.trackState, "live", "the page's track never ended");
+    assert.ok(hidden.lastPeakRms > 0, `sound after the fallback (last peak RMS ${hidden.lastPeakRms})`);
+    const starts = ev.filter((e) => e.ev === "native_mic_start").length;
+    const stops = ev.filter((e) => e.ev === "native_mic_stop").length;
+    assert.ok(starts >= 1 && starts === stops, `${starts} starts, ${stops} stops`);
+    console.log(`# silent native mic: fell back after ${silent.ms} ms, last peak RMS ${hidden.lastPeakRms.toFixed(3)}`);
+  });
+
   test("direct launch: loads the page with the launch code, gets status over SSE, WebRTC works", { timeout: 60_000 }, async () => {
     const log = path.join(tmp, "direct.jsonl");
     const code = daemon.issueLaunchCode();

@@ -111,6 +111,9 @@ export function createDaemon({
   // at the first /talk), not only when a window opens (SPEC §6.16).
   if (!chrome) {
     try { chromeApi.ensureInstalled(); } catch (e) { logger.warn("app.ensure_error", { message: e.message }); }
+    // An app left running from a bundle that has since been replaced has a
+    // silent microphone (SPEC §6.16 "Stale app"): quit it before any launch.
+    voice.checkStaleApp("start").catch((e) => logger.warn("app.stale_error", { message: e.message }));
   }
   if (onRestart) {
     updater = new Updater({

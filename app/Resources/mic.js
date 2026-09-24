@@ -17,12 +17,20 @@
 //
 // enumerateDevices lists the app's inputs (labelled; ids are opaque hashes), so
 // the page's device picker and its Bluetooth -> built-in rule work in both modes.
+//
+// Silent native capture (SPEC §6.16 "Silent mic"): a native capture that
+// delivers only exact zeros (or nothing) for SILENT_MS falls back to WebKit's
+// capture under the SAME track, so the page and its peer connection never
+// notice; the app logs why (op "silent") and the page reports it to the
+// daemon (the "sotto-mic-fallback" event).
 (() => {
   "use strict";
   const H = window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.sottoMic;
   const md = navigator.mediaDevices;
   if (!H || !md || typeof md.getUserMedia !== "function" || window.__sottoMicFeed) return;
   const cfg = window.__sottoMicConfig || {};
+  // No working microphone sends exact zeros this long (a quiet room still has a noise floor).
+  const SILENT_MS = typeof cfg.silentMs === "number" ? cfg.silentMs : 2000;
   const ask = (m) => Promise.resolve(H.postMessage(m));
   const origGUM = md.getUserMedia.bind(md);
   const origEnum = typeof md.enumerateDevices === "function" ? md.enumerateDevices.bind(md) : async () => [];
@@ -140,7 +148,7 @@
       if (plan && plan.error === "NotFoundError") throw domError(isExact(a) ? "OverconstrainedError" : "NotFoundError", "Requested device not found");
       return origGUM(constraints);
     }
-    return plan.mode === "native" ? openNative(plan, want) : openWebKit(plan, want, constraints);
+    return plan.mode === "native" ? openNative(plan, want, constraints) : openWebKit(plan, want, constraints);
   };
 
   function register(c) {
@@ -149,9 +157,11 @@
     const settings = typeof t.getSettings === "function" ? t.getSettings.bind(t) : () => ({});
     t.getSettings = () => {
       const s = settings();
-      const own = c.mode === "native"
-        ? { echoCancellation: false, noiseSuppression: false, autoGainControl: false, sampleRate: 48000, channelCount: 1, sottoSource: "native" }
-        : { sottoSource: "webkit" };
+      const own = c.fallback === "webkit"
+        ? { ...c.fallbackSettings, sampleRate: 48000, channelCount: 1, sottoSource: "webkit_fallback" }
+        : c.mode === "native"
+          ? { echoCancellation: false, noiseSuppression: false, autoGainControl: false, sampleRate: 48000, channelCount: 1, sottoSource: "native" }
+          : { sottoSource: "webkit" };
       return { ...s, ...own, deviceId: c.device || s.deviceId };
     };
     const stop = t.stop.bind(t);
@@ -168,6 +178,8 @@
     captures.delete(c.id);
     if (c.mode !== "native") return;
     clearInterval(c.statsTimer);
+    clearInterval(c.silentTimer);
+    if (c.fallbackStream) c.fallbackStream.getTracks().forEach((t) => t.stop());
     if (c.echo) clearInterval(c.echo.timer);
     sendStats(c);
     ask({ op: "stop", id: c.id }).catch(() => {});
@@ -179,18 +191,22 @@
     c.ctx.close().catch(() => {});
   }
 
-  async function openWebKit(plan, want, constraints) {
-    const audio = typeof constraints.audio === "object" ? { ...constraints.audio } : {};
+  /** WebKit's capture of the device with this label (else WebKit's default device). */
+  async function webkitStream(label, constraints) {
+    const audio = constraints && typeof constraints.audio === "object" ? { ...constraints.audio } : {};
     delete audio.deviceId;
     // Our ids are not WebKit's: map by label (WebKit labels exist once it has
     // captured once; before that, WebKit's default device).
-    const label = plan.device && plan.device.label;
     if (label) {
       const real = await origEnum().catch(() => []);
       const match = real.find((d) => d.kind === "audioinput" && d.label === label && d.deviceId !== "default");
       if (match) audio.deviceId = { exact: match.deviceId };
     }
-    const stream = await origGUM({ ...constraints, audio });
+    return origGUM({ ...(constraints || {}), audio });
+  }
+
+  async function openWebKit(plan, want, constraints) {
+    const stream = await webkitStream(plan.device && plan.device.label, constraints);
     const track = stream.getAudioTracks()[0];
     if (track) register({ id: ++seq, mode: "webkit", track, requested: want, device: plan.device ? String(plan.device.id) : "" });
     return stream;
@@ -259,10 +275,10 @@ registerProcessor("sotto-native-mic", SottoNativeMic);
 `;
   let workletUrl = null;
 
-  async function openNative(plan, want) {
+  async function openNative(plan, want, constraints) {
     const id = ++seq;
     const ctx = new AudioContext({ sampleRate: 48000, latencyHint: "interactive" });
-    const c = { id, mode: "native", ctx, requested: want, device: String(plan.device.id), label: String(plan.device.label || ""), lat: [], chunks: 0 };
+    const c = { id, mode: "native", ctx, constraints, requested: want, device: String(plan.device.id), label: String(plan.device.label || ""), lat: [], chunks: 0, zeroMs: 0, lastChunkAt: 0, startedAt: 0 };
     try {
       workletUrl = workletUrl || URL.createObjectURL(new Blob([WORKLET], { type: "application/javascript" }));
       await ctx.audioWorklet.addModule(workletUrl);
@@ -273,6 +289,7 @@ registerProcessor("sotto-native-mic", SottoNativeMic);
       // Keep the graph pulled even where a stream destination alone is not.
       const keep = ctx.createGain();
       keep.gain.value = 0;
+      c.keep = keep;
       c.node.connect(keep).connect(ctx.destination);
       c.node.port.onmessage = (e) => onWorkletStats(c, e.data);
       captures.set(id, c); // before start: the first chunks arrive right after
@@ -290,12 +307,79 @@ registerProcessor("sotto-native-mic", SottoNativeMic);
       register(c);
       attachEcho(c);
       c.statsTimer = setInterval(() => c.node.port.postMessage({ op: "stats" }), 2000);
+      // No chunks at all (the capture never really started) counts as silence too.
+      c.startedAt = Date.now();
+      c.silentTimer = setInterval(() => {
+        const last = c.lastChunkAt || c.startedAt;
+        if (!c.fallback && Date.now() - last >= SILENT_MS) fallbackToWebKit(c, "no_audio");
+      }, 500);
       return new MediaStream([c.track]);
     } catch (err) {
       captures.delete(id);
       ask({ op: "stop", id }).catch(() => {});
       ctx.close().catch(() => {});
       throw err;
+    }
+  }
+
+  /**
+   * The native capture is silent: capture with WebKit instead and feed the SAME
+   * track (the page's peer connection keeps its sender). WebKit's capture uses
+   * Apple voice processing, so on AirPods it may switch them to the hands-free
+   * profile; hearing the user comes first.
+   */
+  async function fallbackToWebKit(c, reason) {
+    if (c.fallback || c.released) return;
+    c.fallback = "pending";
+    const ms = Math.round(reason === "zeros" ? c.zeroMs : Date.now() - (c.lastChunkAt || c.startedAt));
+    let info = null;
+    try {
+      info = await ask({ op: "silent", id: c.id, reason, ms, chunks: c.chunks });
+    } catch {
+      /* app side gone */
+    }
+    ask({ op: "stop", id: c.id }).catch(() => {});
+    let ok = false;
+    try {
+      const stream = await webkitStream(c.label, c.constraints);
+      if (c.released) {
+        stream.getTracks().forEach((t) => t.stop());
+        return;
+      }
+      const t = stream.getAudioTracks()[0];
+      let st = {};
+      try {
+        st = t && typeof t.getSettings === "function" ? t.getSettings() : {};
+      } catch {
+        /* ignore */
+      }
+      c.fallbackStream = stream;
+      c.fallbackSettings = { echoCancellation: !!st.echoCancellation, noiseSuppression: !!st.noiseSuppression, autoGainControl: !!st.autoGainControl };
+      try {
+        c.node.disconnect();
+      } catch {
+        /* ignore */
+      }
+      const src = c.ctx.createMediaStreamSource(stream);
+      src.connect(c.dest);
+      src.connect(c.keep);
+      c.fallbackSource = src;
+      c.fallback = "webkit";
+      ok = true;
+    } catch (err) {
+      c.fallback = "failed";
+      c.fallbackError = String((err && err.name) || "Error");
+    }
+    const detail = {
+      from: "native", to: ok ? "webkit" : "none", reason, ms, label: c.label, ok,
+      permission: info && info.permission, bundleReplaced: !!(info && info.bundleReplaced),
+    };
+    try {
+      if (typeof window.dispatchEvent === "function" && typeof window.CustomEvent === "function") {
+        window.dispatchEvent(new window.CustomEvent("sotto-mic-fallback", { detail }));
+      }
+    } catch {
+      /* ignore */
     }
   }
 
@@ -328,10 +412,23 @@ registerProcessor("sotto-native-mic", SottoNativeMic);
     value: (id, t, b64) => {
       const c = captures.get(id);
       if (!c || c.mode !== "native" || !c.node) return;
+      if (c.fallback) return; // WebKit's capture feeds the track now
       const bin = atob(b64);
       const s = new Int16Array(bin.length >> 1);
-      for (let i = 0; i < s.length; i++) s[i] = ((bin.charCodeAt(2 * i) | (bin.charCodeAt(2 * i + 1) << 8)) << 16) >> 16;
+      let any = 0;
+      for (let i = 0; i < s.length; i++) {
+        s[i] = ((bin.charCodeAt(2 * i) | (bin.charCodeAt(2 * i + 1) << 8)) << 16) >> 16;
+        any |= s[i];
+      }
       c.chunks++;
+      c.lastChunkAt = Date.now();
+      // Exact digital silence: macOS refusing the app (for example after its
+      // bundle was replaced while it ran) delivers zeros, not an error.
+      c.zeroMs = any === 0 ? c.zeroMs + (s.length * 1000) / 48000 : 0;
+      if (c.zeroMs >= SILENT_MS) {
+        fallbackToWebKit(c, "zeros");
+        return;
+      }
       if (c.lat.length < 2000) c.lat.push(Date.now() - t);
       c.node.port.postMessage(s, [s.buffer]);
     },
@@ -341,6 +438,9 @@ registerProcessor("sotto-native-mic", SottoNativeMic);
   Object.defineProperty(window, "__sottoMicRoute", {
     value: async () => {
       for (const c of [...captures.values()]) {
+        // A silent native capture fell back to WebKit's: keep it (re-planning
+        // would pick the silent native path again).
+        if (c.fallback) continue;
         let plan = null;
         try {
           plan = await ask({ op: "plan", device: c.requested });

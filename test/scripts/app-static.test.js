@@ -136,7 +136,7 @@ test("bridge.js host API: mute through the page hotkey, stop through /api/page",
 function loadMic({ plan = { mode: "webkit", device: { id: "sotto-b", label: "MacBook Pro Microphone" } }, handler = true } = {}) {
   const asked = [];
   const gum = [];
-  const state = { plan, started: [] };
+  const state = { plan, started: [], events: [], intervals: [], sources: [] };
   class FakeTrack {
     constructor(label) { this.label = label; this.readyState = "live"; this.l = {}; }
     getSettings() { return { deviceId: "webkit-id", echoCancellation: true, sampleRate: 48000 }; }
@@ -150,6 +150,7 @@ function loadMic({ plan = { mode: "webkit", device: { id: "sotto-b", label: "Mac
     constructor(o) { this.o = o; this.state = "running"; this.audioWorklet = { addModule: async () => {} }; this.destination = {}; }
     createMediaStreamDestination() { return { channelCount: 2, stream: new FakeStream([new FakeTrack("")]) }; }
     createGain() { return Object.assign(new FakeNode(), { gain: { value: 1 } }); }
+    createMediaStreamSource(stream) { const n = new FakeNode(); n.stream = stream; n.targets = []; n.connect = (t) => { n.targets.push(t); return t; }; state.sources.push(n); return n; }
     async resume() {}
     async close() { this.state = "closed"; }
   }
@@ -162,6 +163,7 @@ function loadMic({ plan = { mode: "webkit", device: { id: "sotto-b", label: "Mac
             if (m.op === "devices") return { default: { id: "sotto-a", label: "AirPods Max" }, inputs: [{ id: "sotto-a", label: "AirPods Max" }, { id: "sotto-b", label: "MacBook Pro Microphone" }] };
             if (m.op === "plan") return state.plan;
             if (m.op === "permission") return "granted";
+            if (m.op === "silent") return { permission: "granted", bundleReplaced: true };
             if (m.op === "start") { state.started.push(m); return { ok: true, sampleRate: 48000, label: m.device === "sotto-c" ? "USB Mic" : "MacBook Pro Microphone", device: m.device }; }
             return true;
           },
@@ -188,8 +190,10 @@ function loadMic({ plan = { mode: "webkit", device: { id: "sotto-b", label: "Mac
     Event: class { constructor(type) { this.type = type; } },
     DOMException: class extends Error { constructor(msg, name) { super(msg); this.name = name; } },
     atob: (s) => Buffer.from(s, "base64").toString("binary"),
-    setInterval: () => 0,
+    setInterval: (fn, ms) => { state.intervals.push({ fn, ms }); return state.intervals.length; },
     clearInterval: () => {},
+    CustomEvent: class { constructor(type, o) { this.type = type; this.detail = o && o.detail; } },
+    dispatchEvent: (e) => { state.events.push(e); return true; },
     Date,
     Promise,
     Object,
@@ -278,6 +282,66 @@ test("mic.js: the page's speaker choice overrides native capture (no echo cancel
   const s3 = await win.navigator.mediaDevices.getUserMedia({ audio: { deviceId: { exact: "sotto-b" } } });
   assert.equal(s3.getAudioTracks()[0].getSettings().sottoSource, "native");
   assert.equal(state.started.length, 2);
+});
+
+/** One 10 ms native chunk (480 samples at 48 kHz) as the app sends it: base64 Int16 LE. */
+const chunk = (value = 0) => Buffer.from(new Int16Array(480).fill(value).buffer).toString("base64");
+const settle = async () => { for (let i = 0; i < 10; i++) await new Promise((r) => setImmediate(r)); };
+
+test("mic.js: 2 s of exact zeros from the native capture falls back to WebKit's capture under the same track", async () => {
+  const { win, gum, asked, state } = loadMic({ plan: { mode: "native", device: { id: "sotto-b", label: "MacBook Pro Microphone" } } });
+  const s = await win.navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, deviceId: { exact: "sotto-b" } } });
+  const t = s.getAudioTracks()[0];
+  // 1.9 s of zeros, then one real sample: no fallback (a quiet mic is not a dead one).
+  for (let i = 0; i < 190; i++) win.__sottoMicFeed(1, Date.now(), chunk(0));
+  win.__sottoMicFeed(1, Date.now(), chunk(3));
+  for (let i = 0; i < 190; i++) win.__sottoMicFeed(1, Date.now(), chunk(0));
+  await settle();
+  assert.equal(gum.length, 0);
+  assert.ok(!asked.some((m) => m.op === "silent"));
+  // Past 2 s of pure zeros: the app is told why, its capture stops, WebKit captures the same device.
+  for (let i = 0; i < 12; i++) win.__sottoMicFeed(1, Date.now(), chunk(0));
+  await settle();
+  const silent = asked.find((m) => m.op === "silent");
+  assert.equal(silent.reason, "zeros");
+  assert.ok(silent.ms >= 2000);
+  assert.ok(asked.some((m) => m.op === "stop" && m.id === 1));
+  assert.equal(gum.length, 1);
+  assert.deepEqual(JSON.parse(JSON.stringify(gum[0].audio)), { echoCancellation: true, deviceId: { exact: "webkit-id" } });
+  assert.equal(state.sources.length, 1, "WebKit's stream feeds the native track's graph");
+  assert.equal(t.readyState, "live", "the page's track never ends");
+  assert.equal(t.getSettings().sottoSource, "webkit_fallback");
+  assert.equal(t.getSettings().echoCancellation, true);
+  const ev = state.events.find((e) => e.type === "sotto-mic-fallback");
+  assert.deepEqual({ ...ev.detail, ms: 0 }, { from: "native", to: "webkit", reason: "zeros", ms: 0, label: "MacBook Pro Microphone", ok: true, permission: "granted", bundleReplaced: true });
+  // Later native chunks are ignored, a route change keeps the fallback, stop releases WebKit's stream.
+  win.__sottoMicFeed(1, Date.now(), chunk(0));
+  await win.__sottoMicRoute();
+  assert.equal(state.started.length, 1);
+  const wk = state.sources[0].stream.getAudioTracks()[0];
+  t.stop();
+  assert.equal(wk.readyState, "ended");
+});
+
+test("mic.js: a native capture that delivers nothing at all falls back too", async () => {
+  const { win, gum, asked, state } = loadMic({ plan: { mode: "native", device: { id: "sotto-b", label: "MacBook Pro Microphone" } } });
+  const s = await win.navigator.mediaDevices.getUserMedia({ audio: { deviceId: { exact: "sotto-b" } } });
+  const watch = state.intervals.find((i) => i.ms === 500);
+  assert.ok(watch, "a silence watchdog runs");
+  watch.fn();
+  await settle();
+  assert.equal(gum.length, 0, "not before 2 s");
+  const realNow = Date.now;
+  win.Date = class extends Date { static now() { return realNow() + 2500; } };
+  try {
+    watch.fn();
+    await settle();
+  } finally {
+    win.Date = Date;
+  }
+  assert.equal(asked.find((m) => m.op === "silent")?.reason, "no_audio");
+  assert.equal(gum.length, 1);
+  assert.equal(s.getAudioTracks()[0].getSettings().sottoSource, "webkit_fallback");
 });
 
 test("mic.js: an exact device the app does not have is OverconstrainedError (the page then retries)", async () => {
