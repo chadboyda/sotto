@@ -260,6 +260,13 @@ public enum SettingsText {
     public static let automaticDevice = "Automatic"
     public static let micCompareHelp = "Speak and watch the bars: pick the one that moves when you talk."
 
+    /// Under the Microphone picker when the mic in use (chosen, or picked automatically) is Bluetooth:
+    /// its mic puts AirPods and other headsets into call mode (lower-quality sound both ways).
+    public static let bluetoothMicHelp = "A Bluetooth mic, such as AirPods, switches the headphones to call mode and lowers audio quality. The MacBook mic works better."
+    public static func bluetoothMicWarning(selected: DeviceChoice?, active: DeviceChoice?) -> String? {
+        (selected ?? active)?.bluetooth == true ? bluetoothMicHelp : nil
+    }
+
     public static func loginHelp(_ s: LoginItemState) -> String {
         switch s {
         case .unavailable: return "Available once Sotto is installed in Applications."

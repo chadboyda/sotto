@@ -90,8 +90,9 @@ public struct SettingsView: View {
                         .frame(width: 56, height: 10)
                         .accessibilityLabel("Microphone level")
                 }
-                if let mic = model.inputDevices.first(where: { $0.id == model.selectedInput }), mic.bluetooth {
-                    FieldHelp("Bluetooth microphones switch headphones into call mode and sound worse. The built-in microphone is usually better.")
+                if let warning = SettingsText.bluetoothMicWarning(selected: model.inputDevices.first(where: { $0.id == model.selectedInput }),
+                                                                  active: model.selectedInput == nil ? model.activeInput : nil) {
+                    FieldHelp(warning)
                 }
             }
             if !model.inputDevices.isEmpty && model.hooks.setInputMetering != nil {

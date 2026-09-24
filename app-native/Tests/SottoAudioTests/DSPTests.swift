@@ -38,6 +38,23 @@ final class ResamplerTests: XCTestCase {
         }
     }
 
+    func testLargeChunksLoseNothing() {
+        // A capture drain that fell behind (or a whole WAV) hands the converter one large buffer.
+        for (rate, chunk) in [(16_000.0, 3_200), (8_000.0, 4_800), (48_000.0, 4_800), (16_000.0, 16_000)] {
+            let input = sine(rate: rate, freq: 440, seconds: 1)
+            let r = Resampler(inputRate: rate)
+            var out: [Int16] = []
+            var i = 0
+            while i < input.count {
+                let n = min(chunk, input.count - i)
+                out += input[i..<i + n].withUnsafeBufferPointer { r.process($0) }
+                i += n
+            }
+            out += r.flush()
+            XCTAssertEqual(Double(out.count), 24_000, accuracy: 240, "\(Int(rate)) Hz in \(chunk)-frame chunks")
+        }
+    }
+
     func testDownsamplingRemovesAliases() {
         // 15 kHz at 48 kHz is above the 12 kHz Nyquist of 24 kHz: it must be filtered, not folded to 9 kHz.
         let r = Resampler(inputRate: 48_000)

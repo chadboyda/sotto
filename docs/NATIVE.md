@@ -324,7 +324,7 @@ Target graph: `SottoApp` → {`SottoAudio`, `SottoClient`, `SottoUI`}. `SottoUI`
   - Pref `EchoCancellation.always` forces `vpio`; `.never` forces split-style plain units.
 - Mic device rule (port of the current MicPlan): the saved device if present, else the system default unless it is Bluetooth, else built-in.
 - **Never** touch `AVAudioEngine.inputNode` in `split`/`listen`/`fake`. Instantiating it opens the default input, which flips AirPods to HFP.
-- Capture: device rate → `AVAudioConverter` (one persistent instance per route) → 24 kHz Int16 → 480-sample frames stamped with host time → `onMicFrame`.
+- Capture: device rate → `AVAudioConverter` (one persistent instance per route) → 24 kHz Int16 → 480-sample frames stamped with host time → `onMicFrame`. The converter is fed at most 1024 frames per call: given a larger buffer (a drain that fell behind, a whole WAV) it silently drops part of it. After each route change the app sends a `log` line with the capture rate and the device's nominal rate (`sotto: capture <mode> from <mic> at <rate> Hz (device <rate> Hz), <reason>`), since `route` carries no rates.
 - Playout: a lock-free SPSC ring feeding an `AVAudioSourceNode` at 24 kHz, with the §2.4 jitter buffer. The render thread does no allocation, locks, logging or Swift concurrency.
 - Route/device changes: device list, default device, `DeviceIsAlive`, `AVAudioEngineConfigurationChange` and data-source listeners, debounced 0.4 s. Rebuild only when the plan changes, and emit `onRoute`.
 - `FakeAudioIO`:

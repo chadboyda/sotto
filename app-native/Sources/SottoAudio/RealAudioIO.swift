@@ -181,6 +181,8 @@ public final class RealAudioIO: AudioIO, @unchecked Sendable {
         r.mode = mode
         r.echoCancellation = mode == .vpio
         r.reason = reason
+        r.captureRate = capture?.rate ?? 0
+        r.deviceRate = CoreAudioDevices.nominalRate(inputID) ?? 0
         route = r
         watchCurrentDevices()
         onRoute?(r)

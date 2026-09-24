@@ -118,13 +118,26 @@ public final class Resampler {
         }
     }
 
+    /// AVAudioConverter silently drops part of a large input buffer when the next pull answers
+    /// `.noDataNow` (measured: 3200 frames at 16 kHz lost 4.5% of the audio, 4800 at 8 kHz 6.7%, 4800 at 48 kHz 0.3%).
+    /// A capture drain that fell behind, or a whole WAV, is one large buffer, so feed it in slices.
+    static let maxSlice = 1024
+
     public func process(_ input: UnsafeBufferPointer<Float>) -> [Int16] {
         guard !input.isEmpty else { return [] }
         guard let conv = converter else { return input.map(floatToInt16) }
-        guard let inBuf = AVAudioPCMBuffer(pcmFormat: inFormat, frameCapacity: AVAudioFrameCount(input.count)) else { return [] }
-        inBuf.frameLength = AVAudioFrameCount(input.count)
-        inBuf.floatChannelData![0].update(from: input.baseAddress!, count: input.count)
-        return run(conv, input: inBuf, end: false)
+        var out: [Int16] = []
+        out.reserveCapacity(Int(Double(input.count) * Resampler.outputRate / inputRate) + 64)
+        var i = 0
+        while i < input.count {
+            let n = min(Resampler.maxSlice, input.count - i)
+            guard let inBuf = AVAudioPCMBuffer(pcmFormat: inFormat, frameCapacity: AVAudioFrameCount(n)) else { return out }
+            inBuf.frameLength = AVAudioFrameCount(n)
+            inBuf.floatChannelData![0].update(from: input.baseAddress! + i, count: n)
+            out += run(conv, input: inBuf, end: false)
+            i += n
+        }
+        return out
     }
 
     /// Drains the converter's tail (end of stream) and resets it for reuse.
