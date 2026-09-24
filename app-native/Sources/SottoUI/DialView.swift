@@ -239,7 +239,7 @@ enum DialPainter {
             bez.move(to: point(c, r1, a)); bez.addLine(to: point(c, r2, a))
         }
         let dormantA = 1 - e.shape.dormant * 0.4
-        g.stroke(bez, with: .color(t.fg3.opacity(0.45 * dormantA)), lineWidth: max(0.75, 0.9 * scale))
+        g.stroke(bez, with: .color(t.fg3.opacity(t.dialBezelAlpha * dormantA)), lineWidth: max(0.75, 0.9 * scale))
 
         // Work chase: 16 blue ticks, head advancing one tick per 1/30 s * 3 (a turn every 4 s), tail fading.
         if d.working && !d.attention {
@@ -265,7 +265,7 @@ enum DialPainter {
             if j == 0 { envTip.move(to: point(c, r2, a)) } else { envTip.addLine(to: point(c, r2, a)) }
         }
         envTip.closeSubpath()
-        g.stroke(hair, with: .color(outerColor.opacity(0.45 * dormantA + min(0.25, e.voice * 0.3))), lineWidth: max(0.5, 0.6 * scale))
+        g.stroke(hair, with: .color(outerColor.opacity(0.45 * (t.dialRestAlpha / 0.9) * dormantA + min(0.25, e.voice * 0.3))), lineWidth: max(0.5, 0.6 * scale))
         if e.voice > 0.01 {
             g.stroke(envTip, with: .color(outerColor.opacity(min(0.9, 0.35 + e.voice * 0.6))), lineWidth: 1.1 * scale)
         }

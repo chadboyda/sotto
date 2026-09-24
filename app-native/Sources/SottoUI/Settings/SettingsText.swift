@@ -149,6 +149,16 @@ public enum SettingsText {
     }
     public static let wakeHelp = "How readily your voice wakes a sleeping session. Nothing is sent or billed until it wakes."
 
+    /// Settings > Appearance (the page's segmented control): System follows macOS, live.
+    public static func appearanceLabel(_ a: String) -> String {
+        switch a {
+        case "light": return "Light"
+        case "dark": return "Dark"
+        default: return "System"
+        }
+    }
+    public static let appearanceHelp = "System follows your Mac's appearance. The Chrome page keeps its own choice."
+
     public static func windowLabel(_ w: String) -> String {
         switch w {
         case "auto": return "Automatic"

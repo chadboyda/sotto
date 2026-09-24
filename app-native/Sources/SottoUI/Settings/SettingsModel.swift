@@ -67,6 +67,8 @@ public struct SettingsHooks {
     public var setLaunchAtLogin: ((Bool) throws -> LoginItemState)?
     public var openLogs: (() -> Void)?
     public var refreshDevices: (() -> Void)?
+    /// "system" | "light" | "dark": the app saves it in its defaults and sets NSApp.appearance.
+    public var setAppearance: ((String) -> Void)?
     public init() {}
 }
 
@@ -92,6 +94,8 @@ public final class SettingsModel {
     /// Per-device RMS 0...1 while "Compare microphones" is open.
     public var inputLevels: [String: Float] = [:]
     public var micPermission: MicPermission = .unknown
+    /// Settings > Appearance, from the app's defaults (ViewText.normalizeTheme values).
+    public var appearance: String = "system"
     public var loginItem: LoginItemState = .unavailable
 
     // Transient UI state.
@@ -173,6 +177,12 @@ public final class SettingsModel {
 
     public func setPolicy(_ p: String) { run("policy", value: p, command: "set_policy", args: ["policy": .string(p)]) }
     public func setWake(_ s: String) { run("wake", value: s, command: "set_wake", args: ["sensitivity": .string(s)]) }
+    public func setAppearance(_ a: String) {
+        let v = ViewText.normalizeTheme(a)
+        guard v != appearance else { return }
+        appearance = v
+        hooks.setAppearance?(v)
+    }
     public func setWindow(_ w: String) { run("window", value: w, command: "set_window", args: ["mode": .string(w)]) { data in
         if self.settings == nil { self.settings = NativeSettings() }
         if case .string(let saved)? = data["window"] { self.settings?.window = saved } else { self.settings?.window = w }

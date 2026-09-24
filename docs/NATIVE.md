@@ -158,7 +158,7 @@ audio_client     "app"|"page"|null      (NEW, added by B2)
   "version": "0.3.0" }
 ```
 
-Usage and timers are derived by the app: the header's "m.m min · $x.xx today" comes from `status.today.seconds` + `status.live.usage_seconds` (the price per second is the page's `lib` constant), and "Claude working for 0:42" comes from the `activity` `turn_start` receive time. The daemon adds nothing for these.
+Usage and timers are derived by the app: the header's Session / Today / Cost pills (v0.3.2, the page's `lib.usagePills`) come from the Live session start, `status.today.seconds` + `status.live.usage_seconds` (throttled by `lib.stableUsage`, advanced by wall time while live by `lib.tickingToday`; the price per second is the page's `lib` constant), and "Claude working for 0:42" comes from the `activity` `turn_start` receive time. The daemon adds nothing for these.
 
 ### 3.2 App → daemon (non-command)
 
@@ -345,7 +345,7 @@ Target graph: `SottoApp` → {`SottoAudio`, `SottoClient`, `SottoUI`}. `SottoUI`
 ### 5.4 SottoUI (B5)
 - `StateModel` (`@Observable`, main actor) holds: status, settings, captions (the `reduceCaptions` port), Claude card (activity kind/text, `claudeSays`, tool, busy, summary from `turn_end`, agents count, delegations: last 3 via the `upsertDelegation` port), banners (notice/notice_clear, `live` error/closed via the ports of `lib.errorBannerText`/`closedReasonMessage`), pending result, link state, levels, voices, mute-pending, timers (turn start time, session start).
 - Views follow the web page's information design, natively:
-  - header: status dot + word, project, usage today
+  - header: status dot + word, the detail and project under it, the usage pills (Session while live, Today, Cost; fixed-width figures) and the gear
   - an instrument dial (`Canvas` + `TimelineView(.animation)` driven by mic/speaker levels and state; animating only while visible) around a mute button
   - Claude card
   - captions (`accessibilityLiveRegion`)
@@ -480,3 +480,32 @@ Acceptance:
 - The Settings window has the page drawer's persona picker: a menu of the personas by name (tagged "(yours)" or "(project)" for files), the chosen persona's one-line description and voice under it (`SettingsText.personaHelp`, the page's `renderPersonas` words), and the "Switch to the persona's own voice" checkbox. Both go through `cmd set_persona` (§3.3); the list comes from `settings.personas` (§3.1), so a persona switched from the terminal shows up through `status.persona` and the next `settings`.
 - `settings.personas` uses the persona list `pageStatus()` scanned in the last 5 s (`voice.cachedPersonaList()`), so the per-status settings diff costs no directory scan.
 - Test mode only: `SOTTO_APP_TEST_ACTION_DIR` (passed through `window.js` APP_TEST_ENV) is a directory the app polls for `*.json` actions (`{"action":"persona","persona":"june"}`, `{"action":"persona_voice","on":false}`) and runs through the same `SettingsModel` calls as the window, logging `test_action` and `cmd_result`. `npm run test:app` (fake Live) and `npm run e2e:app` (real gpt-live-1) switch the persona this way.
+
+### Parity with the page (v0.3.2)
+The native branch forked at #4, so the page's #5 (UI polish) and #7 (header pills, appearance) never reached the SwiftUI panel. v0.3.2 ports every user-visible difference. Screenshots, light and dark, at 420 x 720 and 360 x 640: `design/native/parity/`.
+
+| Feature | Web page | Native before (0.3.1) | Native after (0.3.2) |
+|---|---|---|---|
+| Header usage (#7) | Three pills, Session (live only), Today, Cost: 11 pt label over a 13 pt semibold tabular figure in a fixed box (m:ss/mm:ss, h:mm:ss from the hour; "$00.00", wider from $100), 36 pt, radius 8, 4 pt apart, surface-1 + shadow ring | One capsule "Session 4:12 · 14 min · $0.71 today" on surface-2; its width changed as digits rolled over | Same three pills (`UsagePill`, `ViewText.usagePills`); boxes measured once in the figure font. `HeaderLayoutTests` ticks 0:09, 0:10, 9:59, 10:00, 59:59, 1:00:00 and asserts constant frames except the hour widening |
+| Header priority hiding (#7) | Project, detail, Today, then Session; Cost never | Dropped the word "Session", then the session clock | Same order as the page (`HeaderContent.candidates`, `ViewThatFits`); tested down to 150 pt |
+| Today ticks between readings (#3) | `stableUsage` + `tickingToday` (at most 15 s ahead while live) | Moved only on usage events | Ported; pinned to lib.js by `viewtext.json` |
+| Appearance (#7) | Settings > Appearance: System / Light / Dark (page storage `clv.theme`) | Always followed macOS | Settings > Appearance (segmented, System default) sets `NSApp.appearance` (nil / `.aqua` / `.darkAqua`), kept in the app's defaults (`Appearance`). The daemon has no appearance pref (the page keeps its own), so none was added |
+| Light theme tokens (#5) | Cool neutrals, no beige: bg #F4F5F7, attn tint white, amber icon #A8740E, no attention bloom on light | Older tokens: beige attn tint #FBF0D9, amber bloom behind the dial | The page's tokens (`Theme`), plus `attnIcon`, the shadow ring and the dial rest alphas |
+| Banners (#5) | Raised neutral surface, tone only in the icon (amber / red) | Amber or red tinted fill with a tinted ring | Neutral raised surface (radius 14, 48 pt), amber or red icon, quiet action button |
+| Claude card surfaces (#5) | Raised surface, radius 18, rings as shadows so a state change never moves it; approval neutral in light with a 1.5 pt amber ring; static working icon | Bordered card, amber tinted approval, spinning icon | Ported (`CardSurface`, rings drawn outside the shape) |
+| Claude card height (user report on 0.3.1) | Summary clamped to three lines, "More" for the rest, expanded box capped | Grew with long output inside the panel's scroll view; a scroller sat over the text | Collapsed: three lines + More; expanded: a capped scroller in the card's trailing padding, inset from the corner, text padded clear of it; room is reserved under the word so the captions and footer never move (`ClaudeCardLayoutTests`, snapshots 25/26) |
+| Claude card in the live view (#3) | Always there ("Claude is idle" as a quiet line under a hairline) | Hidden while idle | Always there in the live view |
+| Claude's words, one line (#3) | Claude's own words (tool line only after 20 s quiet, quieter), one line | Ported, but up to three lines | One line |
+| Markdown (#3) | `lib.renderMarkdown`, "(code)" when collapsed | Rendered natively | Unchanged |
+| Background agents chip (#3) | Quiet text in the card's head | A capsule under the card (added height) | A chip in the head row; "2 agents" when short of room |
+| Raw tool labels (#3) | Plain words from the daemon | Same (daemon side) | Same; the snapshot fixture now uses a plain label |
+| Calm status word (#3) | 1.3 s hold, fade, Listening / Hearing you / Speaking; one line, fixed hint height | Hold and fade ported; word could wrap and the hint line changed height | Word one line (scales down), hint line fixed at 22 pt in the live view |
+| Header status line (#5) | Word in the state's ink only for live / muted / attention / error; detail and project on the second line | Detail on the first line | Ported |
+| State cards (#5) | No tinted washes | Tinted by tone | Neutral raised surface, tone in the icon |
+| Dial at rest (#5) | Calmer bezel and rest ring on light | Same alphas both themes | `dialBezelAlpha` / `dialRestAlpha` |
+| Can't hear only before first words (#7) | Yes | Yes (daemon, #9) | Unchanged; `e2e:app` asserts no warning after a switch |
+| Can't-hear banner, Switch mic (#2) | Banner with a mic list | Banner, Switch mic opens Settings | Restyled banner |
+| Mic picker with levels (#2) | Drawer list with live bars | Picker + meter, Compare microphones | Unchanged |
+| Voice previews | Hear the voices | Yes | Unchanged |
+| Persona picker (#8) | Drawer picker + voice toggle | Yes (0.3.1) | Unchanged; `test:app` and `e2e:app` switch it through the app |
+

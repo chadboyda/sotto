@@ -75,6 +75,62 @@ public enum ViewText {
         return h > 0 ? "\(h):\(String(format: "%02d", m)):\(ss)" : "\(m):\(ss)"
     }
 
+    /// One header pill's figure (lib.usagePills): the text, and whether its fixed box
+    /// needs its one wider size (a clock from the hour on, the cost from $100).
+    public struct Pill: Equatable, Sendable {
+        public var text: String
+        public var wide: Bool
+        public init(text: String, wide: Bool) { self.text = text; self.wide = wide }
+    }
+
+    public struct UsagePills: Equatable, Sendable {
+        /// nil when not live (the Session pill is hidden).
+        public var session: Pill?
+        public var today: Pill
+        public var cost: Pill
+        public init(session: Pill?, today: Pill, cost: Pill) { self.session = session; self.today = today; self.cost = cost }
+    }
+
+    /// lib.usagePills: Session (only while live), Today and Cost (SPEC-DEVIATIONS "header pills").
+    public static func usagePills(sessionSeconds: Double?, todaySeconds: Double, costSeconds: Double) -> UsagePills {
+        func clock(_ s: Double) -> Pill { let t = formatClock(s); return Pill(text: t, wide: t.count > 5) }
+        let cost = formatCost(costSeconds)
+        return UsagePills(session: sessionSeconds.map(clock), today: clock(todaySeconds), cost: Pill(text: cost, wide: cost.count > 6))
+    }
+
+    /// A throttled usage reading (lib.stableUsage): seconds and when it was taken (ms).
+    public struct UsageReading: Equatable, Sendable {
+        public var seconds: Double
+        public var at: Double
+        public init(seconds: Double, at: Double) { self.seconds = seconds; self.at = at }
+    }
+
+    /// lib.stableUsage: a new reading when the whole minute changes, the day rolls over, or every `everyMs`.
+    public static func stableUsage(_ prev: UsageReading?, seconds: Double?, now: Double, everyMs: Double = 10_000) -> UsageReading {
+        let s = (seconds.map { $0.isFinite && $0 > 0 ? $0 : 0 }) ?? 0
+        guard let prev else { return UsageReading(seconds: s, at: now) }
+        if s == prev.seconds { return prev }
+        let minuteChanged = (s / 60).rounded(.down) != (prev.seconds / 60).rounded(.down)
+        if minuteChanged || s < prev.seconds || now - prev.at >= everyMs { return UsageReading(seconds: s, at: now) }
+        return prev
+    }
+
+    /// lib.tickingToday: the reading advanced by wall time while live (at most `maxAheadS`), never backwards within a day.
+    public static func tickingToday(_ reading: UsageReading?, now: Double, live: Bool, shown: Double?, maxAheadS: Double = 15) -> Double {
+        guard let reading else { return 0 }
+        let ahead = live ? min(maxAheadS, max(0, (now - reading.at) / 1000)) : 0
+        let v = reading.seconds + ahead
+        if let shown, v < shown, shown - v < 60 { return shown }
+        return v
+    }
+
+    /// Settings > Appearance (lib.THEMES / normalizeTheme): "system" (default), "light", "dark".
+    public static let themes = ["system", "light", "dark"]
+    public static func normalizeTheme(_ v: String?) -> String {
+        let s = (v ?? "").trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        return themes.contains(s) ? s : "system"
+    }
+
     /// Claude's working time: "42 sec", "3 min 12 sec", "1 hr 2 min".
     public static func formatElapsed(_ ms: Double?) -> String {
         let t = max(0, Int(((ms ?? 0).isFinite ? (ms ?? 0) : 0) / 1000))

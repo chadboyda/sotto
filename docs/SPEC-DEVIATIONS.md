@@ -462,3 +462,13 @@ docs/NATIVE.md is the contract; these are the daemon-side choices it left open o
 7. **Can't hear you, only before the first words** (feat/header-pills 3) applies to the native session too: `lib.createHearingMonitor` is keyed by the app's current input name (from `route`); a new session resets it, a reconnect or wake on the same mic keeps "heard", and a different mic re-arms it.
 8. **Mic-blocked card.** The native card uses the page's copy ("Sotto can't use the microphone", Allow it in System Settings > Privacy & Security > Microphone) and its `link` (Open System Settings), from the regenerated `test/fixtures/native/viewtext.json`.
 9. **Personas on the native app** (feat/personas). `prepareSession` renders the current persona for both transports and `beginLive` records it, so a persona switch re-creates the primary session like a voice switch (the app's flush reason stays `voice_change`, the protocol's value for a session swap). PageStatus carries `persona`; the native Settings window has no persona picker yet: `/talk persona <name>` or asking the voice works.
+
+## Native parity with the page (feat/native-parity, v0.3.2)
+
+The native app was built from the page as of #4, so #5 and #7 reached only the page. The full table is in docs/NATIVE.md "Parity with the page (v0.3.2)".
+
+1. **Header pills in the app.** Session (live only), Today and Cost are separate pills with fixed-width figures, as on the page ("Header pills, appearance, can't hear you" 1); the widths are measured once in the figure's font. Today ticks between readings like the page (`stableUsage`, `tickingToday`).
+2. **Appearance in the app** is the app's own default (`Appearance`: absent = System, `light`, `dark`) applied as `NSApp.appearance`. Like the page's `clv.theme`, it is not in `prefs.json`; the app and the Chrome page keep separate choices.
+3. **The Claude card is bounded in the app.** A 0.3.1 user saw the card grow with long output and a scroll bar over the text. The card now sits under the status word with room reserved for its tallest collapsed form; the summary is three lines with More, and the expanded summary scrolls in a box capped at 220 pt (less in a short panel), with the scroller in the card's padding. The dial takes what is left (120 to 264 pt), so the captions and footer never move.
+4. **The status word** stays "Hearing you" (the page's word), not "You".
+
