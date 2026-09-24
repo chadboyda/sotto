@@ -1084,10 +1084,14 @@ export class Voice {
 
   /** The current persona's id for status lines (sent on every change): a directory scan at most every 5 s. */
   personaIdForStatus() {
+    return this.currentPersona(this.cachedPersonaList()).id;
+  }
+
+  /** The persona list, rescanned at most every 5 s (status lines, the native settings). */
+  cachedPersonaList() {
     const c = this.personaCache;
     const projectDir = this.owner ? (this.owner.project_dir || this.owner.cwd || null) : null;
-    const list = c && c.projectDir === projectDir && this.clock.now() - c.at < 5000 ? c.list : this.personaList();
-    return this.currentPersona(list).id;
+    return c && c.projectDir === projectDir && this.clock.now() - c.at < 5000 ? c.list : this.personaList();
   }
 
   /** The persona in effect: prefs.json's choice if it (still) exists, else the default. */
@@ -1096,8 +1100,8 @@ export class Voice {
   }
 
   /** {personas, current, use_voice, live, live_persona} for GET /api/personas (never the bodies). */
-  personas() {
-    const list = this.personaList();
+  personas({ cached = false } = {}) {
+    const list = cached ? this.cachedPersonaList() : this.personaList();
     return {
       personas: list.map(personaSummary),
       current: this.currentPersona(list).id,

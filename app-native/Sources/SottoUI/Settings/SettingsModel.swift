@@ -16,14 +16,18 @@ public struct NativeSettings: Codable, Equatable, Sendable {
             self.voices = voices; self.current = current; self.live = live; self.live_voice = live_voice
         }
     }
+    /// The persona picker: SottoClient's decoded form (docs/NATIVE.md §3.1).
+    public typealias Personas = Settings.Personas
+    public typealias Persona = Settings.Personas.Persona
     public var voices: Voices?
+    public var personas: Personas?
     public var window: String?
     public var policies: [String]?
     public var wake_sensitivities: [String]?
     public var data_dir: String?
     public var version: String?
-    public init(voices: Voices? = nil, window: String? = nil, policies: [String]? = nil, wake_sensitivities: [String]? = nil, data_dir: String? = nil, version: String? = nil) {
-        self.voices = voices; self.window = window; self.policies = policies; self.wake_sensitivities = wake_sensitivities
+    public init(voices: Voices? = nil, personas: Personas? = nil, window: String? = nil, policies: [String]? = nil, wake_sensitivities: [String]? = nil, data_dir: String? = nil, version: String? = nil) {
+        self.voices = voices; self.personas = personas; self.window = window; self.policies = policies; self.wake_sensitivities = wake_sensitivities
         self.data_dir = data_dir; self.version = version
     }
     /// Decode from a loosely typed payload (welcome.settings, a settings message, get_voices data).
@@ -94,6 +98,8 @@ public final class SettingsModel {
     public private(set) var pending: [String: String] = [:]
     public private(set) var errors: [String: String] = [:]
     public var voiceMessage: String?
+    /// "Switching to Moss. The conversation carries over." until the new persona is live.
+    public private(set) var personaMessage: String?
     public private(set) var previewing: String?
     public private(set) var echoRunning = false
     public private(set) var echoResult: SettingsText.EchoVerdict?
@@ -119,6 +125,8 @@ public final class SettingsModel {
             if let v = NativeSettings(json: .object(raw.filter { $0.key != "type" })) { settings = v }
         default: break
         }
+        // A persona switch is done once the live session runs in it.
+        if personaMessage != nil, let p = settings?.personas, let live = p.live_persona, live == p.current { personaMessage = nil }
     }
 
     // MARK: Derived values
@@ -131,6 +139,20 @@ public final class SettingsModel {
 
     public var policy: String { pending["policy"] ?? status?.speaking_policy ?? "milestones" }
     public var voice: String { pending["voice"] ?? settings?.voices?.current ?? status?.voice ?? "marin" }
+    public var personas: [NativeSettings.Persona] { settings?.personas?.personas ?? [] }
+    /// The persona id in effect: the in-flight choice, then the daemon's (settings, then status, which a terminal switch updates first).
+    public var persona: String { pending["persona"] ?? status?.persona ?? settings?.personas?.current ?? "sotto" }
+    /// "Switch to the persona's own voice" (the daemon's default is on).
+    public var personaUseVoice: Bool {
+        if let p = pending["persona_voice"] { return p == "on" }
+        return settings?.personas?.use_voice ?? true
+    }
+    public var currentPersona: NativeSettings.Persona? { personas.first { $0.id == persona } }
+    /// The help line under the picker, as the page's drawer words it.
+    public var personaHelp: String {
+        if pending["persona"] != nil { return SettingsText.personaSwitching }
+        return personaMessage ?? SettingsText.personaHelp(currentPersona)
+    }
     public var wakeSensitivity: String {
         pending["wake"] ?? (status?.wake?.enabled == false ? "off" : status?.wake?.sensitivity) ?? "medium"
     }
@@ -161,6 +183,32 @@ public final class SettingsModel {
         run("voice", value: v, command: "set_voice", args: ["voice": .string(v)]) { data in
             if case .string(let m)? = data["message"] { self.voiceMessage = m }
             if self.settings?.voices != nil { self.settings?.voices?.current = v }
+        }
+    }
+
+    /// Pick a persona (`cmd set_persona`, SPEC §4.6): a live session is re-created in it, with its
+    /// own voice when the toggle is on. The daemon answers with the persona and voice now in effect.
+    public func setPersona(_ id: String) {
+        guard id != persona else { return }
+        personaMessage = nil
+        run("persona", value: id, command: "set_persona", args: ["persona": .string(id)]) { data in
+            var chosen = id
+            if case .string(let p)? = data["persona"] { chosen = p }
+            self.settings?.personas?.current = chosen
+            if case .string(let v)? = data["voice"], self.settings?.voices != nil { self.settings?.voices?.current = v }
+            if case .bool(true)? = data["switching"] {
+                let name = self.personas.first { $0.id == chosen }?.name ?? chosen
+                self.personaMessage = SettingsText.personaSwitched(name)
+            }
+        }
+    }
+
+    /// The "Switch to the persona's own voice" toggle (`cmd set_persona {use_voice}`); persisted by the daemon.
+    public func setPersonaUseVoice(_ on: Bool) {
+        run("persona_voice", value: on ? "on" : "off", command: "set_persona", args: ["use_voice": .bool(on)]) { data in
+            var saved = on
+            if case .bool(let b)? = data["use_voice"] { saved = b }
+            self.settings?.personas?.use_voice = saved
         }
     }
 

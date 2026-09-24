@@ -268,6 +268,8 @@ describe("native desktop app", { skip: SKIP }, () => {
       { test: true, hidden: true, hotkeys: false, port: 47000, code: true, data: "/tmp/x", exit: 2 });
     const e = o([], { SOTTO_APP_TEST: "1", SOTTO_APP_DEBUG_LOG: "/tmp/l.jsonl" });
     assert.deepEqual({ test: e.test, hidden: e.hidden, hotkeys: e.hotkeys, log: e.debug_log }, { test: true, hidden: true, hotkeys: false, log: "/tmp/l.jsonl" });
+    assert.equal(o(["--test"], { SOTTO_APP_TEST_ACTION_DIR: "/tmp/acts" }).test_action_dir, "/tmp/acts", "test actions in test mode");
+    assert.equal(o([], { SOTTO_APP_TEST_ACTION_DIR: "/tmp/acts" }).test_action_dir, null, "never outside test mode");
     const prod = o(["-psn_0_123"]);
     assert.deepEqual({ test: prod.test, hidden: prod.hidden, hotkeys: prod.hotkeys }, { test: false, hidden: false, hotkeys: true });
     assert.deepEqual(prod.wants_audio, ["connecting", "live", "reconnecting", "sleeping"], "uplink states (docs/NATIVE.md §2.2)");
@@ -348,7 +350,7 @@ describe("native desktop app", { skip: SKIP }, () => {
     }
   });
 
-  test("chooser -> sotto://open -> link -> welcome -> fake Live session -> output WAV -> mute round trip -> close_window quits", { timeout: 120_000 }, async (t) => {
+  test("chooser -> sotto://open -> link -> welcome -> fake Live session -> output WAV -> mute round trip -> persona picker switch -> close_window quits", { timeout: 120_000 }, async (t) => {
     if (!daemon.native) return t.skip("needs the daemon's /api/native endpoint (docs/NATIVE.md B1)");
     // The model's voice: 1 s of a loud tone from the fake Live server.
     const greet = Buffer.alloc(24000 * 2);
@@ -363,13 +365,16 @@ describe("native desktop app", { skip: SKIP }, () => {
     registered.push(bundle);
     const appLog = path.join(tmp, "chooser.jsonl");
     const outWav = path.join(tmp, "chooser-out.wav");
+    const actions = path.join(tmp, "chooser-actions");
+    fs.mkdirSync(actions, { recursive: true });
+    const act = (name, obj) => { fs.writeFileSync(path.join(actions, `${name}.tmp`), JSON.stringify(obj)); fs.renameSync(path.join(actions, `${name}.tmp`), path.join(actions, `${name}.json`)); };
     const port2 = await freePort();
     const d = createDaemon({
       dataDir: D2, port: port2, pluginRoot: ROOT, daemonKey: "c".repeat(64),
       env: {
         SOTTO_BROWSER: "app", SOTTO_APP_TEST: "1", SOTTO_APP_DEBUG_LOG: appLog, SOTTO_APP_OUT_WAV: outWav,
         SOTTO_APP_MIC_FIXTURE: path.join(ROOT, "test/fixtures/ask-files.wav"), SOTTO_APP_MIC_FIXTURE_LEAD_MS: "300",
-        SOTTO_APP_TEST_MUTE_AFTER_MS: "2500", SOTTO_APP_DOWNLOAD: "0", SOTTO_VOCAB: "0",
+        SOTTO_APP_TEST_MUTE_AFTER_MS: "2500", SOTTO_APP_DOWNLOAD: "0", SOTTO_VOCAB: "0", SOTTO_APP_TEST_ACTION_DIR: actions,
         OPENAI_API_KEY: "sk-test-key", SOTTO_OPENAI_BASE: live.base, SOTTO_KEYCHAIN_SERVICE: `sotto-apptest-${process.pid}`,
       },
     });
@@ -400,6 +405,21 @@ describe("native desktop app", { skip: SKIP }, () => {
       assert.ok(readLog(appLog).some((e) => e.ev === "cmd_result" && e.name === "mute" && e.ok === true), "mute ok");
       await waitFor(() => s1.events.some((e) => e.type === "session.input_audio.mute") || live.last().events.some((e) => e.type === "session.input_audio.mute"), 5_000, "Live input muted");
       await waitFor(() => d.voice.pageStatus?.().live?.muted === true || readLog(appLog).some((e) => e.ev === "icon" && e.state === "muted"), 5_000, "muted state");
+      // Persona picker (Settings -> cmd set_persona): the toggle off keeps the voice, then Moss
+      // re-creates the Live session in the Moss persona.
+      assert.ok(d.voice.personas().personas.length >= 8, "the persona list the Settings picker shows");
+      const sessionsBefore = live.sessions.length;
+      act("1-toggle", { action: "persona_voice", on: false });
+      await waitFor(() => readLog(appLog).some((e) => e.ev === "cmd_result" && e.name === "set_persona"), 10_000, "toggle result");
+      assert.equal(d.voice.personas().use_voice, false, "the toggle is saved by the daemon");
+      act("2-persona", { action: "persona", persona: "moss" });
+      await waitFor(() => readLog(appLog).filter((e) => e.ev === "cmd_result" && e.name === "set_persona" && e.ok === true).length === 2, 10_000, "persona result");
+      await waitFor(() => live.sessions.length > sessionsBefore && live.last().started, 10_000, "a new Live session for the persona");
+      assert.match(live.last().start.instructions, /Your persona is Moss/);
+      assert.equal(live.last().start.audio.output.voice, "marin", "the voice stays: the toggle is off");
+      await waitFor(() => d.voice.state === "live" && d.voice.live?.persona === "moss", 10_000, "live in Moss");
+      assert.ok(readLog(appLog).some((e) => e.ev === "audio_flush" && e.reason === "voice_change"), "the app dropped the old session's audio");
+      assert.ok(!fs.existsSync(path.join(actions, "2-persona.json")), "the app consumed the action");
       // Voice off: close_window stops audio and hides the panel, then the app quits.
       const off = await ctl({ action: "off" });
       assert.equal(off.ok, true);

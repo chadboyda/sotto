@@ -75,7 +75,15 @@ test("start: /talk on, the app says hello, the daemon opens a primary session it
   const { link, welcome } = await h.attach();
   assert.equal(welcome.protocol, PROTOCOL);
   assert.equal(welcome.status.audio_client, "app");
-  assert.deepEqual(Object.keys(welcome.settings), ["voices", "window", "policies", "wake_sensitivities", "data_dir", "version"]);
+  assert.deepEqual(Object.keys(welcome.settings), ["voices", "personas", "window", "policies", "wake_sensitivities", "data_dir", "version"]);
+  // The persona picker's list (§3.1): summaries, never a persona's body.
+  const ps = welcome.settings.personas;
+  assert.deepEqual(Object.keys(ps), ["personas", "current", "use_voice", "live", "live_persona"]);
+  assert.equal(ps.current, "sotto");
+  assert.equal(ps.use_voice, true);
+  assert.ok(ps.personas.length >= 8);
+  assert.deepEqual(Object.keys(ps.personas[0]), ["id", "name", "description", "voice", "source"]);
+  assert.ok(ps.personas.every((p) => typeof p.description === "string" && p.description.length > 0 && !("body" in p)));
   assert.equal(link.sent[0].type, "welcome", "nothing before welcome");
   assert.equal(h.voice.state, "connecting");
   assert.equal(h.fetchCalls.length, 0, "no SDP POST");
@@ -366,6 +374,11 @@ test("commands: each gets exactly one result; errors use the HTTP codes; key_sav
   assert.deepEqual((await send("set_wake", { sensitivity: "high" })).data, { sensitivity: "high" });
   assert.equal((await send("set_wake", { sensitivity: "max" })).error.code, "bad_sensitivity");
   assert.equal((await send("set_voice", { voice: "robot" })).error.code, "bad_voice");
+  assert.equal((await send("set_persona", { persona: "nobody" })).error.code, "bad_persona");
+  assert.equal((await send("set_persona", {})).error.code, "bad_persona");
+  assert.equal((await send("set_persona", { persona: 7 })).error.code, "bad_persona");
+  assert.deepEqual((await send("set_persona", { use_voice: false })).data, { use_voice: false });
+  assert.deepEqual((await send("set_persona", { use_voice: true })).data, { use_voice: true });
   assert.deepEqual(Object.keys((await send("get_voices", {})).data), ["voices", "current", "live", "live_voice"]);
   assert.equal((await send("set_window", { mode: "chrome" })).data.window, "chrome");
   assert.equal((await send("set_window", { mode: "tv" })).error.code, "bad_window");
@@ -580,4 +593,41 @@ test("persona switch on the native app (SPEC §4.6): the primary session is re-c
   assert.ok(link.of("audio_flush").length >= 1, "the app dropped the old session's audio");
   const created = h.log.find("session.create").at(-1);
   assert.equal(created.persona, "june");
+});
+
+test("cmd set_persona (docs/NATIVE.md §3.3): the app's picker switches the live persona; the toggle keeps the voice; settings follow", async (t) => {
+  const h = await setup(t);
+  h.on();
+  const { link } = await h.attach();
+  const ws1 = await h.startPrimary();
+  // "Switch to the persona's own voice" off: the voice stays marin.
+  const off = await h.ctl.runCommand("set_persona", { use_voice: false });
+  assert.deepEqual(off, { ok: true, data: { use_voice: false } });
+  await h.clock.advance(0);
+  assert.equal(link.of("settings").at(-1).personas.use_voice, false, "settings resent with the toggle");
+  const r = await h.ctl.runCommand("set_persona", { persona: "Moss" });
+  assert.equal(r.ok, true);
+  assert.deepEqual(Object.keys(r.data), ["persona", "voice", "switching", "message", "use_voice"]);
+  assert.equal(r.data.persona, "moss", "a display name finds the id");
+  assert.equal(r.data.switching, true);
+  assert.equal(r.data.voice, "marin", "the toggle is off: no voice change");
+  assert.equal(r.data.use_voice, false);
+  assert.match(r.data.message, /^sotto: persona set to moss\. Switching the live session now\./);
+  assert.equal(link.of("audio_flush").at(-1).reason, "voice_change");
+  ws1.receive({ type: "session.closed", reason: "client_requested" });
+  await h.clock.advance(0);
+  const ws2 = await h.startPrimary();
+  const start = ws2.sent.find((m) => m.type === "session.start");
+  assert.match(start.session.instructions, /Your persona is Moss/);
+  assert.equal(start.session.audio.output.voice, "marin");
+  assert.equal(h.voice.live.persona, "moss");
+  const st = link.of("settings").at(-1);
+  assert.equal(st.personas.current, "moss", "settings carry the new persona");
+  assert.equal(st.personas.live_persona, "moss");
+  assert.equal(link.of("status").at(-1).status.persona, "moss");
+  assert.equal(h.log.find("persona.set").at(-1).via, "app");
+  // Toggle and pick in one command: the persona's own voice comes along.
+  const both = await h.ctl.runCommand("set_persona", { persona: "june", use_voice: true });
+  assert.equal(both.data.voice, "coral");
+  assert.equal(both.data.use_voice, true);
 });

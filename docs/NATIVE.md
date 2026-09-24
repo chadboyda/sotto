@@ -110,7 +110,7 @@ Every text frame is one JSON object with a `type` string. Unknown types are igno
 |---|---|---|
 | `welcome` | `protocol, version, build, status, settings` | once, after hello |
 | `status` | `status: PageStatus` | **a full snapshot on every change** (the same trigger as the SSE `status`, `voice.changed()`). There are no status patches: the app replaces its copy each time. |
-| `settings` | `Settings` | after `welcome`, and whenever the voice list, window pref or voice-switch state changes |
+| `settings` | `Settings` | after `welcome`, and whenever the voice list, persona list or choice, window pref or voice-switch state changes |
 | `activity` | `kind, text, …extra` | verbatim SSE `activity`. `kind` ∈ `turn_start`, `turn_end`, `text`, `tool`, `permission`, `agents` (with `count`), plus any the page's `lib.activityView` knows |
 | `delegation` | `id, status, text` | verbatim SSE `delegation` |
 | `notice` | `level` (`info`\|`warn`\|`error`), `code`, `text` | verbatim SSE `notice`. Native adds codes `cant_hear`, `echo_detected`, `app_took_over` (page only), `mic_error` |
@@ -129,6 +129,7 @@ Every text frame is one JSON object with a `type` string. Unknown types are igno
 state            "off"|"waiting_page"|"connecting"|"live"|"reconnecting"|"sleeping"|"paused"|"closing"
 owner            {project, cwd} | null
 voice            string
+persona          string                  (the persona id in effect, SPEC §4.6; also set from the terminal)
 speaking_policy  "quiet"|"milestones"|"walkthrough"
 idle_minutes     number
 idle_seconds     number
@@ -146,6 +147,10 @@ audio_client     "app"|"page"|null      (NEW, added by B2)
 **Settings**:
 ```
 { "voices": {voices:[...], current, live, live_voice}      // voice.voices()
+  "personas": {personas:[{id, name, description, voice|null, source}], current, use_voice, live, live_persona}
+                                                            // voice.personas(): summaries, never a persona's text;
+                                                            // source "builtin"|"user"|"project"; use_voice = the
+                                                            // "Switch to the persona's own voice" toggle (added in 0.3.1)
   "window": "auto"|"app"|"chrome"|"default",                // voice.windowPref()
   "policies": ["quiet","milestones","walkthrough"],
   "wake_sensitivities": ["off","low","medium","high"],
@@ -180,6 +185,7 @@ Each is answered by `result` with the same `id` within 10 s (the app times out a
 | `wake` | — | start a native session with reason `wake` from `sleeping` (a user tap, not voice) | `{}` |
 | `end` | — | `voice.off("user")` (same as page `stop`) | `{}` |
 | `set_voice` | `voice` | `voice.setVoice(voice, "app")` | `{voice, switching, message}` |
+| `set_persona` | `persona?`, `use_voice?` (at least one) | as `POST /api/persona`: `use_voice` → `voice.setPersonaVoice`, then `persona` (id or name) → `voice.setPersona(persona, "app")`; error `bad_persona` | `{persona, voice, switching, message, use_voice}`, or `{use_voice}` for the toggle alone (added in 0.3.1) |
 | `set_policy` | `policy` | `voice.setPolicy` | `{policy}` |
 | `set_wake` | `sensitivity` | `voice.setWakeSensitivity` | `{sensitivity}` |
 | `set_window` | `mode` | `voice.setWindow(mode)` | `{window, message}` |
@@ -346,8 +352,8 @@ Target graph: `SottoApp` → {`SottoAudio`, `SottoClient`, `SottoUI`}. `SottoUI`
   - paused/sleeping/off cards
   - banners
   - key setup sheet (a `SecureField`; the key goes only into `cmd key_save`, is never stored, and only `key.hint` is displayed)
-  - settings: policy picker, voice picker + "Hear the voices" previews, mic and speaker pickers (supplied by the app via closures; SottoUI does not import SottoAudio), wake sensitivity, echo cancellation, Test echo, window pref, Open logs, Open in Browser
-- **Settings + onboarding (`Sources/SottoUI/Settings/`, builder swift-settings):** `SettingsModel(state:)` (`@Observable`) wraps `StateModel` and uses its `sendCommand` for `set_policy`, `set_voice`, `set_wake`, `set_window`, `key_save`, `key_remove`, `get_voices`, `echo_test`, `open_browser`. It takes the Settings payload via `ingest(ServerMessage)` (`welcome.raw["settings"]` or a `settings` message) into `NativeSettings`. App-local rows go through `SettingsHooks` closures that SottoApp wires: `selectInput/selectOutput` (nil = automatic), `setEchoCancellation`, `setInputMetering` (per-device meters for "Compare microphones"; the app writes `inputLevels`), `playVoicePreview`/`stopVoicePreview`, `requestMicAccess`/`openMicPrivacySettings`, `setLaunchAtLogin`, `openLogs`, `refreshDevices`. The app also sets `inputDevices`, `outputDevices`, `activeInput/activeOutput` (from `onRoute`), `selectedInput/selectedOutput`, `echoCancellation`, `micPermission` (refresh on `didBecomeActive`), `loginItem`. Default system implementations: `MicAccess` (AVCaptureDevice; never prompts unless `request()` is called) and `LoginItem` (SMAppService.mainApp); neither may be called under `--test`. Views: `SettingsView` (the Settings window), `OnboardingView` (shows `MicAccessView` then `KeySetupView` while `model.onboardingStep != nil`). The key lives only in the view's `SecureField` state until it is sent in `cmd key_save`. Copy: `SettingsText` (ports of `keySettingsView`, `keyCardView`, `echoTestVerdict`, `POLICY_HELP`). Snapshots: `SettingsSnapshots.render(to:)`, PNGs in `design/native/`.
+  - settings: policy picker, persona picker (names, the chosen one's description and voice, "Switch to the persona's own voice"), voice picker + "Hear the voices" previews, mic and speaker pickers (supplied by the app via closures; SottoUI does not import SottoAudio), wake sensitivity, echo cancellation, Test echo, window pref, Open logs, Open in Browser
+- **Settings + onboarding (`Sources/SottoUI/Settings/`, builder swift-settings):** `SettingsModel(state:)` (`@Observable`) wraps `StateModel` and uses its `sendCommand` for `set_policy`, `set_voice`, `set_persona`, `set_wake`, `set_window`, `key_save`, `key_remove`, `get_voices`, `echo_test`, `open_browser`. It takes the Settings payload via `ingest(ServerMessage)` (`welcome.raw["settings"]` or a `settings` message) into `NativeSettings`. App-local rows go through `SettingsHooks` closures that SottoApp wires: `selectInput/selectOutput` (nil = automatic), `setEchoCancellation`, `setInputMetering` (per-device meters for "Compare microphones"; the app writes `inputLevels`), `playVoicePreview`/`stopVoicePreview`, `requestMicAccess`/`openMicPrivacySettings`, `setLaunchAtLogin`, `openLogs`, `refreshDevices`. The app also sets `inputDevices`, `outputDevices`, `activeInput/activeOutput` (from `onRoute`), `selectedInput/selectedOutput`, `echoCancellation`, `micPermission` (refresh on `didBecomeActive`), `loginItem`. Default system implementations: `MicAccess` (AVCaptureDevice; never prompts unless `request()` is called) and `LoginItem` (SMAppService.mainApp); neither may be called under `--test`. Views: `SettingsView` (the Settings window), `OnboardingView` (shows `MicAccessView` then `KeySetupView` while `model.onboardingStep != nil`). The key lives only in the view's `SecureField` state until it is sent in `cmd key_save`. Copy: `SettingsText` (ports of `keySettingsView`, `keyCardView`, `echoTestVerdict`, `POLICY_HELP`). Snapshots: `SettingsSnapshots.render(to:)`, PNGs in `design/native/`.
 - Status words and card copy are ported from `web/lib.js` `pageView()`/`sleepView()`/`activityView()` as a pure `ViewText` with table tests against the same inputs as `test/web/*`.
 - **As built (B5, additive):**
   - Reducer entry points: `StateModel.apply(_ ServerMessage)` handles every typed case of SottoClient's `ServerMessage` (status, welcome, settings, activity, delegation, notice, notice_clear, result_pending, wake_heard, command, caption, live; audio_flush/ping/result are the app's and the link's). `StateModel.apply(object:)` takes the raw JSON object of any §3.1 message (fixtures, previews). The Controller feeds every link message to `apply(_:)`.
@@ -470,3 +476,7 @@ Acceptance:
   - Voice switch to live 1.4-1.5 s; to the new voice playing 2.8-3.4 s. Voice wake: speech onset to trigger 0.64-0.68 s, to live 1.25-2.2 s.
 - The primary WebSocket streams output audio continuously (silence included) at real-time pace; the jitter buffer counts underruns in that stream (about a dozen per minute, almost all in silence; one 80 ms gap inside speech was seen in three runs).
 
+### Persona picker (v0.3.1)
+- The Settings window has the page drawer's persona picker: a menu of the personas by name (tagged "(yours)" or "(project)" for files), the chosen persona's one-line description and voice under it (`SettingsText.personaHelp`, the page's `renderPersonas` words), and the "Switch to the persona's own voice" checkbox. Both go through `cmd set_persona` (§3.3); the list comes from `settings.personas` (§3.1), so a persona switched from the terminal shows up through `status.persona` and the next `settings`.
+- `settings.personas` uses the persona list `pageStatus()` scanned in the last 5 s (`voice.cachedPersonaList()`), so the per-status settings diff costs no directory scan.
+- Test mode only: `SOTTO_APP_TEST_ACTION_DIR` (passed through `window.js` APP_TEST_ENV) is a directory the app polls for `*.json` actions (`{"action":"persona","persona":"june"}`, `{"action":"persona_voice","on":false}`) and runs through the same `SettingsModel` calls as the window, logging `test_action` and `cmd_result`. `npm run test:app` (fake Live) and `npm run e2e:app` (real gpt-live-1) switch the persona this way.

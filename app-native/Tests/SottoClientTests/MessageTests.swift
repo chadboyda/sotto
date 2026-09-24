@@ -30,6 +30,18 @@ final class MessageTests: XCTestCase {
         XCTAssertEqual(s?.window, "auto")
         XCTAssertEqual(s?.data_dir, "/tmp/sotto-data")
         XCTAssertEqual(s?.wake_sensitivities?.count, 4)
+        XCTAssertEqual(status?.persona, "sotto")
+        // The persona picker (docs/NATIVE.md §3.1): summaries, a null voice decodes as nil.
+        let ps = s?.personas
+        XCTAssertEqual(ps?.personas.map(\.id), ["sotto", "moss", "pirate"])
+        XCTAssertEqual(ps?.personas[1].name, "Moss")
+        XCTAssertEqual(ps?.personas[1].description, "Dry-witted senior engineer: understated, seen-it-all, quietly funny.")
+        XCTAssertEqual(ps?.personas[1].voice, "cedar")
+        XCTAssertNil(ps?.personas[2].voice)
+        XCTAssertEqual(ps?.personas[2].source, "user")
+        XCTAssertEqual(ps?.current, "sotto")
+        XCTAssertEqual(ps?.use_voice, true)
+        XCTAssertNil(ps?.live_persona)
     }
 
     func testSessionFixture() throws {
@@ -67,6 +79,12 @@ final class MessageTests: XCTestCase {
         guard case .settings(let st) = msgs[1] else { return XCTFail("\(msgs[1])") }
         XCTAssertEqual(st.voices?.live_voice, "marin"); XCTAssertEqual(st.window, "app")
         XCTAssertEqual(msgs[1].settingsPayload, st)
+        XCTAssertEqual(s.persona, "moss")
+        XCTAssertEqual(st.personas?.current, "moss"); XCTAssertEqual(st.personas?.live_persona, "sotto")
+        XCTAssertEqual(st.personas?.use_voice, false); XCTAssertEqual(st.personas?.personas.last?.source, "project")
+        // Settings without personas (an older daemon) still decode.
+        guard case .settings(let old) = ServerMessage.decode(#"{"type":"settings","window":"app"}"#) else { return XCTFail("old settings") }
+        XCTAssertNil(old.personas)
         XCTAssertEqual(msgs[2], .wakeHeard(text: "hey are you there"))
         XCTAssertEqual(msgs[3], .command(DaemonCommand(command: "play_echo_sample", reason: "echo_test")))
         guard case .live(let e) = msgs[4] else { return XCTFail() }
@@ -140,11 +158,14 @@ final class MessageTests: XCTestCase {
     }
 
     func testEveryCommandNameEncodes() throws {
-        let names = ["mute", "pause", "resume", "wake", "end", "set_voice", "set_policy", "set_wake", "set_window",
+        // Same list, same order as daemon/native-proto.js COMMANDS (test/daemon/native-proto.test.js).
+        let names = ["mute", "pause", "resume", "wake", "end", "set_voice", "set_persona", "set_policy", "set_wake", "set_window",
                      "key_save", "key_remove", "get_voices", "echo_test", "open_browser"]
         for n in names {
             XCTAssertEqual(try obj(.cmd(id: "i", name: n, args: [:]))["name"], .string(n))
         }
+        XCTAssertEqual(try obj(.cmd(id: "p", name: "set_persona", args: ["persona": "moss", "use_voice": false])),
+                       ["type": "cmd", "id": "p", "name": "set_persona", "args": ["persona": "moss", "use_voice": false]])
     }
 
     func testKeySaveRedaction() {
