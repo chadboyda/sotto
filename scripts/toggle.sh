@@ -76,6 +76,7 @@ case "$ARG" in
   on|start)                     ACTION=on ;;
   off|stop)                     ACTION=off ;;
   status)                       ACTION=status ;;
+  restart)                      ACTION=restart ;;
   quiet|milestones|walkthrough) ACTION=policy
                                 POLICY="$(printf '%s' "$ARG" | tr '[:upper:]' '[:lower:]')" ;;
   voice|voices)                 ACTION=voice
@@ -85,7 +86,7 @@ esac
 shopt -u nocasematch
 
 if [[ "$ACTION" == usage ]]; then
-  finish "sotto: usage: /talk [on|off|status|quiet|milestones|walkthrough|voice [name]]"
+  finish "sotto: usage: /talk [on|off|status|restart|quiet|milestones|walkthrough|voice [name]]"
 fi
 
 # --- config (SPEC §4.1/§4.2); unset, empty or invalid -> default ---------------
@@ -274,16 +275,49 @@ fi
 daemon_down() {
   case "$ACTION" in
     off|status) finish "sotto: voice is off." ;;
+    restart)    finish "sotto: voice is off. The next /talk on starts the latest code." ;;
     policy)     finish "sotto: voice is off. Turn it on with /talk on first." ;;
     voice)      voice_local ;;
   esac
 }
 
+# pick_runtime: sets NODE to a runtime that can run the daemon (SPEC §6.2), or
+# fails early with how to get one. Node 22+ from PATH (asked from the plugin
+# root, where the daemon runs, so version managers pick the same Node); else
+# Bun >= 1.1, which runs the daemon unchanged (verified with bun 1.3.5: unit
+# probe, real gpt-live-1 e2e and a self-update). Only cold starts pay for
+# the `node -v` (measured: 10 ms plain, 140 ms through a nodenv shim).
+pick_runtime() {
+  local v="" b="" cand
+  if [[ -n "$SOTTO_NODE" ]]; then
+    NODE="$SOTTO_NODE"
+    command -v "$NODE" >/dev/null || fail no_node "sotto: ERROR SOTTO_NODE ($SOTTO_NODE) was not found. Point it at a Node 22 (or Bun) binary, or unset it."
+    return 0 # the daemon checks the version itself (D/start-error)
+  fi
+  if command -v node >/dev/null; then
+    v="$(cd "$ROOT" && node -v 2>/dev/null </dev/null)"
+    if [[ "$v" =~ ^v([0-9]+)\. ]] && (( BASH_REMATCH[1] >= 22 )); then NODE=node; return 0; fi
+  fi
+  for cand in bun "$HOME/.bun/bin/bun"; do
+    command -v "$cand" >/dev/null || continue
+    b="$("$cand" --version 2>/dev/null </dev/null)"
+    if [[ "$b" =~ ^([0-9]+)\.([0-9]+) ]] && (( BASH_REMATCH[1] > 1 || (BASH_REMATCH[1] == 1 && BASH_REMATCH[2] >= 1) )); then
+      NODE="$cand"; return 0
+    fi
+  done
+  local how="Install Node 22 or newer (brew install node, nvm install 22, or nodejs.org), or Bun (bun.sh), then run /talk on again."
+  if [[ -n "$v" ]]; then
+    fail no_node "sotto: ERROR node on PATH is $v; sotto needs Node 22 or newer. $how"
+  elif command -v node >/dev/null; then
+    fail no_node "sotto: ERROR node on PATH did not run (a version manager without an installed version?). $how"
+  fi
+  fail no_node "sotto: ERROR node was not found on PATH; sotto needs Node 22 or newer. $how"
+}
+
 # cold_start: spawn our daemon on $PORT and wait until it answers (sets H).
 cold_start() {
   [[ -n "$SOCK" ]] || fail no_socket "sotto: ERROR this session has no inbox socket (CLAUDE_CODE_MESSAGING_SOCKET is unset), so voice cannot reach it."
-  NODE="${SOTTO_NODE:-node}"
-  command -v "$NODE" >/dev/null || fail no_node "sotto: ERROR node was not found on PATH (Node 22 or newer is required)."
+  pick_runtime
   ENTRY="${SOTTO_DAEMON_ENTRY:-$ROOT/daemon/index.js}"
   rm -f "$D/start-error"
   # Fully detached: nohup, all stdio redirected, disowned. Anything less and

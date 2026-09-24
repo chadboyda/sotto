@@ -215,7 +215,9 @@ The key MUST NOT be logged, echoed in errors, sent to the page, or written to an
 | `SOTTO_APP_TEST`, `SOTTO_APP_DEBUG_LOG` | daemon → app | Tests only: the daemon passes them to the app with `open --env`; the app then runs in test mode (hidden, mock mic, own defaults) and writes a JSONL debug log (§6.16). |
 | `SOTTO_APP_MIC`, `SOTTO_APP_MIC_FIXTURE`, `SOTTO_APP_MIC_FIXTURE_LEAD_MS`, `SOTTO_APP_ECHO_SIM_DB` | daemon → app | Tests only, forwarded like `SOTTO_APP_TEST`: the app's capture mode, the native-mic fixture and the echo simulation (§6.16 "Native mic"). |
 | `SOTTO_DEBUG` | daemon | `1` logs full hook bodies and every non-audio sideband event verbatim |
-| `SOTTO_NODE` | toggle.sh | Node binary to use (default `node` on PATH) |
+| `SOTTO_NODE` | toggle.sh | Runtime binary to use (Node 22+ or Bun ≥ 1.1). Default: `node` on PATH when it is 22 or newer, else `bun` (§5.7, §6.2) |
+| `SOTTO_UPDATE` | daemon | `0` turns self-update off (no source checks; `/talk restart` answers that it is off) (§6.17) |
+| `SOTTO_UPDATE_CHECK_MS`, `SOTTO_UPDATE_SETTLE_MS`, `SOTTO_UPDATE_QUIET_MS` | daemon | Self-update timings (defaults 30000, 5000, 45000); the e2e shortens them (§6.17) |
 | `SOTTO_DAEMON_ENTRY` | toggle.sh | Daemon entry file (default `$ROOT/daemon/index.js`); tests point it at a stub |
 
 ### 4.5 Voice preference (`D/prefs.json`)
@@ -284,7 +286,7 @@ Frontmatter (exact):
 ---
 name: talk
 description: Turns sotto voice conversation on or off for this Claude Code session, or shows its status.
-argument-hint: "[on|off|status|quiet|milestones|walkthrough|voice [name]]"
+argument-hint: "[on|off|status|restart|quiet|milestones|walkthrough|voice [name]]"
 disable-model-invocation: true
 ---
 ```
@@ -410,6 +412,7 @@ Invoked by the UserPromptExpansion hook. Stdin example (VERIFIED shape):
    | `on`, `start` | `on` |
    | `off`, `stop` | `off` |
    | `status` | `status` |
+   | `restart` | `restart` (§6.17) |
    | `quiet`, `milestones`, `walkthrough` | `policy` with `"policy":<word>` |
    | `voice`, `voices` (+ optional second word) | `voice`, with `"voice":<lowercased second word>` when one is given (§4.5) |
    | anything else | print the usage message (§9.1) and exit |
@@ -421,10 +424,11 @@ Invoked by the UserPromptExpansion hook. Stdin example (VERIFIED shape):
    - **If nothing answers:**
      - For `off`/`status`, print `sotto: voice is off.` and exit (no spawn).
      - For `policy`, print `sotto: voice is off. Turn it on with /talk on first.`
+     - For `restart`, print `sotto: voice is off. The next /talk on starts the latest code.`
      - For `voice`, handle it locally and never spawn: list (current = `prefs.json` voice, else the resolved userConfig voice) or write `D/prefs.json` (§9.1 strings). The same local path runs when a sotto daemon of **another** data dir holds the port, because the choice belongs to this data dir.
      - Otherwise:
        - require `CLAUDE_CODE_MESSAGING_SOCKET` to be non-empty (error otherwise);
-       - resolve `NODE="${SOTTO_NODE:-node}"` (error if not found);
+       - resolve the runtime (§6.2): `$SOTTO_NODE` if set (error if not found); else `node` if `node -v`, run from `$ROOT`, says 22 or newer; else `bun` (or `~/.bun/bin/bun`) if `bun --version` is 1.1 or newer; else fail at once with the §9.1 "no node" string for the case, which says how to install one;
        - spawn exactly: `nohup "$NODE" "${SOTTO_DAEMON_ENTRY:-$ROOT/daemon/index.js}" --port "$PORT" --data-dir "$D" --plugin-root "$ROOT" >/dev/null 2>&1 </dev/null & disown`;
        - poll `/healthz` every 50 ms for up to 3 s (error if it never answers).
 6. `KEY=$(<"$D/daemon.key")`.
@@ -451,6 +455,7 @@ Claude Code adds a plugin's `bin/` to the Bash tool's `PATH` (plugins-reference.
 | `sotto voice` | Print the voice list with the current voice marked (§9.1/§9.2 list string) | 0 |
 | `sotto voice <name>` | Set the voice (§4.5); if a Live session is running, switch it now (§6.14) | 0, or 1 for an unknown voice or any `ERROR` |
 | `sotto status` | Same as `/talk status` | 0 |
+| `sotto restart` | Same as `/talk restart` (§6.17) | 0 |
 | anything else | usage on stderr | 2 |
 
 - **Implementation:** it runs `scripts/toggle.sh` with a synthesized UserPromptExpansion input (`{"command_args":"voice <name>"}`), so the CLI and `/talk voice` share one code path. It prints the `stopReason` as one plain line.
@@ -486,6 +491,8 @@ No `dependencies` and no `devDependencies`. Everything is ESM. Test files match 
   3. `listen(port, "127.0.0.1")`. On `EADDRINUSE`, log and exit 1.
 - **Detachment:** stdio is `/dev/null` (the spawner does this). The daemon MUST log only through `daemon/log.js`. `process.on("uncaughtException")` and `unhandledRejection` append to `crash.log` and keep running.
 - **Signals:** SIGTERM/SIGINT/SIGHUP trigger the graceful shutdown in §6.13.
+- **Runtime:** Node 22+ (`engines`). Bun ≥ 1.1 runs the same code unchanged and is the fallback when no Node 22 is on PATH (§5.7); verified with Bun 1.3.5 by the full smoke e2e, the restart e2e and a self-update. `nodeProblem()` accepts Bun (it reports a Node 22+ `process.versions.node` and has a global `WebSocket`). The `start` log line carries `runtime` (`node v22.18.0`, `bun 1.3.5`).
+- **Self-update** (§6.17) adds two modes: `--preflight` (load every module, exit 0; nothing else) and `--handover` (a successor: the state arrives on stdin; the single-instance check accepts the predecessor's pid, and `active`/`pending-context` are kept).
 - **Exit:**
   - 3 s after voice goes `off` (so a fast `/talk on` can reuse it), unless an owner is bound again;
   - on `shutdown`;
@@ -524,7 +531,7 @@ No `dependencies` and no `devDependencies`. Everything is ESM. Test files match 
 **`POST /control`**, body `ControlRequest`:
 ```json
 {
-  "action": "on|off|toggle|status|policy|voice|shutdown",
+  "action": "on|off|toggle|status|policy|voice|restart|shutdown",
   "policy": "quiet|milestones|walkthrough",
   "voice": "cedar",
   "session": {
@@ -586,8 +593,9 @@ Messages are in §9.2.
 
 **`GET /api/bootstrap`** → 200:
 ```json
-{"page_token":"<hex>","version":"0.1.0","port":47821,"status":<PageStatus>}
+{"page_token":"<hex>","version":"0.1.0","build":"<16 hex>","port":47821,"status":<PageStatus>}
 ```
+`build` is a hash of `web/` as this daemon loaded it; a page that sees it change across a daemon restart reloads itself (§6.17).
 `PageStatus` is defined in §6.12. Cross-origin pages cannot read this response because there are no CORS headers, and the Host check blocks DNS rebinding.
 
 **`POST /api/session`**, body `{"sdp":"<offer>","reason":"start|resume|reconnect|wake|notify","wake":{…}}`:
@@ -1065,6 +1073,28 @@ A native macOS menu-bar app, **Sotto**, that shows the same voice page (`http://
 
 ---
 
+### 6.17 Self-update (`daemon/update.js`, `daemon/handover.js`)
+The daemon picks up new code on its own, at a moment the user will not notice, and keeps the conversation.
+
+**Detecting new code.** Sources = every file under `daemon/`, `web/`, `scripts/` and `app/` of the plugin root (dotfiles, `node_modules` and `build` skipped). At start the daemon hashes them (`update.baseline`; 49 files, 2-11 ms). Every 30 s it stats them (0.4-1 ms) and hashes only when a size or mtime moved. A new hash must hold still for 5 s (an editor or a checkout mid-write), then it is **due** (`update.detected`, `update.due`). Changed back to the baseline → cancelled.
+
+**Quiet moment** (`Voice.restartBlocker(quietMs)`, null = go). Required: an owner is bound; the state is `sleeping` or `paused` (quiet at once), or `live` with nobody speaking for 45 s: the last user and assistant transcript, the page's local voice activity, our last append and the session start all count; no delegation collecting or with Claude (`pendingWork`), Claude not mid-turn (`claudeBusy`), nothing in the speech queue or the wake queue. Other states (`waiting_page`, `connecting`, `reconnecting`, `closing`, `off`) never restart. While due, quiet is re-checked every 2 s (no file access); each new reason to wait is logged once (`update.waiting`). With the default 60 s idle sleep, a quiet live session restarts between 45 and 60 s of silence, otherwise right after it falls asleep.
+
+**`/talk restart`** (`/control {"action":"restart"}`, `sotto restart`): the same swap, whether or not the code changed, once there are 3 s of quiet (same other conditions). Messages in §9.2.
+
+**The swap** (`performRestart`):
+1. **Preflight:** `<runtime> daemon/index.js --preflight` must exit 0 (every module is a static import, so this proves the new code parses and links; ~50 ms). A failure is logged with the error line (`update.preflight`, `update.failed`) and that hash is not tried again until the sources change. Voice is never touched.
+2. **Prepare:** new sessions are refused (`/api/session` → 503 `restarting`; the page waits quietly); if a session is live the page gets `command disconnect` (reason `update`, it keeps its mic) and the session is closed through the sideband (usage booked, `usage.json` written).
+3. **Handover:** the state (owner incl. inbox token, config, runtime policy, marker nonce, the last 60 voice lines, speech timestamps, pending result, backlog, counters, last error, the daemon key and page token) goes to the successor **over its stdin pipe**: never on disk or on a command line. The old process stops listening and drops its connections, then spawns `<same runtime> daemon/index.js … --handover` detached (stdout ignored, stderr to `D/logs/successor.err`).
+4. **Successor:** reads the state, writes `daemon.pid` (same `daemon.key`, `D/active` untouched: same owner, port, key and nonce, so `hook.sh`, `toggle.sh` and the voice marker keep working), restores **before** it listens (the page's first bootstrap never sees `off`), then listens on the same port (retrying `EADDRINUSE` for up to 5 s). The old process exits (`exit reason:"handover"`, leaving the state files) once `/healthz` answers with the successor's pid. Measured: 77-101 ms without a port, 120-180 ms from preflight to exit, both on Node 22 and Bun 1.3.5.
+5. **Failure** (the successor exits or does not answer within 10 s): it is killed, the old process listens again, rewrites `daemon.pid`, and carries on (`update.successor_failed`, `update.abort`, notice `update_failed`); a live session is re-created in place.
+
+**Resuming** (`Voice.restore`): `live` → `reconnecting` and the reconnect command (the page, re-bootstrapping with the same page secret and token, connects with reason `reconnect`); the new session is seeded with the carried-over voice history (§8.2) and its greeting is `updateGreeting()`: *Say only "I just updated myself."*. `sleeping` stays `sleeping` (the page keeps listening for the wake; nothing is spoken), `paused` stays `paused`. The first `hello` from a page gets a notice (code `updated`): "Sotto updated itself to the latest code." (manual: "Sotto restarted.").
+
+**The page** (§7.2): `/api/bootstrap` carries `build` (hash of `web/`). If a later bootstrap brings a different build and no session is up, the page logs `page: new build after a daemon update; reloading` and reloads itself (`location.replace`, without `autostart`); the page secret in `sessionStorage` survives the reload.
+
+**Not covered:** hook events fired during the ~0.1 s without a listener are lost (curl gets a refused connection and the hook stays silent); a quiet moment rules out a turn in progress, so this is rare. The desktop app's binary is not rebuilt or relaunched by a restart (changes under `app/` do restart the daemon, and the app is rebuilt the next time the daemon opens it). A marketplace update installs into a new plugin directory; the running daemon watches its own directory, so it picks that up on the next `/talk on`.
+
 ## 7. Web page (Owner C)
 
 ### 7.1 Files and constraints
@@ -1247,7 +1277,7 @@ Result that arrived while voice was paused: <pendingResult>   <- only if set; cl
 ### 9.1 toggle.sh strings (bash side)
 | Condition | stopReason |
 |---|---|
-| bad argument | `sotto: usage: /talk [on|off|status|quiet|milestones|walkthrough|voice [name]]` |
+| bad argument | `sotto: usage: /talk [on|off|status|restart|quiet|milestones|walkthrough|voice [name]]` |
 | voice, unknown name | `sotto: unknown voice "<name, [a-z0-9_-] only, ≤40>". Voices: alloy, ash, …, willow.` |
 | voice list, no daemon of this data dir | `sotto: voice is <v>. Voices: alloy, ash, …, <v> (current), …, willow. Change it with /talk voice <name>.` |
 | voice set, no daemon of this data dir | `sotto: voice set to <v>. It applies to the next voice session.` |
@@ -1256,7 +1286,12 @@ Result that arrived while voice was paused: <pendingResult>   <- only if set; cl
 | daemon down + off/status | `sotto: voice is off.` |
 | daemon down + policy | `sotto: voice is off. Turn it on with /talk on first.` |
 | no socket | `sotto: ERROR this session has no inbox socket (CLAUDE_CODE_MESSAGING_SOCKET is unset), so voice cannot reach it.` |
-| no node | `sotto: ERROR node was not found on PATH (Node 22 or newer is required).` |
+| daemon down + restart | `sotto: voice is off. The next /talk on starts the latest code.` |
+| `SOTTO_NODE` not found | `sotto: ERROR SOTTO_NODE (<path>) was not found. Point it at a Node 22 (or Bun) binary, or unset it.` |
+| node too old, no Bun | `sotto: ERROR node on PATH is <vX.Y.Z>; sotto needs Node 22 or newer. <how>` |
+| node does not run (a version-manager shim without the version), no Bun | `sotto: ERROR node on PATH did not run (a version manager without an installed version?). <how>` |
+| no node, no Bun | `sotto: ERROR node was not found on PATH; sotto needs Node 22 or newer. <how>` |
+| | `<how>` = `Install Node 22 or newer (brew install node, nvm install 22, or nodejs.org), or Bun (bun.sh), then run /talk on again.` |
 | port taken | `sotto: ERROR port <P> is used by another program. Choose another port in /config (sotto).` |
 | spawn timeout | `sotto: ERROR the voice daemon did not start. See <D>/logs/daemon.log` |
 | bad response | `sotto: ERROR the voice daemon did not answer. See <D>/logs/daemon.log` |
@@ -1281,6 +1316,10 @@ Result that arrived while voice was paused: <pendingResult>   <- only if set; cl
 | voice, no Live session | `sotto: voice set to <v>. It applies to the next voice session.` |
 | voice, same as current | `sotto: voice is already <v>.` |
 | voice, unknown | `sotto: unknown voice "<name>". Voices: alloy, ash, …, willow.` (`ok:false`) |
+| restart, voice off | `sotto: voice is off. The next /talk on starts the latest code.` |
+| restart, quiet now | `sotto: restarting the voice daemon now. Voice picks up where it left off.` |
+| restart, waiting | `sotto: the voice daemon restarts at the next pause (waiting for <why>).` `<why>`: `a voice request is still with Claude`, `Claude is working`, `the conversation`, `a message is waiting to be spoken`, else `the voice connection to settle` |
+| restart, turned off | `sotto: restart is turned off for this daemon (SOTTO_UPDATE=0).` (`ok:false`) |
 | shutdown | `sotto: daemon stopped.` |
 
 With `no key` and `cap reached`, the owner is still bound (so `/talk off` works), but the state stays `paused` and the window is not opened.
@@ -1444,6 +1483,15 @@ The e2e test MUST never print the API key or the tokens.
 6. The page's `wake.timing` is logged; the test prints the latency breakdown. Then `/talk off`; exactly two sessions were created; no secrets in the log. Hard 90 s Live budget.
 
 Unit tests (§11.2/§11.3): `test/web/wake.test.js` (VAD on synthetic speech, white noise, clicks, steady tones, fan noise, short sounds; onset chaining; sensitivity and boost; pre-roll capture; WAV/base64) and `test/daemon/wake.test.js` (sleep decision, governor, sleeping vs paused, never sleeping while Claude works on a voice request, min awake, voice wake with mocked transcription and injection into the delegation text, false wakes and back-off, notify wakes, transcription fallback and timeout).
+
+### 11.6 End-to-end self-update (`test/e2e/restart.mjs`; `npm run e2e:restart`, also run by `npm run e2e`)
+1. A temp copy of the plugin (sources only), silent fake mic, `/talk on` through the copy's toggle.sh with `SOTTO_UPDATE_CHECK_MS=1000`, `SOTTO_UPDATE_SETTLE_MS=500`, `SOTTO_UPDATE_QUIET_MS=4000`; headless Chrome as in §11.4.
+2. Session 1 goes live and greets. Then `daemon/format.js` and `web/app.js` in the copy change.
+3. `update.detected` (`web_changed:true`), then after the quiet time `update.handover`: the new process answers on the same port, the old one exits, `daemon.key` and `D/active` are unchanged, `update.restore` carries the voice history; session 1 was closed and billed first.
+4. The page logs its reload into the new build; session 2 is created with reason `reconnect`, gets the `I just updated myself` instruction and says it (output transcript matches /updat/).
+5. `hook.sh` forwards to the new daemon through the old `D/active`; `/talk off` closes session 2; no secrets and no handover file on disk. `SOTTO_NODE=bun` runs the same test under Bun. Two sessions, ~30 billed seconds.
+
+Unit tests: `test/daemon/update.test.js` (fingerprint, settle, quiet polling, failure memory, manual, costs), `test/daemon/restart.test.js` (quiet rules with the fake clock, auto restart only after 45 s of silence or when asleep, held by a voice request, prepare/abort, in-process handover resuming owner, marker and history with the spoken cue, sleeping without it), `test/daemon/handover.test.js` (real processes: `/control restart` swaps pid on the same port with the same key and `D/active`; broken code fails the preflight and the daemon carries on; a successor that dies → the old daemon listens again).
 
 ### 11.5 Desktop app (§6.16)
 - `npm test`: `test/daemon/window.test.js` (the chooser: precedence, every mode × build state × platform, the Bluetooth-input rule, background build without blocking, `open` failure and page watchdog fallbacks, close backstop; the sources hash equals `build-app.sh --print-hash`) and `test/scripts/app-static.test.js` (`bash -n`, Info.plist keys, and bridge.js run in a stub page: state only, no caption text or token, host API).

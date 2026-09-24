@@ -418,6 +418,23 @@ export function createActivityDetector({ threshold = 0.02, holdMs = 300, minInte
 }
 
 /** Reconnect backoff for the daemon event stream: 0.5 s, 1 s, 2 s, 4 s, then 5 s. */
+/**
+ * Reload into a new page after a daemon self-update (§6.17)? Only when a build
+ * was already known, the daemon now serves a different one, and no session is
+ * up (a reload would drop it).
+ */
+export function shouldReloadForBuild(known, next, hasSession) {
+  return typeof known === "string" && !!known && typeof next === "string" && !!next && known !== next && !hasSession;
+}
+
+/** The address to reload: same page without `autostart` (a reload must not start a session on its own). */
+export function reloadUrl(pathname, search) {
+  const q = new URLSearchParams(search || "");
+  q.delete("autostart");
+  const rest = q.toString();
+  return `${pathname || "/"}${rest ? `?${rest}` : ""}`;
+}
+
 export function backoffDelay(attempt) {
   const n = Math.max(0, Math.floor(Number(attempt) || 0));
   return Math.min(5000, 500 * 2 ** n);

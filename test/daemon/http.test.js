@@ -167,6 +167,7 @@ test("bootstrap returns the page token; SSE requires it and sends status first",
   const b = (await h.req({ path: "/api/bootstrap", headers: { "X-Sotto-Boot": h.d.pageSecret } })).json;
   assert.equal(b.page_token, h.d.pageToken);
   assert.equal(b.version, "0.1.0");
+  assert.match(b.build, /^[0-9a-f]{16}$/, "web/ build hash (the page reloads when it changes, §6.17)");
   assert.equal(b.port, h.port);
   assert.equal(b.status.state, "off");
   assert.ok(!("socket" in (b.status.owner || {})));

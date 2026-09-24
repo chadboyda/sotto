@@ -20,7 +20,7 @@ you (speaking) ──▶ gpt-live-1 ──delegates──▶ your Claude Code se
 
 - **macOS** (tested on macOS 26, Apple silicon). The daemon and page are portable, but the hooks, window handling and desktop app are only tested on macOS.
 - **Claude Code 2.1.281 or later** (it needs cross-session messaging and the `MessageDisplay` and `UserPromptExpansion` hooks).
-- **Node.js 22.6 or later** on `PATH`. There are no npm dependencies.
+- **Node.js 22.6 or later** on `PATH`. There are no npm dependencies. If your `node` is older (or missing), [Bun](https://bun.sh) 1.1 or later works too: `/talk` uses it automatically, and tells you how to install one if neither is there.
 - **A voice window:** Google Chrome, or Xcode / the Command Line Tools (`xcode-select --install`) so the plugin can build the native **Sotto** desktop app. Chrome is recommended either way as the fallback: its echo cancellation lets you use laptop speakers without the voice hearing itself. With neither, the page opens in your default browser.
 - **An OpenAI API key with access to `gpt-live-1`.** Voice is billed by OpenAI to that key (see [Cost](#cost)).
 
@@ -58,6 +58,7 @@ The symlink loads the plugin in place as `sotto@skills-dir`, so edits to the rep
 | `/talk on` | Turn voice on here (or move it here from another session) |
 | `/talk off` | Turn voice off, from any session |
 | `/talk status` | State, owner project, minutes and cost today, voice, policy, last error |
+| `/talk restart` | Restart the voice daemon on the latest code at the next pause (see "Updates" below) |
 | `/talk quiet` / `milestones` / `walkthrough` | Change how much the voice narrates (see below) |
 | `/talk voice` | List the 22 voices, with the current one marked |
 | `/talk voice <name>` | Change the voice, for example `/talk voice cedar`. If voice is live, it switches right away (see below). The choice is saved and survives restarts. |
@@ -93,6 +94,8 @@ On macOS the voice window is a small native app, **Sotto**: a menu-bar icon plus
 - the voice window's picker, once the page has one (it uses the daemon's `/api/voices` and `/api/voice`).
 
 The choice is saved in `prefs.json` in the data directory. It beats the `voice` option in `/config`, which beats the default (`marin`).
+
+**Updates.** When the plugin's code changes on disk (a `git pull` in the plugin directory, or your own edits), the daemon notices within about 30 s and restarts itself at the next quiet moment: while voice sleeps, or after 45 s with nobody talking and nothing pending for Claude. It never restarts mid-sentence or while Claude works on a voice request. The new daemon takes over the same session, the window reconnects (and reloads if the page changed), and if you were mid-conversation the voice says "I just updated myself" and carries on with what you were talking about. Code that does not load is never switched to. `/talk restart` does the same right away (at the next short pause).
 
 Only one session owns voice at a time. `/talk on` in another session moves voice there, and the voice tells you it switched projects. Voice turns itself off when the owning session exits.
 
@@ -244,7 +247,7 @@ Design and contracts: [docs/SPEC.md](docs/SPEC.md) (binding spec), [docs/ARCHITE
 | `/talk` just makes Claude reply "needs the sotto plugin hooks" | The hooks aren't loaded. Check `/hooks`, run `/reload-plugins`, and check that the symlink points at the repo. |
 | `ERROR OPENAI_API_KEY was not found` | Put the key in `<repo>/.env`, or export it before starting Claude Code. |
 | `ERROR port 47821 is used by another program` | Choose another `port` in `/config`. |
-| `ERROR node on PATH is vXX; sotto needs Node 22 or newer` | The daemon runs whatever `node` is first on `PATH` (it starts from the plugin directory, so a project's `.node-version` does not apply). Change your default Node, or set `SOTTO_NODE` to a Node 22 binary before starting Claude Code. |
+| `ERROR node on PATH is vXX; sotto needs Node 22 or newer` | The daemon runs whatever `node` is first on `PATH` (it starts from the plugin directory, so a project's `.node-version` does not apply), or Bun 1.1+ when that Node is too old. Install Node 22 (`brew install node`, `nvm install 22`) or Bun (bun.sh), change your default Node, or set `SOTTO_NODE` to a Node 22 (or Bun) binary before starting Claude Code. |
 | `ERROR the voice daemon did not start` | Run `node --version` (it must be 22.6 or later), then read `logs/daemon.log` and `logs/crash.log`. |
 | The window says "This window is not connected" | That page wasn't opened by the daemon, so it has no page credentials. Close it and run `/talk on`. |
 | The window says "Allow the microphone" | Allow it in the voice window (it uses its own Chrome profile, so it asks once), or check System Settings → Privacy → Microphone → Google Chrome (or → Sotto for the desktop app). |
@@ -261,7 +264,8 @@ Design and contracts: [docs/SPEC.md](docs/SPEC.md) (binding spec), [docs/ARCHITE
 ```bash
 npm test               # unit tests (node:test, ~15 s, no network): scripts, daemon, web
 npm run validate       # claude plugin validate . --strict
-npm run e2e            # REAL end-to-end smoke against gpt-live-1 (~20 s of Live, about $0.02)
+npm run e2e            # REAL end-to-end tests against gpt-live-1: smoke, sleep + wake, self-update (about $0.08)
+npm run e2e:restart    # just the self-update e2e (two short sessions, about $0.025); SOTTO_NODE=bun runs it under Bun
 npm run e2e:fixture    # regenerate test/fixtures/ask-files.wav with OpenAI TTS
 npm run build:app      # build the desktop app into ${CLAUDE_PLUGIN_DATA:-~/.sotto}/app (incremental)
 npm run test:app       # app build smoke + launch tests (temp daemon, mock mic); SOTTO_APP_LIVE=1 adds a real gpt-live-1 session

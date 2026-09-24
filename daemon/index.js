@@ -17,6 +17,8 @@ import { createHttpServer } from "./http.js";
 import { createWindow } from "./window.js";
 import * as inboxModule from "./inbox.js";
 import { WebSocketImpl as DefaultWS } from "./ws.js";
+import { Updater, hashSources } from "./update.js";
+import { performRestart, readHandover, listenWithRetry } from "./handover.js";
 
 const LAUNCH_CODE_TTL_MS = 2 * 60_000;
 
@@ -59,6 +61,7 @@ export function nodeProblem(versions = process.versions, WS = globalThis.WebSock
 export function createDaemon({
   dataDir, port, pluginRoot, env = process.env, clock = realClock, fetchImpl = globalThis.fetch,
   WebSocketImpl = DefaultWS, inbox = inboxModule, chrome, log, daemonKey, pageToken, pageSecret, onExit, owner, execFile,
+  onRestart,
 }) {
   const paths = dataPaths(dataDir);
   fs.mkdirSync(paths.logs, { recursive: true, mode: 0o700 });
@@ -91,10 +94,22 @@ export function createDaemon({
     wantsWindow: () => !!voice && voice.config.open_browser !== false && sse.count === 0
       && (voice.state === "waiting_page" || voice.state === "reconnecting"),
   });
+  // Self-update (§6.17): only when the caller can swap processes (main()).
+  let updater = null;
   voice = new Voice({
     paths, port, pluginRoot, daemonKey: key, env, clock, fetchImpl, WebSocketImpl, inbox, chrome: chromeApi, log: logger,
     getApiKey: () => resolveApiKey({ env, pluginRoot, dataDir }), sse, onExit: (r) => onExit?.(r), owner, execFile,
+    requestRestart: onRestart ? () => (updater && updater.enabled ? updater.requestManual() : "disabled") : null,
   });
+  if (onRestart) {
+    updater = new Updater({
+      root: pluginRoot, clock, log: logger, env,
+      isQuiet: (quietMs) => voice.restartBlocker(quietMs),
+      restart: (r) => onRestart(r),
+    }).start();
+  }
+  // The page reloads itself when this changes across a daemon restart (§7.2).
+  const code = updater ? updater.baseline : hashSources(pluginRoot, { dirs: ["web"] });
   let listening = false;
   // After a `shutdown` control is answered, stop accepting connections at once
   // so /healthz goes quiet and the port frees for the next daemon while the
@@ -108,11 +123,12 @@ export function createDaemon({
   };
   const server = createHttpServer({
     voice, port, daemonKey: key, pageToken: token, pageSecret: secret, redeemLaunchCode, webDir: path.join(pluginRoot, "web"), sse, log: logger,
+    build: code.web,
     onControlAnswered: (action) => { if (action === "shutdown") setImmediate(stopListening); },
   });
 
   return {
-    server, voice, sse, paths, daemonKey: key, pageToken: token, pageSecret: secret, issueLaunchCode, log: logger, stopListening,
+    server, voice, sse, paths, daemonKey: key, pageToken: token, pageSecret: secret, issueLaunchCode, log: logger, stopListening, updater,
     listen() {
       return new Promise((resolve, reject) => {
         server.once("error", reject);
@@ -129,6 +145,7 @@ export function createDaemon({
       });
     },
     close() {
+      updater?.stop();
       voice.dispose();
       sse.close();
       listening = false;
@@ -147,6 +164,8 @@ function parseArgs(argv) {
     if (a === "--port") out.port = Number(argv[++i]);
     else if (a === "--data-dir") out.dataDir = argv[++i];
     else if (a === "--plugin-root") out.pluginRoot = argv[++i];
+    else if (a === "--handover") out.handover = true;
+    else if (a === "--preflight") out.preflight = true;
   }
   return out;
 }
@@ -165,8 +184,21 @@ function otherDaemonAlive(pidFile) {
   }
 }
 
+/** Runtime label for the log: "node v22.18.0" or "bun 1.3.5" (bun is the fallback runtime, SPEC §6.2). */
+export function runtimeLabel(versions = process.versions) {
+  return versions.bun ? `bun ${versions.bun}` : `node v${versions.node}`;
+}
+
 async function main() {
   const args = parseArgs(process.argv.slice(2));
+  // --preflight (§6.17): the running daemon checks that this code loads
+  // before it hands over. Every daemon module is a static import of this
+  // file, so reaching this line means they all parsed and linked.
+  if (args.preflight) {
+    const problem = nodeProblem();
+    if (problem) { process.stderr.write(`${problem}\n`); process.exit(3); }
+    process.exit(0);
+  }
   if (!args.port || !Number.isInteger(args.port) || !args.dataDir || !args.pluginRoot) {
     process.stderr.write("usage: node daemon/index.js --port <n> --data-dir <D> --plugin-root <ROOT>\n");
     process.exit(2);
@@ -186,22 +218,42 @@ async function main() {
   }
   removeQuiet(paths.startError);
 
-  if (otherDaemonAlive(paths.pid)) {
+  // Successor of a self-update (§6.17): the state arrives on stdin.
+  let handover = null;
+  if (args.handover) {
+    handover = await readHandover(process.stdin);
+    if (!handover || typeof handover.daemon_key !== "string" || typeof handover.page_token !== "string") {
+      log.error("update.bad_handover", {});
+      process.exit(1);
+    }
+  }
+
+  let recorded = null;
+  try { recorded = Number(fs.readFileSync(paths.pid, "utf8").trim()); } catch { /* none */ }
+  if (!(handover && recorded === handover.parent_pid) && otherDaemonAlive(paths.pid)) {
     log.warn("start.refused", { reason: "another daemon is running for this data dir" });
     process.exit(1);
   }
-  // Stale state from a previous run.
-  removeQuiet(paths.active);
-  removeQuiet(paths.pendingContext);
+  if (!handover) {
+    // Stale state from a previous run. (A successor keeps D/active: same owner, key and port.)
+    removeQuiet(paths.active);
+    removeQuiet(paths.pendingContext);
+  }
 
-  const daemonKey = randomBytes(32).toString("hex");
+  const daemonKey = handover ? handover.daemon_key : randomBytes(32).toString("hex");
   writePid(paths);
   writeKey(paths, daemonKey);
 
   let exiting = false;
+  const entry = fileURLToPath(import.meta.url);
   const d = createDaemon({
     dataDir: args.dataDir, port: args.port, pluginRoot: args.pluginRoot, daemonKey, log,
+    pageToken: handover ? handover.page_token : undefined,
     onExit: (reason) => finish(reason),
+    onRestart: ({ reason, from, to, quietMs }) => performRestart({
+      d, reason, from, to, quietMs, entry, pluginRoot: args.pluginRoot, dataDir: args.dataDir, port: args.port, log,
+      exit: ({ handover: swapped }) => (swapped ? handedOver() : finish("update_relisten_failed")),
+    }),
   });
 
   async function finish(reason) {
@@ -217,6 +269,15 @@ async function main() {
     process.exit(0);
   }
 
+  // The successor owns D/active, daemon.pid and daemon.port now: leave them.
+  function handedOver() {
+    if (exiting) return;
+    exiting = true;
+    log.info("exit", { reason: "handover" });
+    setTimeout(() => process.exit(0), 500).unref();
+    d.close().catch(() => {}).finally(() => process.exit(0));
+  }
+
   process.on("uncaughtException", (e) => log.crash("uncaughtException", e));
   process.on("unhandledRejection", (e) => log.crash("unhandledRejection", e));
   for (const sig of ["SIGTERM", "SIGINT", "SIGHUP"]) {
@@ -227,14 +288,27 @@ async function main() {
     });
   }
 
-  try {
-    await d.listen();
-  } catch (e) {
-    log.error("listen.error", { code: e.code, port: args.port });
+  // A successor takes over before it listens, so the page's first bootstrap
+  // already sees the resumed state (never "off", which would drop its wake mic).
+  if (handover && !d.voice.restore(handover.voice)) {
+    log.error("update.no_owner", {});
+    removeQuiet(paths.active);
     removeQuiet(paths.pid);
     process.exit(1);
   }
-  log.info("start", { version: VERSION, pid: process.pid, port: args.port, node: process.version });
+  try {
+    // A successor retries while its predecessor's socket closes.
+    await (handover ? listenWithRetry(() => d.listen()) : d.listen());
+  } catch (e) {
+    log.error("listen.error", { code: e.code, port: args.port });
+    if (!handover) removeQuiet(paths.pid);
+    process.exit(1);
+  }
+  log.info("start", { version: VERSION, pid: process.pid, port: args.port, node: process.version, runtime: runtimeLabel(), handover: !!handover });
+  if (handover) {
+    log.info("update.started", { reason: handover.reason, from: handover.from, to: handover.to, parent_pid: handover.parent_pid, web_changed: !!handover.web_changed });
+    return;
+  }
   // Nobody claimed us (toggle.sh posts /control right after spawning): exit eventually.
   setTimeout(() => { if (d.voice.state === "off" && !d.voice.owner && !exiting) finish("unclaimed"); }, 60_000).unref();
 }

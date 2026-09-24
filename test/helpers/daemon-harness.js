@@ -41,7 +41,7 @@ export const SESSION = (socket = "/tmp/clv-owner-a.sock", extra = {}) => ({
  *   d (createDaemon result), voice, clock, WS, fetchCalls, inboxSends, chrome,
  *   sse (captured broadcasts), exits, log, setFetch(fn), ownerAlive flag.
  */
-export async function makeHarness({ env = { OPENAI_API_KEY: "sk-test-key" }, clock, port, realClock = false } = {}) {
+export async function makeHarness({ env = { OPENAI_API_KEY: "sk-test-key" }, clock, port, realClock = false, onRestart, dataDir, pageToken, daemonKey } = {}) {
   const h = {
     clock: realClock ? undefined : clock || createFakeClock(),
     WS: createFakeWSClass(),
@@ -52,7 +52,7 @@ export async function makeHarness({ env = { OPENAI_API_KEY: "sk-test-key" }, clo
     exits: [],
     ownerAlive: true,
     log: createMemoryLogger(),
-    dataDir: tmpDir("clv-data-"),
+    dataDir: dataDir || tmpDir("clv-data-"),
     pluginRoot: makePluginRoot(),
     port: port || (await freePort()),
     liveCounter: 0,
@@ -80,6 +80,9 @@ export async function makeHarness({ env = { OPENAI_API_KEY: "sk-test-key" }, clo
     chrome: h.chrome, log: h.log, onExit: (r) => h.exits.push(r), owner: probe,
     execFile: (cmd, args, o, cb) => cb(null, "main\n"),
   };
+  if (onRestart) opts.onRestart = onRestart;
+  if (pageToken) opts.pageToken = pageToken;
+  if (daemonKey) opts.daemonKey = daemonKey;
   if (h.clock) opts.clock = h.clock;
   h.d = createDaemon(opts);
   h.voice = h.d.voice;

@@ -277,6 +277,10 @@ export function createWindow({
     },
 
     notify(text) { browser.notify(text); },
+
+    /** Self-update (§6.17): the successor learns that the app hosts the page, so kill() still closes it. */
+    get appLaunched() { return appLaunched; },
+    adoptApp() { appLaunched = true; },
   };
   return api;
 }

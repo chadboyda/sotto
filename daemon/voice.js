@@ -10,7 +10,7 @@ import { Transcript } from "./transcript.js";
 import { DelegationEngine } from "./delegation.js";
 import { Narrator, milestoneLabel, elicitationSpeech, serverName } from "./policy.js";
 import { SpeechQueue } from "./speaker.js";
-import { renderForPolicy, buildSeed, greeting, ownerSwitchInstruction, voiceSwitchGreeting, vocabularyUpdateInstruction } from "./prompt.js";
+import { renderForPolicy, buildSeed, greeting, ownerSwitchInstruction, voiceSwitchGreeting, vocabularyUpdateInstruction, updateGreeting } from "./prompt.js";
 import { readPrefs, writePrefs, resolveVoice, normalizeVoice, voiceListMessage, unknownVoiceMessage } from "./prefs.js";
 import { collectVocabulary, renderVocabulary, vocabularyHint, TIER } from "./vocabulary.js";
 import { buildSessionBody, createLiveSession, Sideband } from "./live.js";
@@ -51,7 +51,17 @@ const VOCAB_REUSE_MS = 5 * 60_000;
 
 export const MSG = {
   noSocket: "sotto: ERROR this session has no inbox socket (CLAUDE_CODE_MESSAGING_SOCKET is unset), so voice cannot reach it.",
-  usage: "sotto: usage: /talk [on|off|status|quiet|milestones|walkthrough|voice [name]]",
+  usage: "sotto: usage: /talk [on|off|status|restart|quiet|milestones|walkthrough|voice [name]]",
+};
+
+/** Why a restart waits, in words for /talk restart (SPEC §9.2). */
+const RESTART_WAIT_WORDS = {
+  delegation: "a voice request is still with Claude",
+  claude_busy: "Claude is working",
+  speaking: "the conversation",
+  recent_speech: "the conversation",
+  speech_queued: "the conversation",
+  wake_queue: "a message is waiting to be spoken",
 };
 
 export function newCounters() {
@@ -89,7 +99,7 @@ export class Voice {
       paths: o.paths, port: o.port, pluginRoot: o.pluginRoot, daemonKey: o.daemonKey, env: o.env || {},
       clock: o.clock, fetchImpl: o.fetchImpl, WebSocketImpl: o.WebSocketImpl, inbox: o.inbox, chrome: o.chrome,
       log: o.log, getApiKey: o.getApiKey, sse: o.sse, onExit: o.onExit || (() => {}),
-      probe: o.owner || {}, execFile: o.execFile,
+      probe: o.owner || {}, execFile: o.execFile, requestRestart: o.requestRestart || null,
     });
     this.debug = this.env.SOTTO_DEBUG === "1";
     this.base = openaiBase(this.env);
@@ -175,6 +185,12 @@ export class Voice {
       },
     });
     this.statusFile = new StatusFileWriter({ paths: this.paths, clock: this.clock, get: () => this.status() });
+    // Self-update (§6.17): set while this process hands over to its successor;
+    // `updateCue` makes the successor's first session say it updated itself,
+    // `helloNotice` is the toast for the page when it reconnects.
+    this.restarting = false;
+    this.updateCue = false;
+    this.helloNotice = null;
   }
 
   get policy() { return this.runtimePolicy || this.config.speaking_policy; }
@@ -396,6 +412,7 @@ export class Voice {
       case "status": r = { ok: true, message: this.statusMessage() }; break;
       case "policy": r = this.setPolicy(req.policy); break;
       case "voice": r = req.voice == null || req.voice === "" ? { ok: true, message: voiceListMessage(this.currentVoice(req.config)) } : this.setVoice(req.voice, "control"); break;
+      case "restart": r = this.manualRestart(); break;
       case "shutdown": {
         this.gracefulOff("shutdown");
         r = { ok: true, message: "sotto: daemon stopped." };
@@ -756,7 +773,11 @@ export class Voice {
     const t = msg.type;
     if (t !== "activity" && t !== "log" && t !== "wake_audio" && t !== "wake_timing") this.log.info("page", { type: t, state: msg.state, name: msg.name, muted: msg.muted });
     switch (t) {
-      case "hello": this.pageHello = true; this.changed(); break;
+      case "hello":
+        this.pageHello = true;
+        if (this.helloNotice) { const n = this.helloNotice; this.helloNotice = null; this.notice(n.level, n.code, n.text); }
+        this.changed();
+        break;
       case "mic_ok": this.log.info("page.mic_ok", { input: truncate(msg.input_label, 120), output: truncate(msg.output_label, 120) }); break;
       case "mic_error": {
         const denied = /NotAllowed|Permission|Security/i.test(String(msg.name || ""));
@@ -814,6 +835,7 @@ export class Voice {
       this.setLastError("no_api_key", "OPENAI_API_KEY was not found");
       return { status: 503, body: { error: { code: "no_api_key", message: "OPENAI_API_KEY was not found." } } };
     }
+    if (this.restarting) return { status: 503, body: { error: { code: "restarting", message: "Sotto is updating; the voice comes back in a moment." } } };
     const why = SESSION_REASONS.includes(reason) ? reason : "start";
     this.clear("waitingPage");
     this.clear("notifyWatch");
@@ -957,7 +979,10 @@ export class Voice {
       this.live.greeted = true;
       const switched = reason === "reconnect" && this.voiceSwitch === this.live.voice;
       this.voiceSwitch = null;
-      const g = switched ? voiceSwitchGreeting(this.live.voice) : greeting(reason, this.policy, this.owner?.project);
+      // The first session after a self-update (§6.17) says so, once.
+      const updated = this.updateCue && (reason === "reconnect" || reason === "resume");
+      this.updateCue = false;
+      const g = switched ? voiceSwitchGreeting(this.live.voice) : updated ? updateGreeting() : greeting(reason, this.policy, this.owner?.project);
       if (g) this.deliver({ kind: "instructions", content: g, delegationId: null });
       if (reason === "wake") {
         // The page posts the wake clip once it sees session.started; if that
@@ -1316,6 +1341,151 @@ export class Voice {
     }
     this.setState("off");
     this.timer("exit", () => { if (this.state === "off" && !this.owner) this.onExit("off"); }, EXIT_AFTER_OFF_MS);
+  }
+
+  // ---- self-update (§6.17) ----------------------------------------------------------------
+  /**
+   * Is now a quiet moment to restart? null = yes, else the reason it is not.
+   * Quiet means: an owner is bound; sleeping or paused, or live with nobody
+   * speaking for `quietMs` (both sides, the page's voice activity and our own
+   * appends count); no voice request with Claude, Claude not mid-turn, nothing
+   * queued to be spoken. Never mid-speech, never mid-delegation.
+   */
+  restartBlocker(quietMs) {
+    if (this.restarting) return "restarting";
+    if (!this.owner) return "no_owner";
+    const st = this.state;
+    if (st !== "live" && st !== "sleeping" && st !== "paused") return `state_${st}`;
+    if (this.delegation.hasCollecting() || this.delegation.pendingWork().length > 0) return "delegation";
+    if (this.delegation.claudeBusy) return "claude_busy";
+    if (this.wakeQueue.length || this.timers.notifyWatch) return "wake_queue";
+    if (this.speech.size > 0) return "speech_queued";
+    if (st === "live") {
+      const now = this.clock.now();
+      if (this.speech.isSpeaking(now)) return "speaking";
+      const last = Math.max(this.transcript.lastUserSpeechAt, this.transcript.lastAssistantSpeechAt,
+        this.lastPageActivityAt, this.lastDeliverAt || 0, this.liveStartedAt);
+      if (now - last < quietMs) return "recent_speech";
+    }
+    return null;
+  }
+
+  /** /talk restart. */
+  manualRestart() {
+    if (!this.owner || this.state === "off" || this.state === "closing") {
+      return { ok: true, message: "sotto: voice is off. The next /talk on starts the latest code." };
+    }
+    if (!this.requestRestart) return { ok: false, message: "sotto: restart is turned off for this daemon (SOTTO_UPDATE=0)." };
+    const r = this.requestRestart();
+    if (r === "disabled") return { ok: false, message: "sotto: restart is turned off for this daemon (SOTTO_UPDATE=0)." };
+    if (r === "now") return { ok: true, message: "sotto: restarting the voice daemon now. Voice picks up where it left off." };
+    const words = RESTART_WAIT_WORDS[r] || "the voice connection to settle";
+    return { ok: true, message: `sotto: the voice daemon restarts at the next pause (waiting for ${words}).` };
+  }
+
+  /**
+   * First step of a restart: block new sessions and close the Live session
+   * (the page is told to disconnect and keeps its mic). Returns what the
+   * successor needs to resume: {resume: "live"|"sleeping"|"paused"}.
+   */
+  async prepareRestart(reason) {
+    const resume = this.state;
+    this.restarting = true;
+    this.log.info("update.prepare", { reason, state: resume });
+    this.clear("waitingPage");
+    if (this.sideband || this.live) {
+      this.command("disconnect", "update");
+      await this.closeLive(3000);
+    } else {
+      this.stopLiveTimers();
+    }
+    this.persistUsage();
+    return { resume, reason };
+  }
+
+  /** The restart failed (the new code did not start): carry on here. */
+  abortRestart(prep) {
+    this.restarting = false;
+    this.log.warn("update.abort", { resume: prep?.resume || null });
+    if (!this.owner) return;
+    this.notice("warn", "update_failed", "Sotto could not start its new code, so it keeps running the old one. See the daemon log.");
+    if (prep?.resume === "live") {
+      this.setState("reconnecting");
+      this.requestReconnect("update_failed");
+    }
+    this.changed();
+  }
+
+  /**
+   * The state the successor process resumes from (sent over a pipe, never
+   * written to disk: it holds the inbox token). Called after prepareRestart.
+   */
+  snapshot(prep) {
+    const o = this.owner;
+    return {
+      resume: prep?.resume || this.state,
+      reason: prep?.reason || "update",
+      owner: o ? { ...o } : null,
+      config: { ...this.config },
+      runtime_policy: this.runtimePolicy,
+      nonce: this.nonce,
+      history: this.transcript.recentLines(60),
+      last_user_speech_at: this.transcript.lastUserSpeechAt,
+      last_assistant_speech_at: this.transcript.lastAssistantSpeechAt,
+      pending_result: this.pendingResult,
+      backlog: [...this.backlog],
+      counters: { ...this.counters },
+      last_error: this.lastError,
+      pause_reason: this.pauseReason || null,
+      window_app: !!this.chrome?.appLaunched,
+    };
+  }
+
+  /**
+   * Successor side: take over from the snapshot. The owner binding, nonce and
+   * D/active are unchanged (same key and port), so hooks and the marker keep
+   * working. A live session is re-created (the page reconnects on its own,
+   * the new session is seeded with the conversation and says it updated);
+   * sleeping and paused stay as they were.
+   */
+  restore(snap) {
+    if (!snap || !snap.owner || typeof snap.owner.socket !== "string") return false;
+    this.config = { ...this.config, ...(snap.config || {}) };
+    this.config.voice = resolveVoice({ prefs: readPrefs(this.paths), configVoice: this.config.voice });
+    this.runtimePolicy = POLICIES.includes(snap.runtime_policy) ? snap.runtime_policy : null;
+    this.owner = { ...snap.owner };
+    this.nonce = typeof snap.nonce === "string" && /^[0-9a-f]+$/.test(snap.nonce) ? snap.nonce : randomBytes(6).toString("hex");
+    if (Array.isArray(snap.history)) {
+      this.transcript.history = snap.history.filter((l) => l && (l.role === "user" || l.role === "assistant") && typeof l.text === "string").slice(-60);
+    }
+    this.transcript.lastUserSpeechAt = Number(snap.last_user_speech_at) || 0;
+    this.transcript.lastAssistantSpeechAt = Number(snap.last_assistant_speech_at) || 0;
+    this.pendingResult = snap.pending_result && typeof snap.pending_result.text === "string" ? snap.pending_result : null;
+    this.backlog = Array.isArray(snap.backlog) ? snap.backlog.filter((b) => typeof b === "string").slice(-50) : [];
+    if (snap.counters && typeof snap.counters === "object") {
+      for (const k of Object.keys(this.counters)) if (Number.isFinite(snap.counters[k])) this.counters[k] = snap.counters[k];
+    }
+    if (snap.last_error && typeof snap.last_error.code === "string") this.lastError = snap.last_error;
+    this.pauseReason = snap.pause_reason || null;
+    if (snap.window_app) this.chrome?.adoptApp?.();
+    try { writeActive(this.paths, { socket: this.owner.socket, port: this.port, key: this.daemonKey, nonce: this.nonce }); } catch (e) { this.log.error("active.write_error", { message: e.message }); }
+    this.vocabularyFor(this.owner);
+    this.interval("liveness", () => { this.delegation.sweepStale(); this.checkLiveness(); }, LIVENESS_MS);
+    const manual = snap.reason === "manual";
+    this.helloNotice = { level: "info", code: "updated", text: manual ? "Sotto restarted." : "Sotto updated itself to the latest code." };
+    this.log.info("update.restore", { resume: snap.resume, reason: snap.reason, project: this.owner.project, history: this.transcript.history.length });
+    if (snap.resume === "live") {
+      // Spoken only when the user was talking with it (not asleep, not paused).
+      this.updateCue = true;
+      this.setState("reconnecting");
+      this.requestReconnect("update");
+    } else if (snap.resume === "sleeping") {
+      this.setState("sleeping");
+    } else {
+      this.setState("paused");
+    }
+    this.changed();
+    return true;
   }
 
   /** Stop every timer (tests and final exit). */

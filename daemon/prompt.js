@@ -110,6 +110,11 @@ export function voiceSwitchGreeting(voice) {
   return `Say only "Switched to ${v}." Then stop and listen; the conversation continues from where it left off.`;
 }
 
+/** First session after a self-update (§6.17, §8.3): the user was mid-conversation. */
+export function updateGreeting() {
+  return `Say only "I just updated myself." Then stop and listen; the conversation continues from where it left off.`;
+}
+
 const SEED_MAX = 24000;
 const REASON_TEXT = {
   start: "start", resume: "resumed after a pause", reconnect: "reconnected",

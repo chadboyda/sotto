@@ -183,6 +183,7 @@ creds.init();
  */
 const S = {
   phase: "boot",
+  build: null, // web/ hash the daemon served this page with (§6.17 reload)
   gen: 0, // bumps on every connect/teardown; stale async steps check it
   token: null,
   status: null,
@@ -304,6 +305,16 @@ async function startEvents() {
   }
   creds.accept(boot.body.page_secret);
   if (S.unauthorized) S.unauthorized = false;
+  // Self-update (§6.17): a daemon that restarted with a different web/ serves
+  // a new page. Reload into it while no session is up (the daemon closed it
+  // before restarting); the secret in sessionStorage survives the reload.
+  const build = typeof boot.body.build === "string" ? boot.body.build : null;
+  if (lib.shouldReloadForBuild(S.build, build, !!S.pc)) {
+    logRemote("info", "page: new build after a daemon update; reloading");
+    location.replace(lib.reloadUrl(location.pathname, location.search));
+    return;
+  }
+  if (build) S.build = build;
   const restarted = S.token !== null && boot.body.page_token !== S.token;
   S.token = boot.body.page_token;
   loadVoices();
@@ -1164,6 +1175,15 @@ async function connect(reason, { wakeMeta = null } = {}) {
     }, START_TIMEOUT_MS);
   } catch (err) {
     if (gen !== S.gen) return;
+    if (S.errorCode === "restarting") {
+      // The daemon is swapping to new code (§6.17); its successor tells us
+      // what to do next (reconnect, or keep sleeping), so wait quietly.
+      logRemote("info", "connect: daemon is restarting");
+      teardown({ keepMic: true });
+      S.errorCode = null;
+      setPhase("idle");
+      return;
+    }
     logRemote("error", `connect failed: ${err?.message || err}`);
     // fetch() rejects with a TypeError when the daemon is unreachable.
     fail(err instanceof TypeError ? "Could not reach the sotto daemon." : err?.message || "The voice session could not be started.");

@@ -61,7 +61,7 @@ function parseJson(buf) {
  * `voice` provides: healthz(), control(req), status(), pageStatus(), handleHook(),
  * handlePage(), createSession(); `sse` is the SseHub.
  */
-export function createHttpServer({ voice, port, daemonKey, pageToken, pageSecret, redeemLaunchCode, webDir, sse, log, onControlAnswered }) {
+export function createHttpServer({ voice, port, daemonKey, pageToken, pageSecret, redeemLaunchCode, webDir, sse, log, onControlAnswered, build = null }) {
   const hosts = new Set([`127.0.0.1:${port}`, `localhost:${port}`]);
   const origins = new Set([`http://127.0.0.1:${port}`, `http://localhost:${port}`]);
 
@@ -127,7 +127,9 @@ export function createHttpServer({ voice, port, daemonKey, pageToken, pageSecret
         const ok = safeEqual(boot, pageSecret) || safeEqual(launch, pageSecret) || (typeof launch === "string" && !!redeemLaunchCode?.(launch));
         if (!ok) return err(res, 403, "bad_secret", "Open the voice window from Claude Code with /talk.");
       }
-      return send(res, 200, { page_token: pageToken, page_secret: pageSecret || null, version: VERSION, port, status: voice.pageStatus() });
+      // `build`: hash of web/ as this daemon loaded it. A page that sees it
+      // change across a restart reloads itself to run the new page (§6.17).
+      return send(res, 200, { page_token: pageToken, page_secret: pageSecret || null, version: VERSION, build, port, status: voice.pageStatus() });
     }
     if (p === "/api/events" && method === "GET") {
       if (!pageOk(req, url)) return err(res, 403, "bad_token");

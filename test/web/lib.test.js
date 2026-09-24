@@ -313,3 +313,18 @@ test("parseEventData and truncate", () => {
   const t = lib.truncate("word ".repeat(100), 40);
   assert.ok(t.length <= 40 && t.endsWith("…"));
 });
+
+test("shouldReloadForBuild: only a known build that changed, with no session up (§6.17)", () => {
+  assert.equal(lib.shouldReloadForBuild(null, "b1", false), false, "first bootstrap");
+  assert.equal(lib.shouldReloadForBuild("b1", "b1", false), false, "same page");
+  assert.equal(lib.shouldReloadForBuild("b1", "b2", false), true);
+  assert.equal(lib.shouldReloadForBuild("b1", "b2", true), false, "a live session is never dropped for a reload");
+  assert.equal(lib.shouldReloadForBuild("b1", null, false), false, "an older daemon without builds");
+});
+
+test("reloadUrl drops autostart and keeps the rest", () => {
+  assert.equal(lib.reloadUrl("/", "?autostart=1"), "/");
+  assert.equal(lib.reloadUrl("/", "?autostart=1&x=2"), "/?x=2");
+  assert.equal(lib.reloadUrl("/index.html", ""), "/index.html");
+  assert.equal(lib.reloadUrl("", "?y=1"), "/?y=1");
+});

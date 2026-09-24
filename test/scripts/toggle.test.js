@@ -139,7 +139,7 @@ describe("toggle.sh cold start", () => {
     parseOut(await run(TOGGLE, { env, input: stdinFor("on") })); // cold start
     const cases = [
       ["", "toggle"], ["on", "on"], ["start", "on"], ["off", "off"], ["STOP", "off"],
-      ["status", "status"], ["  Status  extra words", "status"],
+      ["status", "status"], ["  Status  extra words", "status"], ["restart", "restart"], ["RESTART", "restart"],
       ["quiet", "policy"], ["Walkthrough", "policy"], ["milestones", "policy"],
     ];
     for (const [arg, action] of cases) {
@@ -156,7 +156,7 @@ describe("toggle.sh cold start", () => {
   test("bogus argument prints usage and never contacts the daemon", async () => {
     const { D, env } = await setup();
     const out = parseOut(await run(TOGGLE, { env, input: stdinFor("bogus") }));
-    assert.equal(out.stopReason, "sotto: usage: /talk [on|off|status|quiet|milestones|walkthrough|voice [name]]");
+    assert.equal(out.stopReason, "sotto: usage: /talk [on|off|status|restart|quiet|milestones|walkthrough|voice [name]]");
     assert.ok(!existsSync(join(D, "daemon.pid")));
   });
 });
@@ -225,6 +225,8 @@ describe("toggle.sh with the daemon down", () => {
       const out = parseOut(await run(TOGGLE, { env, input: stdinFor(a) }));
       assert.equal(out.stopReason, "sotto: voice is off.");
     }
+    const r = parseOut(await run(TOGGLE, { env, input: stdinFor("restart") }));
+    assert.equal(r.stopReason, "sotto: voice is off. The next /talk on starts the latest code.");
     await sleep(100);
     assert.ok(!existsSync(join(D, "daemon.pid")));
   });
@@ -249,10 +251,64 @@ describe("toggle.sh with the daemon down", () => {
     assert.equal(statSync(join(D, "logs/toggle.log")).mode & 0o777, 0o600);
   });
 
-  test("node not found -> error", async () => {
+  test("SOTTO_NODE not found -> error", async () => {
     const { env } = await setup({ SOTTO_NODE: "/nonexistent/node" });
     const out = parseOut(await run(TOGGLE, { env, input: stdinFor("on") }));
-    assert.equal(out.stopReason, "sotto: ERROR node was not found on PATH (Node 22 or newer is required).");
+    assert.equal(out.stopReason, "sotto: ERROR SOTTO_NODE (/nonexistent/node) was not found. Point it at a Node 22 (or Bun) binary, or unset it.");
+  });
+
+  /** A PATH with only a fake `node` (and optionally a fake `bun`) plus the system tools. */
+  function fakeRuntimes({ node, bun }) {
+    const bin = tempDir("clv-bin-");
+    cleanups.push(() => rmDir(bin));
+    if (node) writeFileSync(join(bin, "node"), `#!/bin/bash\n${node}\n`, { mode: 0o755 });
+    if (bun) {
+      // Answers --version like bun, runs the stub daemon with the real Node, leaves a mark.
+      writeFileSync(join(bin, "bun"), `#!/bin/bash\nif [[ "$1" == --version ]]; then echo ${bun}; exit 0; fi\ntouch "${bin}/bun-ran"\nexec "${process.execPath}" "$@"\n`, { mode: 0o755 });
+    }
+    return { bin, PATH: `${bin}:/usr/bin:/bin:/usr/sbin:/sbin` };
+  }
+
+  test("node too old and no bun -> early error with how to install, no spawn", async () => {
+    const { bin, PATH } = fakeRuntimes({ node: 'echo v18.18.0' });
+    const { D, env } = await setup({ PATH });
+    const r = await run(TOGGLE, { env, input: stdinFor("on") });
+    const out = parseOut(r);
+    assert.equal(out.stopReason, "sotto: ERROR node on PATH is v18.18.0; sotto needs Node 22 or newer. Install Node 22 or newer (brew install node, nvm install 22, or nodejs.org), or Bun (bun.sh), then run /talk on again.");
+    assert.ok(!existsSync(join(D, "daemon.pid")));
+    assert.ok(r.ms < 3000, `took ${r.ms.toFixed(0)} ms`);
+    void bin;
+  });
+
+  test("no node at all -> error names both runtimes", async () => {
+    const { PATH } = fakeRuntimes({});
+    const { env } = await setup({ PATH });
+    const out = parseOut(await run(TOGGLE, { env, input: stdinFor("on") }));
+    assert.match(out.stopReason, /^sotto: ERROR node was not found on PATH; sotto needs Node 22 or newer\. Install .*Bun \(bun\.sh\)/);
+  });
+
+  test("node shim that fails -> 'did not run' error", async () => {
+    const { PATH } = fakeRuntimes({ node: "echo 'nodenv: version not installed' >&2; exit 127" });
+    const { env } = await setup({ PATH });
+    const out = parseOut(await run(TOGGLE, { env, input: stdinFor("on") }));
+    assert.match(out.stopReason, /^sotto: ERROR node on PATH did not run/);
+  });
+
+  test("node too old but bun >= 1.1 -> the daemon runs under bun", async () => {
+    const { bin, PATH } = fakeRuntimes({ node: "echo v20.11.0", bun: "1.3.5" });
+    const { D, env } = await setup({ PATH });
+    const out = parseOut(await run(TOGGLE, { env, input: stdinFor("on") }));
+    assert.equal(out.stopReason, "stub: on");
+    assert.ok(existsSync(join(bin, "bun-ran")), "started through bun");
+    assert.ok(existsSync(join(D, "daemon.pid")));
+  });
+
+  test("bun older than 1.1 is not used", async () => {
+    const { bin, PATH } = fakeRuntimes({ node: "echo v20.11.0", bun: "1.0.30" });
+    const { env } = await setup({ PATH });
+    const out = parseOut(await run(TOGGLE, { env, input: stdinFor("on") }));
+    assert.match(out.stopReason, /^sotto: ERROR node on PATH is v20\.11\.0/);
+    assert.ok(!existsSync(join(bin, "bun-ran")));
   });
 
   test("daemon that exits on an old Node -> clear Node-version error, fast", async () => {
@@ -494,7 +550,11 @@ describe("bin/sotto (SPEC §5.9)", () => {
     r = await run(CLI, { args: ["voice", "nope"], env: cliEnv });
     assert.equal(r.code, 1);
     assert.match(r.stdout, /^sotto: unknown voice "nope"/);
+    r = await run(CLI, { args: ["restart"], env: cliEnv });
+    assert.equal(r.stdout, "sotto: voice is off. The next /talk on starts the latest code.\n");
+    assert.equal(r.code, 0);
     r = await run(CLI, { args: ["bogus"], env: cliEnv });
     assert.equal(r.code, 2);
+    assert.match(r.stderr, /sotto restart/);
   });
 });
