@@ -66,7 +66,7 @@ export function nodeProblem(versions = process.versions, WS = globalThis.WebSock
  */
 export function createDaemon({
   dataDir, port, pluginRoot, env = process.env, clock = realClock, fetchImpl = globalThis.fetch,
-  WebSocketImpl = DefaultWS, inbox = inboxModule, chrome, log, daemonKey, pageToken, pageSecret, onExit, owner, execFile,
+  WebSocketImpl = DefaultWS, inbox = inboxModule, chrome, log, daemonKey, pageToken, pageSecret, onExit, owner, execFile, processList,
   onRestart, nativeOptions = {},
   keychain, userConfigKey = env.CLAUDE_PLUGIN_OPTION_OPENAI_API_KEY, keys,
 }) {
@@ -118,7 +118,7 @@ export function createDaemon({
   let updater = null;
   voice = new Voice({
     paths, port, pluginRoot, daemonKey: key, env, clock, fetchImpl, WebSocketImpl, inbox, chrome: chromeApi, log: logger,
-    getApiKey: () => keyStore.key(), keys: keyStore, sse, onExit: (r) => onExit?.(r), owner, execFile,
+    getApiKey: () => keyStore.key(), keys: keyStore, sse, onExit: (r) => onExit?.(r), owner, execFile, processList,
     requestRestart: onRestart ? () => (updater && updater.enabled ? updater.requestManual() : "disabled") : null,
   });
   // Install the desktop app as soon as the plugin is used (the daemon starts
@@ -281,6 +281,7 @@ async function main() {
     // Stale state from a previous run. (A successor keeps D/active: same owner, key and port.)
     removeQuiet(paths.active);
     removeQuiet(paths.pendingContext);
+    removeQuiet(paths.approvalPending);
   }
 
   const daemonKey = handover ? handover.daemon_key : randomBytes(32).toString("hex");
@@ -311,6 +312,7 @@ async function main() {
     log.info("exit", { reason });
     removeQuiet(paths.active);
     removeQuiet(paths.pendingContext);
+    removeQuiet(paths.approvalPending);
     removeQuiet(paths.pid);
     removeQuiet(paths.port);
     setTimeout(() => process.exit(0), 500).unref();

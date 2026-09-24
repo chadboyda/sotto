@@ -43,7 +43,7 @@ describe("manifests", () => {
     const raw = read("hooks/hooks.json");
     assert.ok(!raw.includes("${user_config"));
     const { hooks } = JSON.parse(raw);
-    assert.deepEqual(Object.keys(hooks).sort(), ["Elicitation", "MessageDisplay", "Notification", "PermissionRequest", "PostToolUseFailure", "PreToolUse", "SessionEnd", "Stop", "StopFailure", "SubagentStop", "TaskCompleted", "TeammateIdle", "UserPromptExpansion", "UserPromptSubmit"]);
+    assert.deepEqual(Object.keys(hooks).sort(), ["Elicitation", "MessageDisplay", "Notification", "PermissionDenied", "PermissionRequest", "PostToolUse", "PostToolUseFailure", "PreToolUse", "SessionEnd", "Stop", "StopFailure", "SubagentStop", "TaskCompleted", "TeammateIdle", "UserPromptExpansion", "UserPromptSubmit"]);
     for (const [ev, groups] of Object.entries(hooks)) {
       for (const g of groups) {
         for (const h of g.hooks) {
@@ -55,7 +55,7 @@ describe("manifests", () => {
     }
     assert.equal(hooks.UserPromptExpansion[0].matcher, "^sotto:talk$");
     // Forward-only notification events have no matcher: every type reaches the daemon.
-    for (const ev of ["Notification", "Elicitation", "SubagentStop", "TaskCompleted", "TeammateIdle", "PostToolUseFailure"]) {
+    for (const ev of ["Notification", "Elicitation", "SubagentStop", "TaskCompleted", "TeammateIdle", "PostToolUseFailure", "PostToolUse", "PermissionDenied"]) {
       assert.equal(hooks[ev].length, 1, ev);
       assert.equal(hooks[ev][0].matcher, undefined, ev);
       assert.ok(hooks[ev][0].hooks[0].timeout <= 5, ev);

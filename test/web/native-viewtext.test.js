@@ -101,6 +101,9 @@ function cases() {
     { kind: "turn_end", text: "There are 34 files in daemon/." },
     { kind: "turn_end", text: "short", summary: "## Done\n- one\n- two" },
     { kind: "agents", text: "1 background agent", count: 1 },
+    { kind: "approval_cleared", text: "", busy: true },
+    { kind: "approval_cleared", text: "", busy: false },
+    { kind: "approval_cleared", text: "" },
     { kind: "mystery", text: "hello" },
   ]) add("activityView", [ev], lib.activityView(ev));
   const req = { text: "List the files in the daemon folder.", status: "delivered" };
@@ -113,6 +116,8 @@ function cases() {
     { busy: true, kind: "tool", tool: "Screenshot only the Sotto app window", now: 25_000 },
     { busy: true, kind: "permission", text: "rm -rf build", request: req, agents: 1 },
     { busy: false, kind: "permission", text: "rm -rf build" },
+    { busy: true, kind: "permission", agent: true, text: "A background agent needs approval to run a shell command", agents: 5 },
+    { busy: true, kind: "approval_cleared", text: "", says: "Rendering the stills.", tool: "Bash: render" },
     { busy: false, summary: "Fixed the flaky test.", request: { text: "Fix it", status: "answered" } },
   ]) add("claudeView", [s], lib.claudeView(s));
   for (const md of ["**Bold** and _it_ and `code` [link](https://x.y)", "## Head\n- a\n- b\n```js\nx()\n```\nend", "> quoted ~~no~~"]) add("stripMarkdown", [md], lib.stripMarkdown(md));

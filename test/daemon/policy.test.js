@@ -208,13 +208,22 @@ test("walkthrough progress commentary is throttled to 1 per 15 s", async () => {
   assert.equal(out[2].kind, "commentary");
 });
 
-test("permission dedupe within 10 s", async () => {
-  const { clock, out, n } = narrator();
+test("permission: a repeated hook for the same call is spoken once; every other approval is spoken (§6.10.4)", async () => {
+  const { clock, out, n } = narrator("quiet");
   assert.equal(n.onPermission("Bash", {}), "run a shell command");
-  assert.equal(n.onPermission("Bash", {}), null);
+  assert.equal(n.onPermission("Bash", {}), null, "the same call (no id) within 10 s");
   await clock.advance(10000);
   n.onPermission("Bash", {});
   assert.equal(out.length, 2);
+  // Two approvals with the same words (two agents, two commands) are both spoken, even under quiet.
+  assert.equal(n.onPermission("Bash", { command: "npm test" }, { id: "toolu_1" }), "run a shell command");
+  assert.equal(n.onPermission("Bash", { command: "npm test" }, { id: "toolu_2", agent: true }), "run a shell command");
+  assert.equal(n.onPermission("Bash", { command: "npm test" }, { id: "toolu_2", agent: true }), null, "same approval id");
+  assert.deepEqual(out.slice(2).map((a) => a.content), [
+    "Claude Code is waiting for your approval in the terminal to run a shell command.",
+    "A background agent is waiting for your approval in the terminal to run a shell command.",
+  ]);
+  assert.deepEqual(out.slice(2).map((a) => a.dedupeKey), ["approval:toolu_1", "approval:toolu_2"], "keyed by approval, not by text");
 });
 
 test("progress_text hold: released by a later tool use, discarded by Stop", () => {

@@ -258,7 +258,7 @@ public enum ViewText {
     }
 
     /// lib.activityView: an SSE `activity` message to the activity line.
-    public static func activityView(kind: String?, text rawText: String?, summary rawSummary: String?) -> ActivityLine {
+    public static func activityView(kind: String?, text rawText: String?, summary rawSummary: String?, busy: Bool? = nil) -> ActivityLine {
         let text = truncate(rawText ?? "", 180)
         switch kind {
         case "turn_start": return .init(text: text.isEmpty ? "Claude is working" : "Claude is working: \(text)", busy: true, summary: nil, tone: "work")
@@ -267,6 +267,9 @@ public enum ViewText {
         case "permission":
             return .init(text: text.isEmpty ? "Waiting for your approval in the terminal" : "Waiting for your approval in the terminal: \(text)",
                          busy: true, summary: nil, tone: "attention")
+        case "approval_cleared":
+            // The approval was answered (SPEC §6.10.4): back to what Claude is doing.
+            return .init(text: busy == true ? "Claude is working" : "", busy: busy, summary: nil, tone: busy == true ? "work" : "info")
         case "turn_end":
             var summary: String?
             if let s = rawSummary, !s.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { summary = prefixUTF16(s, 4000) }
@@ -281,6 +284,7 @@ public enum ViewText {
         public var busy: Bool?
         public var kind: String?
         public var text: String?
+        public var agent: Bool?
         public var says: String?
         public var saysAt: Double?
         public var now: Double?
@@ -288,9 +292,9 @@ public enum ViewText {
         public var summary: String?
         public var request: Delegation?
         public var agents: Int?
-        public init(busy: Bool? = nil, kind: String? = nil, text: String? = nil, says: String? = nil, saysAt: Double? = nil, now: Double? = nil,
+        public init(busy: Bool? = nil, kind: String? = nil, text: String? = nil, agent: Bool? = nil, says: String? = nil, saysAt: Double? = nil, now: Double? = nil,
                     tool: String? = nil, summary: String? = nil, request: Delegation? = nil, agents: Int? = nil) {
-            self.busy = busy; self.kind = kind; self.text = text; self.says = says; self.saysAt = saysAt; self.now = now
+            self.busy = busy; self.kind = kind; self.text = text; self.agent = agent; self.says = says; self.saysAt = saysAt; self.now = now
             self.tool = tool; self.summary = summary; self.request = request; self.agents = agents
         }
     }
@@ -320,7 +324,7 @@ public enum ViewText {
         var agents: String?
         if let n = s.agents, n > 0 { agents = n == 1 ? "1 background agent working" : "\(n) background agents working" }
         if s.kind == "permission" && s.busy != false {
-            return ClaudeCard(kind: "approval", title: "Claude needs your approval", command: text.isEmpty ? nil : text,
+            return ClaudeCard(kind: "approval", title: s.agent == true ? "A background agent needs your approval" : "Claude needs your approval", command: text.isEmpty ? nil : text,
                               note: "Waiting for your approval in the terminal", request: request, agents: agents)
         }
         if s.busy == true {

@@ -8,7 +8,7 @@ import { HOOK, ROOT, run, runSync, tempDir, rmDir, baseEnv, sleep, spawnBaseline
 import { startFakeDaemon } from "./helpers/fake-daemon.js";
 
 const EVENTS = ["UserPromptSubmit", "PreToolUse", "PermissionRequest", "MessageDisplay", "Stop", "StopFailure", "SessionEnd",
-  "Notification", "Elicitation", "SubagentStop", "TaskCompleted", "TeammateIdle", "PostToolUseFailure"];
+  "Notification", "Elicitation", "SubagentStop", "TaskCompleted", "TeammateIdle", "PostToolUseFailure", "PermissionDenied"];
 // Forward-only events: the owner path prints nothing for these.
 const QUIET_EVENTS = EVENTS.filter((e) => e !== "UserPromptSubmit" && e !== "PreToolUse");
 const SOCK = "/tmp/clv-owner.sock";
@@ -209,6 +209,25 @@ describe("hook.sh owner path", () => {
       assert.ok(existsSync(join(D, "pending-context")), "only a main-thread PreToolUse claims the flag");
     } finally {
       rmDir(join(D, "pending-context"));
+    }
+  });
+
+  test("PostToolUse is forwarded only while an approval is pending (D/approval-pending, SPEC §6.10.4)", async () => {
+    await sleep(200); // let background POSTs from earlier tests land first
+    srv.requests.length = 0;
+    const input = '{"hook_event_name":"PostToolUse","tool_use_id":"toolu_1","tool_name":"Bash"}';
+    let r = await run(HOOK, { args: ["PostToolUse"], env, input });
+    assert.deepEqual([r.code, r.stdout, r.stderr], [0, "", ""]);
+    await sleep(300);
+    assert.equal(srv.requests.filter((q) => q.url === "/hook/PostToolUse").length, 0, "no approval pending: not forwarded");
+    writeFileSync(join(D, "approval-pending"), "");
+    try {
+      r = await run(HOOK, { args: ["PostToolUse"], env, input });
+      assert.deepEqual([r.code, r.stdout, r.stderr], [0, "", ""]);
+      const reqs = await srv.waitForRequests(1);
+      assert.equal(reqs.find((q) => q.url === "/hook/PostToolUse")?.body, input);
+    } finally {
+      rmDir(join(D, "approval-pending"));
     }
   });
 

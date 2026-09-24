@@ -159,7 +159,8 @@ What gets said, per event:
 | Answer to your voice request | spoken | spoken | spoken, longer |
 | Claude asks you a question (`AskUserQuestion`): "Claude's asking: which layout? Options: A, B, or C. Answer in the terminal." | spoken | spoken | spoken |
 | Plan ready for approval (`ExitPlanMode`) | spoken (title) | spoken (title) | spoken (title and gist) |
-| Tool approval (`PermissionRequest`; the later `permission_prompt` notification is not repeated) | spoken | spoken | spoken |
+| Tool approval (`PermissionRequest`; the later `permission_prompt` notification is not repeated). A background agent's approval says so. Every approval is spoken, and the card clears as soon as it is answered | spoken | spoken | spoken |
+| An approval still waiting after 2 and 5 minutes: "By the way, Claude's still waiting on your approval to run a shell command." (Claude Code never times one out) | spoken | spoken | spoken |
 | MCP server needs input (`Elicitation`), a background session needs input, usage limit reset and waiting for Enter | spoken | spoken | spoken |
 | Claude Code hit an API error (`StopFailure`) | spoken | spoken | spoken |
 | Background work you asked for by voice finished (its task-notification turn) | spoken | spoken | spoken |

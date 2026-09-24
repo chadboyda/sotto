@@ -42,6 +42,12 @@ export function createPendingContext(paths) {
   try { fs.writeFileSync(paths.pendingContext, "", { mode: 0o600 }); return true; } catch { return false; }
 }
 
+/** hook.sh forwards PostToolUse only while an approval is pending (SPEC §6.10.4). */
+export function setApprovalPending(paths, on) {
+  if (!on) return removeQuiet(paths.approvalPending);
+  try { fs.writeFileSync(paths.approvalPending, "", { mode: 0o600 }); return true; } catch { return false; }
+}
+
 export function removePendingContext(paths) {
   return removeQuiet(paths.pendingContext);
 }

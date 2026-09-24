@@ -372,6 +372,12 @@ Every handler is exec form (P7), with no `${user_config…}` (P5).
     "PostToolUseFailure": [
       { "hooks": [ { "type": "command", "command": "${CLAUDE_PLUGIN_ROOT}/scripts/hook.sh", "args": ["PostToolUseFailure"], "timeout": 5 } ] }
     ],
+    "PostToolUse": [
+      { "hooks": [ { "type": "command", "command": "${CLAUDE_PLUGIN_ROOT}/scripts/hook.sh", "args": ["PostToolUse"], "timeout": 5 } ] }
+    ],
+    "PermissionDenied": [
+      { "hooks": [ { "type": "command", "command": "${CLAUDE_PLUGIN_ROOT}/scripts/hook.sh", "args": ["PermissionDenied"], "timeout": 5 } ] }
+    ],
     "Stop": [
       { "hooks": [ { "type": "command", "command": "${CLAUDE_PLUGIN_ROOT}/scripts/hook.sh", "args": ["Stop"], "timeout": 5 } ] }
     ],
@@ -395,7 +401,8 @@ PreToolUse and PermissionRequest have no matcher, so they fire for every tool. h
 | Stop | raw stdin → `POST /hook/Stop` | nothing |
 | StopFailure | raw stdin → `POST /hook/StopFailure` | nothing |
 | SessionEnd | raw stdin → `POST /hook/SessionEnd` | nothing |
-| Notification, Elicitation, SubagentStop, TaskCompleted, TeammateIdle, PostToolUseFailure | raw stdin → `POST /hook/<Event>` | nothing (an Elicitation hook that printed a decision would answer the MCP dialog for the user) |
+| Notification, Elicitation, SubagentStop, TaskCompleted, TeammateIdle, PostToolUseFailure, PermissionDenied | raw stdin → `POST /hook/<Event>` | nothing (an Elicitation hook that printed a decision would answer the MCP dialog for the user) |
+| PostToolUse | only while `D/approval-pending` exists (one more `stat`; otherwise exit 0 without reading stdin): raw stdin → `POST /hook/PostToolUse` (§6.10.4) | nothing |
 
 ### 5.5 `scripts/lib.sh` (sourced; defines, never prints)
 - `clv_data_dir` → echoes `D` (§3).
@@ -947,6 +954,7 @@ Every source below is decided in `policy.js` (`Narrator`), fed by `voice.handleH
 |---|---|
 | PreToolUse / PermissionRequest `tool_name: AskUserQuestion` | `question`: "Claude's asking: <question>? Options: A, B, or C. Answer in the terminal." (multiSelect: "Pick any of: A and B"; 2 to 4 questions: "Claude has N questions for you in the terminal. First: … Second: …"). Deduped per `tool_use_id` and per text for 10 min, so the PreToolUse and the PermissionRequest of one call speak once; never a milestone, never "approval to use AskUserQuestion". Also for subagents. |
 | same, `ExitPlanMode` | `question`: "Claude's plan is ready for your approval in the terminal: <first heading>." (walkthrough adds "In short: <≤300 chars>"); the plan text goes as thinking. |
+| PermissionRequest (other tools) | `permission`, per pending approval (§6.10.4): "Claude Code is waiting for your approval in the terminal to <label>." / from a subagent: "A background agent is waiting for your approval in the terminal to <label>." Spoken under every policy and never deduped: only a repeated hook for the same pending approval is silent. |
 | Notification `permission_prompt` | spoken as `attention` only if no approval or question was announced in the last 120 s (PermissionRequest already spoke it 6 s earlier). |
 | Notification `elicitation_dialog`, `elicitation_url_dialog` | same rule against the Elicitation hook. |
 | Notification `idle_prompt` | `idle`. The idle period starts at a result and ends at the next main-thread UserPromptSubmit. |
@@ -973,13 +981,23 @@ Every source below is decided in `policy.js` (`Narrator`), fed by `voice.handleH
 #### 6.10.2 Speech queue (`daemon/speaker.js`, pure)
 A `commentary.append` cuts off whatever the model is saying (observed: a voice answer cut off 3 s in by an unrelated "Claude Code finished"). So `voice.deliver()` puts every commentary into a `SpeechQueue`; thinking and instructions go out at once.
 - **Speaking** = an output transcript delta was seen and the audio it covers has not ended: `until = firstDeltaWall + (end_ms − firstDeltaStart_ms) + 1200 ms` hangover (the transcript can run ahead of playback). After our own commentary, a 2500 ms pre-roll counts as speaking until the first delta. Output audio chunks are **not** a signal: measured on gpt-live-1, they arrive continuously, silence included.
-- **Priorities:** high = `voice_result`, `background_voice`, `question`, `permission`, `attention`, voice-related delegation notices (StopFailure/held with an id); low = `typed_result`, `other_result`, `background_result`, `progress_text`, `completion`, `idle`, `tool_failure`; everything else normal. Released highest first, FIFO within a priority, one at a time.
+- **Priorities:** high = `voice_result`, `background_voice`, `question`, `permission`, `approval_reminder`, `attention`, voice-related delegation notices (StopFailure/held with an id); low = `typed_result`, `other_result`, `background_result`, `progress_text`, `completion`, `idle`, `tool_failure`; everything else normal. Released highest first, FIFO within a priority, one at a time.
 - **While speaking**, everything is held. Only `question`, `permission` and `attention` may go out while speech continues, at a sentence boundary (last output text ends in `.!?…:;`) or after 3 s.
 - **Held ≥ 20 s:** low/normal items become thinking (`bg + content`); high items are never demoted and go out at the next boundary (or 3 s later).
 - With no Live session, a released item takes the §6.11 paused path (results → `pendingResult`, which now also covers `question`, `attention`, `background_*`).
 - **Session swaps** (voice switch, reconnect, expiry): the queue is **suspended** from the moment the old session is dropped until the replacement is ready, so held items wait for it instead of falling into `pendingResult`. If no output speech followed the last released commentary, it goes back to the front of the queue (the closing session never said it). On ready, the queue resumes after the greeting (a 2500 ms pre-roll when a greeting was sent). If the swap ends any other way (`paused`, `off`, `sleeping`, `waiting_page`), it resumes at once and the items take the paused path.
 - **Repeats:** at release, an informational item (results, mirror replies, background updates, progress, completions, idle, failures; never questions, approvals or notices) whose spoken lead (first 3 sentences, without the "Claude Code's answer:" frame) has ≥ 6 content words is dropped to thinking when ≥ 55% of them were said in the last 60 s (our last 8 commentaries and voice utterances), or ≥ 40% by the voice after the item was queued (it spoke from the item's silent context while the item was held). A `voice_result` is not compared with voice speech from before it arrived ("I'll ask Claude whether…"), and a number not said yet makes an item news. Logged `speech.duplicate` with `why: "similar"`.
-- **De-duplication:** an item whose text (case and whitespace ignored) is already queued is dropped. While suspended and for 20 s after resuming, an item is also dropped when the same text is in flight (sent, not yet heard) or was spoken (output speech observed after its append) in the last 120 s. Outside that window a repeated text is a new event (a second approval prompt) and is spoken.
+- **De-duplication:** an item whose text (case and whitespace ignored) is already queued is dropped. An approval (`permission`, `approval_reminder`) is keyed by its approval id instead of its text (`dedupeKey`), so two prompts with the same words are both spoken; an approval answered while its announcement or reminder is still held is removed from the queue (`speech.cancelled`). While suspended and for 20 s after resuming, an item is also dropped when the same text is in flight (sent, not yet heard) or was spoken (output speech observed after its append) in the last 120 s. Outside that window a repeated text is a new event (a second approval prompt) and is spoken.
+
+#### 6.10.4 Pending tool approvals (`daemon/approvals.js`, pure)
+The card, the header word and the voice follow the approvals Claude Code is actually waiting on, not the last hook seen. (0.3.2: a background agent's approval, answered in the terminal, kept the card on "Claude needs your approval" for minutes, because no later main-thread event replaced it.)
+- **Pending** from a PermissionRequest (not AskUserQuestion / ExitPlanMode, §6.10.1). PermissionRequest has no `tool_use_id`; Claude Code runs PreToolUse first for the same call, so the approval takes the `tool_use_id` of its thread's latest PreToolUse when `tool_name` and `tool_input` match, else a synthetic `perm-N`. A thread is the main session or one `agent_id`. A second PermissionRequest for the same thread, tool and input is the same approval.
+- **Resolved** by the first evidence the prompt was answered: PostToolUse, PostToolUseFailure or PermissionDenied for its `tool_use_id` (for a synthetic id: the thread's next finished tool, 1.5 s or later); a later PreToolUse of the same thread (1.5 s or later: a parallel sibling can follow the request at once); the thread ending (main-thread Stop / StopFailure; that agent's SubagentStop); a UserPromptSubmit typed in the terminal (a `<task-notification>`, `<agent-message>` or voice message resolves only main-thread approvals); a running approved command (below); owner switch or voice off. Other threads' events never resolve an approval.
+- **Running command probe.** Claude Code has no "approval answered" hook and a long command's PostToolUse arrives only when it exits. While a Bash approval is pending the daemon runs `ps -axww -o pid=,command=` every 4 s: Claude Code runs an approved command as `/bin/zsh -c … eval '<command>' …` (each `'` rewritten as `'"'"'`), so the command's longest quote-free line (≥ 16 characters, first 120) on a process's command line means it was approved. Shorter commands wait for the hooks.
+- **Card:** SSE `activity` kind `permission` with `agent: true|false` and text "Claude needs approval to <label>" / "A background agent needs approval to <label>" (card title "A background agent needs your approval" for a subagent); on resolution kind `approval_cleared` with `busy` (the main thread's state), or the next pending approval (the newest is shown). `/status` and the page status carry `claude.approval`: `{label, agent, since, pending}` or null; a client that shows an approval while `claude.approval` is null clears it.
+- **Reminder:** Claude Code never times a permission prompt out (its tools reference: permission prompts "never auto-resolve on idle"), so a pending approval is reminded 2 min and 5 min after the request, at most twice: `approval_reminder` "By the way, Claude's still waiting on your approval to <label>." / "By the way, a background agent is still waiting on your approval to <label>." / "By the way, N approvals are still waiting for you in the terminal." Spoken under every policy, high priority but not urgent (it waits for the voice to finish), never while the user speaks (deferred until 2.5 s after their last input transcript), and it wakes a sleeping session (`WAKE_SOURCES`).
+- **PostToolUse gate:** the daemon keeps `D/approval-pending` while any approval is pending; hook.sh forwards PostToolUse only then (§5.4). Removed at start and exit.
+- Logged: `approval.pending` (id, agent, tool), `approval.resolved` (id, agent, reason `tool_done` | `next_tool` | `stop` | `prompt` | `running`, held_ms), `approval.remind`.
 
 **`speech.js`** (pure):
 - `speakable(md)`:

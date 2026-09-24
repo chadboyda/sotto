@@ -2,14 +2,16 @@
 // §6.13 shutdown). Wires the sideband, transcript, delegation engine, narrator,
 // page (SSE) and Chrome window together. All time goes through `clock`.
 import { randomBytes } from "node:crypto";
+import { execFile as execFileCb } from "node:child_process";
 import { normalizeConfig, POLICIES, VOICES, ECHO_GUARD_MODES, openaiBase, wssBase, VERSION, MAX_APPEND_TOKENS, voiceMarker, BG } from "./config.js";
 import { estTokens, fitTokens, tokenChunks, speakable, summary, clip, awaitingQuestion } from "./speech.js";
 import { makeOwner, ownerStatus, isOwnerAlive } from "./owner.js";
-import { writeActive, removeActive, createPendingContext, removePendingContext, readUsage, writeUsage, localDate, StatusFileWriter } from "./statefiles.js";
+import { writeActive, removeActive, createPendingContext, removePendingContext, setApprovalPending, readUsage, writeUsage, localDate, StatusFileWriter } from "./statefiles.js";
 import { Transcript } from "./transcript.js";
 import { DelegationEngine, parseTaskNotifications } from "./delegation.js";
 import { Mirror, MIRROR_MODES } from "./mirror.js";
-import { Narrator, elicitationSpeech, serverName, ToolLine, AgentTracker, TopLevelWork, reportSentence, isBackgroundLaunch, agentsText, cardText } from "./policy.js";
+import { Narrator, elicitationSpeech, serverName, ToolLine, AgentTracker, TopLevelWork, reportSentence, isBackgroundLaunch, agentsText, cardText, permissionLabel, reminderSpeech } from "./policy.js";
+import { Approvals, commandFingerprint, findRunning } from "./approvals.js";
 import { SpeechQueue, COMMENTARY_PREROLL_MS } from "./speaker.js";
 import { renderForPolicy, buildSeedInput, greeting, ownerSwitchInstruction, voiceSwitchGreeting, personaSwitchGreeting, vocabularyUpdateInstruction, updateGreeting, cantHearInstruction, RECENT_GREETING_MS } from "./prompt.js";
 import { readPrefs, writePrefs, resolveVoice, normalizeVoice, voiceListMessage, unknownVoiceMessage, normalizeWindow, resolveWindowPref, personaVoiceOn } from "./prefs.js";
@@ -61,8 +63,23 @@ const RECONNECT_OPEN_MS = 4000;
 // session.close made the server end the old session as connection_lost /
 // remote_hangup instead of close_requested (e2e, 2026-09-23).
 const SWITCH_CLOSE_WAIT_MS = 2000;
-const RESULT_SOURCES = new Set(["voice_result", "typed_result", "permission", "question", "attention", "background_voice", "background_result", "voice_notice", "mirror_result"]);
+const RESULT_SOURCES = new Set(["voice_result", "typed_result", "permission", "approval_reminder", "question", "attention", "background_voice", "background_result", "voice_notice", "mirror_result"]);
 const ASK_TOOLS = new Set(["AskUserQuestion", "ExitPlanMode"]);
+/** Approval probe period while a Bash approval is pending (§6.10.4). */
+const APPROVAL_PROBE_MS = 4000;
+/** An approval reminder waits until the user has been quiet this long. */
+const REMIND_USER_QUIET_MS = 2500;
+/** A UserPromptSubmit that Claude Code submitted itself (a background task's
+ *  notice, a subagent hand-back) or a voice message: not the user answering a
+ *  subagent's prompt in the terminal. */
+const AUTO_PROMPT = /^\s*(?:<task-notification>|<agent-message\b|\[sotto voice\b)/;
+
+/** `ps` for the approval probe: pid and full command line of every process. */
+function defaultProcessList() {
+  return new Promise((resolve) => {
+    execFileCb("/bin/ps", ["-axww", "-o", "pid=,command="], { timeout: 2000, maxBuffer: 16 * 1024 * 1024 }, (err, stdout) => resolve(err ? "" : String(stdout || "")));
+  });
+}
 // States in which a Live session exists or is being created right now.
 // ("reconnecting" is not one: it only waits for the page to start a new one.)
 const LIVE_STATES = new Set(["connecting", "live"]);
@@ -122,6 +139,7 @@ export class Voice {
    * @param {(reason:string) => void} o.onExit
    * @param {object} [o.owner]     liveness probe overrides {kill, statSync}
    * @param {Function} [o.execFile] for git
+   * @param {() => Promise<string>} [o.processList] `ps -axo pid=,command=` output (approval probe, §6.10.4)
    */
   constructor(o) {
     Object.assign(this, {
@@ -129,6 +147,7 @@ export class Voice {
       clock: o.clock, fetchImpl: o.fetchImpl, WebSocketImpl: o.WebSocketImpl, inbox: o.inbox, chrome: o.chrome,
       log: o.log, getApiKey: o.getApiKey, keys: o.keys || null, sse: o.sse, onExit: o.onExit || (() => {}),
       probe: o.owner || {}, execFile: o.execFile, requestRestart: o.requestRestart || null,
+      processList: o.processList || defaultProcessList,
     });
     this.debug = this.env.SOTTO_DEBUG === "1";
     this.base = openaiBase(this.env);
@@ -236,6 +255,10 @@ export class Voice {
     this.reports = new Map(); // agent_id → its SubagentHandback report
     this.agentsShown = 0;
     this.cardSaid = "";
+    // Tool approvals Claude Code is waiting on (SPEC §6.10.4): the card, the
+    // spoken reminder and the PostToolUse gate follow this, not the last event.
+    this.approvals = new Approvals({ clock: this.clock });
+    this.probing = false;
     this.delegation = new DelegationEngine({
       clock: this.clock, transcript: this.transcript, log: this.log,
       effects: {
@@ -314,7 +337,7 @@ export class Voice {
         daily_cap_minutes: this.config.daily_cap_minutes, wake_sensitivity: this.config.wake_sensitivity, mirror: this.mirrorMode(),
         echo_guard: this.echoGuardMode(),
       },
-      claude: { busy: this.delegation.claudeBusy, last_event_at: iso(this.lastClaudeEventAt), awaiting_input: !!this.awaiting },
+      claude: { busy: this.delegation.claudeBusy, last_event_at: iso(this.lastClaudeEventAt), awaiting_input: !!this.awaiting, approval: this.approvalStatus() },
       page: { connected: this.sse.count > 0 || false, clients: this.sse.count },
       delegations: this.delegation.list(10),
       counters: { ...this.counters },
@@ -325,6 +348,12 @@ export class Voice {
       audio_client: this.pageStatus().audio_client,
       native: this.native ? this.native.status() : null,
     };
+  }
+
+  /** The approval the card shows (§6.10.4), or null. */
+  approvalStatus() {
+    const p = this.approvals?.current();
+    return p ? { label: p.label, agent: p.agent, since: iso(p.at), pending: this.approvals.size } : null;
   }
 
   pageStatus() {
@@ -341,7 +370,7 @@ export class Voice {
       wake: this.governor.pageConfig(this.config.wake_sensitivity, true),
       live: this.live ? { session_id: this.live.id, expires_at: this.live.expires_at, usage_seconds: this.live.usage_seconds, muted: this.live.muted } : null,
       today: { seconds: Math.round(this.todaySeconds() * 10) / 10, cap_minutes: this.config.daily_cap_minutes },
-      claude: { busy: this.delegation.claudeBusy },
+      claude: { busy: this.delegation.claudeBusy, approval: this.approvalStatus() },
       last_error: this.lastError ? { code: this.lastError.code, message: this.lastError.message } : null,
       key: { ...this.keyInfo(), setup: this.keySetup },
       audio_client: this.appAttached() ? "app" : this.audioClient === "page" ? "page" : null,
@@ -808,6 +837,7 @@ export class Voice {
       this.awaiting = null;
       this.narrator.resetTurn();
       this.agents.reset(); this.work.reset(); this.reports.clear(); this.toolLine.reset(); this.agentsShown = 0;
+      this.clearApprovals();
       removePendingContext(this.paths);
       this.owner = next;
       this.log.info("owner.switch", { from: old.project, to: next.project, session_id: next.session_id });
@@ -1283,6 +1313,7 @@ export class Voice {
     if (typeof b.transcript_path === "string") this.owner.transcript_path = b.transcript_path;
     this.lastClaudeEventAt = this.clock.now();
     const wasBusy = this.delegation.claudeBusy;
+    this.trackApprovals(event, b);
 
     // Notification-style events (§6.10.1). They never touch busy/delivery
     // state. SubagentStop always carries agent_id, so it is handled here,
@@ -1305,11 +1336,7 @@ export class Voice {
         while (this.reports.size > 50) this.reports.delete(this.reports.keys().next().value);
       }
       if (event === "PreToolUse" && ASK_TOOLS.has(b.tool_name)) this.onAsk(b);
-      else if (event === "PermissionRequest") {
-        if (ASK_TOOLS.has(b.tool_name)) this.onAsk(b);
-        const label = this.narrator.onPermission(b.tool_name, b.tool_input);
-        if (label) this.activity("permission", `Claude needs approval to ${label}`);
-      }
+      else if (event === "PermissionRequest") this.onPermissionRequest(b);
       this.statusFile.mark();
       return true;
     }
@@ -1346,13 +1373,14 @@ export class Voice {
         if (line) this.activity("tool", line);
         break;
       }
-      case "PermissionRequest": {
+      case "PermissionRequest":
         this.delegation.onHook(event, b);
-        if (ASK_TOOLS.has(b.tool_name)) this.onAsk(b);
-        const label = this.narrator.onPermission(b.tool_name, b.tool_input);
-        if (label) this.activity("permission", `Claude needs approval to ${label}`);
+        this.onPermissionRequest(b);
         break;
-      }
+      case "PostToolUse":
+      case "PermissionDenied":
+        // Forwarded for the approval lifecycle only (trackApprovals above).
+        break;
       case "MessageDisplay":
         // Hook POSTs race; a batch of a message/turn that already ended is dropped.
         if (!this.narrator.onMessageDisplay(b)) { this.log.debug("hook.late", { event }); break; }
@@ -1391,6 +1419,116 @@ export class Voice {
     if (wasBusy !== this.delegation.claudeBusy) this.changed();
     else this.statusFile.mark();
     return true;
+  }
+
+  // ---- tool approvals (SPEC §6.10.4) --------------------------------------------------
+  /** PermissionRequest (main thread or a subagent): announce it, show it, remind about it. */
+  onPermissionRequest(b) {
+    if (ASK_TOOLS.has(b.tool_name)) { this.onAsk(b); return; }
+    const label = permissionLabel(b.tool_name, b.tool_input);
+    const { approval: p, fresh } = this.approvals.onRequest(b, label);
+    if (!fresh) return;
+    this.log.info("approval.pending", { id: p.id, agent: p.agent, tool: p.tool, pending: this.approvals.size });
+    this.narrator.onPermission(b.tool_name, b.tool_input, { id: p.id, agent: p.agent });
+    this.showApproval(p);
+    this.approvalsChanged();
+  }
+
+  showApproval(p) {
+    this.activity("permission", `${p.agent ? "A background agent" : "Claude"} needs approval to ${p.label}`, { agent: p.agent });
+  }
+
+  /** Evidence that approvals were answered (see approvals.js). */
+  trackApprovals(event, b) {
+    if (!this.approvals.size && event !== "PreToolUse") return;
+    let done = [];
+    switch (event) {
+      case "PreToolUse": done = this.approvals.onPreToolUse(b); break;
+      case "PostToolUse": case "PostToolUseFailure": case "PermissionDenied": done = this.approvals.onToolDone(b); break;
+      case "Stop": case "StopFailure": if (!(typeof b.agent_id === "string" && b.agent_id)) done = this.approvals.onThreadEnd(b); break;
+      case "SubagentStop": if (typeof b.agent_id === "string" && b.agent_id) done = this.approvals.onThreadEnd(b); break;
+      case "UserPromptSubmit":
+        // Typed in the terminal: every prompt there is answered. Prompts Claude
+        // Code submits itself answer only the main thread's (a subagent's
+        // dialog can still be open behind a task notification).
+        if (AUTO_PROMPT.test(typeof b.prompt === "string" ? b.prompt : "")) done = this.approvals.onThreadEnd({});
+        else done = this.approvals.onUserPrompt();
+        break;
+      default: break;
+    }
+    this.approvalsResolved(done);
+  }
+
+  approvalsResolved(done) {
+    if (!done.length) return;
+    const now = this.clock.now();
+    for (const p of done) this.log.info("approval.resolved", { id: p.id, agent: p.agent, reason: p.reason, held_ms: now - p.at, pending: this.approvals.size });
+    // An announcement or reminder still waiting in the speech queue is no longer true.
+    const keys = new Set(done.flatMap((p) => [`approval:${p.id}`, `reminder:${p.id}`]));
+    this.speech.cancel((a) => typeof a.dedupeKey === "string" && [...keys].some((k) => a.dedupeKey.startsWith(k)));
+    const next = this.approvals.current();
+    if (next) this.showApproval(next);
+    else this.activity("approval_cleared", "", { busy: this.delegation.claudeBusy });
+    this.approvalsChanged();
+  }
+
+  /** After any change: the PostToolUse gate, the reminder, the probe and the status. */
+  approvalsChanged() {
+    const any = this.approvals.size > 0;
+    if (any !== !!this.approvalFlag) { this.approvalFlag = any; setApprovalPending(this.paths, any); }
+    this.scheduleApprovalReminder();
+    if (this.approvals.probeable().length) { if (!this.timers.approvalProbe) this.interval("approvalProbe", () => this.probeApprovals(), APPROVAL_PROBE_MS); }
+    else this.clear("approvalProbe");
+    this.changed();
+  }
+
+  clearApprovals() {
+    this.approvals.clear();
+    this.clear("approvalRemind");
+    this.clear("approvalProbe");
+    if (this.approvalFlag) { this.approvalFlag = false; setApprovalPending(this.paths, false); }
+  }
+
+  scheduleApprovalReminder() {
+    const at = this.approvals.nextDueAt();
+    if (at === null) { this.clear("approvalRemind"); return; }
+    this.timer("approvalRemind", () => this.remindApprovals(), Math.max(0, at - this.clock.now()));
+  }
+
+  /**
+   * "By the way, Claude's still waiting on your approval…" at 2 and 5 min
+   * (Claude Code never times a permission prompt out). Never over the user:
+   * while they speak it waits; the speech queue waits for the voice.
+   */
+  remindApprovals() {
+    const now = this.clock.now();
+    if (now - this.transcript.lastUserSpeechAt < REMIND_USER_QUIET_MS) {
+      this.timer("approvalRemind", () => this.remindApprovals(), 1000);
+      return;
+    }
+    const due = this.approvals.takeDue(now);
+    for (const p of due) p.reminders++;
+    if (due.length) {
+      this.log.info("approval.remind", { ids: due.map((p) => p.id), waited_ms: due.map((p) => now - p.at) });
+      this.deliver({ kind: "commentary", content: reminderSpeech(due), delegationId: null, source: "approval_reminder", dedupeKey: `reminder:${due.map((p) => p.id).join(",")}:${due[0].reminders}` });
+    }
+    this.scheduleApprovalReminder();
+  }
+
+  /** A pending Bash approval whose command is running was approved (approvals.js). */
+  async probeApprovals() {
+    if (this.probing) return;
+    const list = this.approvals.probeable();
+    if (!list.length) { this.clear("approvalProbe"); return; }
+    this.probing = true;
+    let ps = "";
+    try { ps = await this.processList(); } catch { ps = ""; } finally { this.probing = false; }
+    const done = [];
+    for (const p of list) {
+      if (!this.approvals.pending.has(p.id)) continue;
+      if (findRunning(ps, commandFingerprint(p.command), [process.pid])) done.push(...this.approvals.resolve(p.id, "running"));
+    }
+    this.approvalsResolved(done);
   }
 
   /** AskUserQuestion / ExitPlanMode: speak the question (attached to the voice request it serves). */
@@ -2419,6 +2557,7 @@ export class Voice {
     this.narrator.dispose();
     this.narrator.resetTurn();
     this.agents.reset(); this.work.reset(); this.reports.clear(); this.toolLine.reset(); this.agentsShown = 0;
+    this.clearApprovals();
     this.speech.drain();
     this.nonce = null;
     this.voiceSwitch = null;

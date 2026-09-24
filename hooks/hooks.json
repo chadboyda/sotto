@@ -34,6 +34,12 @@
     "PostToolUseFailure": [
       { "hooks": [ { "type": "command", "command": "${CLAUDE_PLUGIN_ROOT}/scripts/hook.sh", "args": ["PostToolUseFailure"], "timeout": 5 } ] }
     ],
+    "PostToolUse": [
+      { "hooks": [ { "type": "command", "command": "${CLAUDE_PLUGIN_ROOT}/scripts/hook.sh", "args": ["PostToolUse"], "timeout": 5 } ] }
+    ],
+    "PermissionDenied": [
+      { "hooks": [ { "type": "command", "command": "${CLAUDE_PLUGIN_ROOT}/scripts/hook.sh", "args": ["PermissionDenied"], "timeout": 5 } ] }
+    ],
     "Stop": [
       { "hooks": [ { "type": "command", "command": "${CLAUDE_PLUGIN_ROOT}/scripts/hook.sh", "args": ["Stop"], "timeout": 5 } ] }
     ],

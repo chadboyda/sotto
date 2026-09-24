@@ -61,11 +61,11 @@ final class ViewTextTests: XCTestCase {
         case "errorBannerText": return opt(ViewText.errorBannerText(a[0].obj ?? [:]))
         case "activityView":
             let o = a[0].obj ?? [:]
-            let v = ViewText.activityView(kind: o.string("kind"), text: o.string("text"), summary: o.string("summary"))
+            let v = ViewText.activityView(kind: o.string("kind"), text: o.string("text"), summary: o.string("summary"), busy: o.bool("busy"))
             return .object(["text": .string(v.text), "busy": v.busy.map { .bool($0) } ?? .null, "summary": opt(v.summary), "tone": .string(v.tone)])
         case "claudeView":
             let o = a[0].obj ?? [:]
-            var input = ViewText.ClaudeInput(busy: o.bool("busy"), kind: o.string("kind"), text: o.string("text"), says: o.string("says"),
+            var input = ViewText.ClaudeInput(busy: o.bool("busy"), kind: o.string("kind"), text: o.string("text"), agent: o.bool("agent"), says: o.string("says"),
                                              saysAt: o.number("saysAt"), now: o.number("now"), tool: o.string("tool"), summary: o.string("summary"),
                                              agents: o.number("agents").map { Int($0) })
             if let r = o.object("request") { input.request = .init(id: "r", status: r.string("status") ?? "", text: r.string("text") ?? "") }

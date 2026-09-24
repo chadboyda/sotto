@@ -48,6 +48,8 @@ public final class StateModel {
     public private(set) var delegations: [ViewText.Delegation] = []
     public private(set) var claudeBusy = false
     public private(set) var claudeKind: String?
+    /// The approval shown is a background agent's (SPEC §6.10.4).
+    public private(set) var claudeAgent = false
     public private(set) var claudeText = ""
     public private(set) var claudeSays = ""
     public private(set) var claudeSaysAt: Date?
@@ -181,7 +183,7 @@ public final class StateModel {
     public var claudeCard: ViewText.ClaudeCard {
         let t = now()
         return ViewText.claudeView(.init(
-            busy: claudeBusy, kind: claudeKind, text: claudeText, says: claudeSays,
+            busy: claudeBusy, kind: claudeKind, text: claudeText, agent: claudeAgent, says: claudeSays,
             saysAt: claudeSaysAt.map { $0.timeIntervalSince1970 * 1000 }, now: t.timeIntervalSince1970 * 1000,
             tool: claudeTool, summary: summary, request: delegations.first, agents: agents))
     }
@@ -348,6 +350,9 @@ public final class StateModel {
         let prev = status
         status = s
         if let b = s.claude?.busy { setBusy(b) }
+        // The daemon tracks pending approvals (SPEC §6.10.4): none pending means the card
+        // cannot still ask for one, even if the activity that cleared it was missed.
+        if let c = s.claude, c.reportsApproval, c.approval == nil, claudeKind == "permission" { claudeKind = "approval_cleared"; claudeAgent = false }
         if s.state == "paused" && s.last_error?.code == "daily_cap" { pausedReason = "daily_cap" }
         if s.state != "off" { closed = false }
         if let p = mutePending, s.live?.muted == p { mutePending = nil }
@@ -370,7 +375,7 @@ public final class StateModel {
             agents = max(0, Int(m.number("count") ?? 0))
             return
         }
-        let v = ViewText.activityView(kind: kind, text: m.string("text"), summary: m.string("summary"))
+        let v = ViewText.activityView(kind: kind, text: m.string("text"), summary: m.string("summary"), busy: m.bool("busy"))
         activityLine = v
         if kind == "turn_start" || kind == "turn_end" { claudeSays = ""; claudeSaysAt = nil; claudeTool = "" }
         if kind == "text" { claudeSays = m.string("text") ?? ""; claudeSaysAt = now() }
@@ -379,6 +384,7 @@ public final class StateModel {
         if let s = v.summary { summary = s; summaryExpanded = false }
         claudeKind = kind
         claudeText = m.string("text") ?? ""
+        claudeAgent = kind == "permission" && m.bool("agent") == true
         switch kind {
         case "turn_start": announce("Claude is working.")
         case "permission":
@@ -594,7 +600,7 @@ public final class StateModel {
 
     /// Reset the transient UI (captions, card, banners); used between canned snapshot states.
     public func resetForPreview() {
-        captions = []; delegations = []; claudeBusy = false; claudeKind = nil; claudeText = ""; claudeSays = ""
+        captions = []; delegations = []; claudeBusy = false; claudeKind = nil; claudeAgent = false; claudeText = ""; claudeSays = ""
         claudeSaysAt = nil; claudeTool = ""; summary = nil; agents = 0; workSince = nil; banners = []; pendingResult = nil
         floor = nil; wordHold = WordHold(); floorTracker = FloorTracker(); usageShown = nil; todayShown = nil
     }

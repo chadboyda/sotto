@@ -12,6 +12,7 @@ export function dataPaths(D) {
     startError: path.join(D, "start-error"),
     active: path.join(D, "active"),
     pendingContext: path.join(D, "pending-context"),
+    approvalPending: path.join(D, "approval-pending"), // hook.sh forwards PostToolUse only while it exists (§6.10.4)
     status: path.join(D, "status.json"),
     usage: path.join(D, "usage.json"),
     prefs: path.join(D, "prefs.json"),

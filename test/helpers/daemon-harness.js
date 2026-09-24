@@ -58,6 +58,7 @@ export async function makeHarness({ env = { OPENAI_API_KEY: "sk-test-key" }, clo
     port: port || (await freePort()),
     liveCounter: 0,
     keychain,
+    processes: "",
   };
   h.fetchImpl = async (url, init) => {
     h.fetchCalls.push({ url, init, body: JSON.parse(init.body) });
@@ -81,6 +82,8 @@ export async function makeHarness({ env = { OPENAI_API_KEY: "sk-test-key" }, clo
     inbox: { send: async (m) => { h.inboxSends.push(m); return h.inboxResult; } },
     chrome: h.chrome, log: h.log, onExit: (r) => h.exits.push(r), owner: probe,
     execFile: (cmd, args, o, cb) => cb(null, "main\n"),
+    // The approval probe's `ps` (§6.10.4): tests set h.processes.
+    processList: async () => h.processes,
   };
   if (onRestart) opts.onRestart = onRestart;
   if (pageToken) opts.pageToken = pageToken;

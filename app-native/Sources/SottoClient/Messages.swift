@@ -80,7 +80,32 @@ public struct PageStatus: Codable, Equatable, Sendable {
         public var session_id: String?; public var expires_at: Double?; public var usage_seconds: Double?; public var muted: Bool?
     }
     public struct Today: Codable, Equatable, Sendable { public var seconds: Double?; public var cap_minutes: Double? }
-    public struct Claude: Codable, Equatable, Sendable { public var busy: Bool? }
+    public struct Claude: Codable, Equatable, Sendable {
+        /// The approval Claude Code waits on (SPEC §6.10.4): the newest of `pending`.
+        public struct Approval: Codable, Equatable, Sendable {
+            public var label: String?; public var agent: Bool?; public var since: String?; public var pending: Double?
+        }
+        public var busy: Bool?
+        public var approval: Approval?
+        /// The daemon reports approvals: `approval` null then means none is pending
+        /// (an older daemon leaves the key out).
+        public var reportsApproval = false
+        enum CodingKeys: String, CodingKey { case busy, approval }
+        public init(busy: Bool? = nil, approval: Approval? = nil, reportsApproval: Bool = false) {
+            self.busy = busy; self.approval = approval; self.reportsApproval = reportsApproval || approval != nil
+        }
+        public init(from d: Decoder) throws {
+            let c = try d.container(keyedBy: CodingKeys.self)
+            busy = try c.decodeIfPresent(Bool.self, forKey: .busy)
+            reportsApproval = c.contains(.approval)
+            approval = try? c.decodeIfPresent(Approval.self, forKey: .approval)
+        }
+        public func encode(to e: Encoder) throws {
+            var c = e.container(keyedBy: CodingKeys.self)
+            try c.encodeIfPresent(busy, forKey: .busy)
+            if let a = approval { try c.encode(a, forKey: .approval) } else if reportsApproval { try c.encodeNil(forKey: .approval) }
+        }
+    }
     public struct LastError: Codable, Equatable, Sendable { public var code: String?; public var message: String? }
     public struct Key: Codable, Equatable, Sendable {
         public var present: Bool?; public var source: String?; public var file: String?; public var hint: String?
