@@ -610,21 +610,23 @@ describe("toggle.sh /talk persona (SPEC §4.6)", () => {
     }
   });
 
-  test("daemon down: set saves persona and its voice; already; persona_voice false keeps the voice; window kept", async () => {
+  test("daemon down: set saves the persona (its voice follows); already; an explicit voice turns the persona's voice off; window kept", async () => {
     const { D, env } = await setup({ CLAUDE_PLUGIN_OPTION_VOICE: "sage" });
     const prefs = () => JSON.parse(readFileSync(join(D, "prefs.json"), "utf8"));
     parseOut(await run(TOGGLE, { env, input: stdinFor("window chrome") }));
     let out = parseOut(await run(TOGGLE, { env, input: stdinFor("persona Moss") }));
     assert.equal(out.stopReason, "sotto: persona set to moss with the cedar voice. It applies to the next voice session.");
-    assert.deepEqual(prefs(), { voice: "cedar", window: "chrome", persona: "moss" });
+    assert.deepEqual(prefs(), { window: "chrome", persona: "moss" }, "only the persona is stored; its voice follows from it");
     assert.equal(statSync(join(D, "prefs.json")).mode & 0o777, 0o600);
     out = parseOut(await run(TOGGLE, { env, input: stdinFor("persona moss") }));
     assert.equal(out.stopReason, "sotto: persona is already moss.");
     out = parseOut(await run(TOGGLE, { env, input: stdinFor("persona") }));
     assert.equal(out.stopReason, personaListMessage("moss", builtins));
-    // A voice or window change keeps the persona.
+    // A voice or window change keeps the persona; an explicit voice beats the persona's own.
+    out = parseOut(await run(TOGGLE, { env, input: stdinFor("voice cedar") }));
+    assert.equal(out.stopReason, "sotto: voice is already cedar.", "moss's voice is in effect");
     parseOut(await run(TOGGLE, { env, input: stdinFor("voice ballad") }));
-    assert.deepEqual(prefs(), { voice: "ballad", window: "chrome", persona: "moss" });
+    assert.deepEqual(prefs(), { voice: "ballad", window: "chrome", persona: "moss", persona_voice: false });
     // The "use the persona's voice" toggle off: only the persona changes.
     writeFileSync(join(D, "prefs.json"), '{"voice":"ballad","persona":"moss","persona_voice":false}\n');
     out = parseOut(await run(TOGGLE, { env, input: stdinFor("persona tempo") }));
@@ -671,6 +673,9 @@ describe("toggle.sh /talk persona (SPEC §4.6)", () => {
     assert.equal(out.stopReason, "stub: persona");
     const bodies = controlBodies(D).slice(1);
     assert.deepEqual(bodies.map((b) => [b.action, b.persona]), [["persona", undefined], ["persona", "pip"]]);
+    // A switch asks the daemon to confirm it (answered once a session runs in it); a listing does not.
+    assert.deepEqual(bodies.map((b) => b.confirm), [undefined, true]);
+    assert.equal(bodies[1].via, undefined, "/talk typed in the TUI is not the CLI");
     assert.ok(!existsSync(join(D, "prefs.json")), "the daemon owns the write when it runs");
   });
 });
@@ -746,6 +751,12 @@ describe("bin/sotto (SPEC §5.9)", () => {
     const last = controlBodies(D).at(-1);
     assert.equal(last.action, "voice");
     assert.equal(last.voice, "cedar");
+    assert.equal(last.confirm, true, "the CLI waits for the daemon to confirm the switch");
+    assert.equal(last.via, "cli", "logged as a CLI change");
+    const r2 = await run(CLI, { args: ["persona", "june"], env: cliEnv });
+    assert.equal(r2.code, 0, r2.stderr);
+    const p = controlBodies(D).at(-1);
+    assert.deepEqual([p.action, p.persona, p.confirm, p.via], ["persona", "june", true, "cli"]);
     assert.equal(controlBodies(other).length, 0);
   });
 

@@ -19,7 +19,7 @@ import { createPacer } from "./pacer.js";
 import { createRechunker, FLAG, FRAME_BYTES, FRAME_MS, PROTOCOL, SAMPLE_RATE, LIVE_FORWARD, COMMANDS } from "./native-proto.js";
 import { POLICIES, VERSION } from "./config.js";
 import { truncate } from "./log.js";
-import { createVad, createClipRecorder, encodeWav, bytesToBase64, cooldownLeft, ONSET_PAD_MS, SENSITIVITIES } from "../web/wake.js";
+import { createVad, createClipRecorder, createFloorTracker, encodeWav, bytesToBase64, cooldownLeft, ONSET_PAD_MS, SENSITIVITIES } from "../web/wake.js";
 import { createHearingMonitor } from "../web/lib.js";
 import { createLeakEstimator, classifyLeak, echoTestVerdict } from "../web/echo.js";
 
@@ -76,7 +76,7 @@ export class NativeController {
     this.statsLoggedAt = 0;
     this.route = null;
     this.rttMs = null;
-    this.counters = { mic_frames: 0, speaker_frames: 0, speaker_dropped: 0, flushes: 0, wake_triggers: 0, cmds: 0 };
+    this.counters = { mic_frames: 0, speaker_frames: 0, speaker_dropped: 0, flushes: 0, wake_triggers: 0, wake_near: 0, cmds: 0 };
     this.lastAudibleAt = 0; // daemon ms when the assistant was last audible at the app (send time + buffer)
     this.speakerSlots = new Map(); // 20 ms slot -> speaker power (echo reference)
     this.pacer = createPacer({
@@ -95,7 +95,13 @@ export class NativeController {
     this.leak = null;
     this.echoCheckAt = 0;
     this.echoNoticed = false;
-    this.wake = null; // {vad, rec, acc, accN, capturing, sensitivity}
+    this.wake = null; // {vad, rec, acc, accN, capturing, sensitivity, near}
+    // The mic's own noise floor, measured while not listening for a wake (the
+    // app's raw capture has no AGC, so the page's floor assumptions don't hold):
+    // it seeds the wake detector's floor when sleep starts (web/wake.js).
+    this.floor = createFloorTracker({ sampleRate: SAMPLE_RATE });
+    this.floorAcc = new Float32Array(VAD_FRAME);
+    this.floorAccN = 0;
     this.wakeClip = null; // captured clip waiting for the woken session: {samples}
     this.echoTest = null;
     voice.setNativeController?.(this);
@@ -291,6 +297,7 @@ export class NativeController {
     const needLevel = !muted && (this.session?.ready || this.echoTest || v.state === "sleeping" || this.wake?.capturing);
     const m = needLevel ? framePeakRms(pcm) : null;
     if (this.wake && (v.state === "sleeping" || this.wake.capturing)) this.feedWake(pcm, muted);
+    else if (!muted) this.feedFloor(pcm);
     if (this.echoTest) this.echoTest.mic.push(m ? m.pow : 0);
     if (this.session?.ready) {
       const voiceLevel = now < this.lastAudibleAt ? 1 : 0;
@@ -317,6 +324,7 @@ export class NativeController {
         // The app rebuilt its capture for the new route: frames queued from before are stale.
         this.pacer.resync();
         if (this.micKey() !== before) {
+          this.floor.reset(); // another device, another floor
           this.hearing.reset();
           if (this.session?.ready) this.hearing.start(this.clock.now(), this.micKey());
         }
@@ -453,12 +461,27 @@ export class NativeController {
 
   // ---- parity monitors (§4.5) ---------------------------------------------------------------
   armWake(cfg) {
+    // Profile "native": the app's raw mic is analysed high-passed, with presets
+    // calibrated for it, from the floor measured on this device (web/wake.js
+    // SENSITIVITY_NATIVE). The uplink audio is never altered.
+    const floorDb = this.floor.floorDb;
     this.wake = {
-      vad: createVad({ sampleRate: SAMPLE_RATE, sensitivity: cfg.sensitivity, boostDb: cfg.boost_db }),
+      vad: createVad({ sampleRate: SAMPLE_RATE, sensitivity: cfg.sensitivity, boostDb: cfg.boost_db, profile: "native", floorDb }),
       rec: createClipRecorder({ sampleRate: SAMPLE_RATE }),
-      acc: new Float32Array(VAD_FRAME), accN: 0, capturing: false, sensitivity: cfg.sensitivity,
+      acc: new Float32Array(VAD_FRAME), accN: 0, capturing: false, sensitivity: cfg.sensitivity, near: 0,
     };
-    this.log.info("wake.listen", { src: "app", sensitivity: cfg.sensitivity, boost_db: cfg.boost_db });
+    this.log.info("wake.listen", { src: "app", sensitivity: cfg.sensitivity, boost_db: cfg.boost_db, profile: "native", floor_db: floorDb === null ? null : Math.round(floorDb * 10) / 10 });
+  }
+
+  /** The device floor while not listening for a wake (live, connecting): 512-sample frames. */
+  feedFloor(pcm) {
+    const f = toFloat(pcm);
+    for (let i = 0; i < f.length; i++) {
+      this.floorAcc[this.floorAccN++] = f[i];
+      if (this.floorAccN < VAD_FRAME) continue;
+      this.floorAccN = 0;
+      this.floor.push(this.floorAcc);
+    }
   }
 
   feedWake(pcm, muted) {
@@ -472,6 +495,12 @@ export class NativeController {
       w.rec.push(frame);
       if (w.capturing || muted) continue;
       const r = w.vad.process(frame);
+      if (r.near) {
+        // Almost woke: why not, so the thresholds can be tuned from the log (SOTTO_DEBUG=1).
+        w.near++;
+        this.counters.wake_near++;
+        this.log.debug("wake.near", { src: "app", sensitivity: w.sensitivity, ...r.near });
+      }
       if (r.trigger) this.onWakeTrigger(r);
     }
   }
@@ -486,7 +515,7 @@ export class NativeController {
     w.capturing = true;
     w.rec.startCapture(r.onsetSample - Math.round((ONSET_PAD_MS / 1000) * SAMPLE_RATE));
     this.counters.wake_triggers++;
-    this.log.info("wake.trigger", { src: "app", voiced_ms: Math.round(r.voicedMs), snr_db: Math.round(r.snrDb * 10) / 10 });
+    this.log.info("wake.trigger", { src: "app", voiced_ms: Math.round(r.voicedMs), snr_db: Math.round(r.snrDb * 10) / 10, level_db: Math.round(r.db * 10) / 10, floor_db: Math.round(r.floorDb * 10) / 10, near_misses: w.near });
     v.startNativeSession("wake", {
       wake: { onset_to_post_ms: onsetAgoMs, trigger_ms: onsetAgoMs, snr_db: r.snrDb, level_db: r.db, voiced_ms: r.voicedMs, boost_db: cfg.boost_db || 0, sensitivity: cfg.sensitivity || "medium" },
     }).then((res) => { if (!res?.ok && this.wake === w) this.wake = null; });

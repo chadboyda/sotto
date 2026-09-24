@@ -200,12 +200,13 @@ pref_window() { # prints the valid window mode from prefs.json, or nothing
   [[ -r "$PREFS" ]] && p="$(<"$PREFS")"
   if [[ "$p" =~ $re ]] && in_list "${BASH_REMATCH[1]}" auto app chrome default; then printf '%s' "${BASH_REMATCH[1]}"; fi
 }
-# write_prefs VOICE WINDOW [PERSONA]: rewrite prefs.json (any may be empty).
-# Without a PERSONA argument the saved persona is kept; persona_voice always is.
+# write_prefs VOICE WINDOW [PERSONA [PERSONA_VOICE]]: rewrite prefs.json (any may be empty).
+# Without a PERSONA argument the saved persona is kept; persona_voice is kept
+# unless PERSONA_VOICE (true/false) is given.
 write_prefs() {
   local body="" persona pv
   if (( $# >= 3 )); then persona=$3; else persona="$(pref_persona)"; fi
-  pv="$(pref_persona_voice)"
+  if [[ "$4" == true || "$4" == false ]]; then pv=$4; else pv="$(pref_persona_voice)"; fi
   [[ -n "$1" ]] && body="\"voice\":\"$1\""
   [[ -n "$2" ]] && body="${body:+$body,}\"window\":\"$2\""
   [[ -n "$persona" ]] && body="${body:+$body,}\"persona\":\"$persona\""
@@ -286,6 +287,21 @@ persona_voice() { # the persona's own voice, if valid
   # shellcheck disable=SC2086
   in_list "$v" $VOICES && printf '%s' "$v"
 }
+# persona_own_voice: the chosen persona's own voice while persona_voice is on, else nothing.
+persona_own_voice() {
+  local p
+  p="$(pref_persona)"
+  [[ -n "$p" && "$(pref_persona_voice)" != false ]] || return 0
+  persona_voice "$p"
+}
+# effective_voice: the voice a session would use (daemon/voice.js effectiveVoice).
+effective_voice() {
+  local v
+  v="$(persona_own_voice)"
+  [[ -n "$v" ]] || v="$(pref_voice)"
+  [[ -n "$v" ]] || v="$CFG_VOICE"
+  printf '%s' "$v"
+}
 # persona_local: /talk persona with no daemon of ours to ask (exits).
 persona_local() {
   local cur ids id d out="" v cv
@@ -306,22 +322,29 @@ persona_local() {
     SHOWN="${PERSONA_ARG//[^a-z0-9_-]/}"
     finish "sotto: unknown persona \"${SHOWN:0:40}\". Personas: ${ids// /, }."
   fi
-  cv="$(pref_voice)"; [[ -n "$cv" ]] || cv="$CFG_VOICE"
+  # Only the persona is stored: its own voice follows from it while
+  # persona_voice is on (daemon/voice.js effectiveVoice); prefs.voice keeps
+  # the user's own choice.
+  cv="$(effective_voice)"
   v=""
   [[ "$(pref_persona_voice)" != false ]] && v="$(persona_voice "$PERSONA_ARG")"
   [[ "$v" == "$cv" ]] && v=""
-  [[ "$PERSONA_ARG" == "$cur" && -z "$v" ]] && finish "sotto: persona is already $PERSONA_ARG."
-  write_prefs "${v:-$(pref_voice)}" "$(pref_window)" "$PERSONA_ARG" \
+  [[ "$PERSONA_ARG" == "$(pref_persona)" && -z "$v" ]] && finish "sotto: persona is already $PERSONA_ARG."
+  write_prefs "$(pref_voice)" "$(pref_window)" "$PERSONA_ARG" \
     || fail prefs_write "sotto: ERROR could not save the persona to $PREFS."
+  [[ "$(pref_persona)" == "$PERSONA_ARG" ]] || fail prefs_write "sotto: ERROR could not save the persona to $PREFS."
   finish "sotto: persona set to $PERSONA_ARG${v:+ with the $v voice}. It applies to the next voice session."
 }
 # voice_local: /talk voice with no daemon of ours to ask (exits).
 voice_local() {
-  local cur
-  cur="$(pref_voice)"; [[ -n "$cur" ]] || cur="$CFG_VOICE"
+  local cur own pv=""
+  cur="$(effective_voice)"
   [[ -z "$VOICE_ARG" ]] && finish "$(voice_list "$cur")"
   [[ "$VOICE_ARG" == "$cur" ]] && finish "sotto: voice is already $VOICE_ARG."
-  write_prefs "$VOICE_ARG" "$(pref_window)" \
+  # An explicit voice beats the persona's own voice: turn that off (as the daemon does).
+  own="$(persona_own_voice)"
+  [[ -n "$own" && "$own" != "$VOICE_ARG" ]] && pv=false
+  write_prefs "$VOICE_ARG" "$(pref_window)" "$(pref_persona)" "$pv" \
     || fail prefs_write "sotto: ERROR could not save the voice to $PREFS."
   finish "sotto: voice set to $VOICE_ARG. It applies to the next voice session."
 }
@@ -579,6 +602,15 @@ BODY="{\"action\":\"$ACTION\""
 [[ "$ACTION" == policy ]] && BODY+=",\"policy\":\"$POLICY\""
 [[ "$ACTION" == voice && -n "$VOICE_ARG" ]] && BODY+=",\"voice\":\"$VOICE_ARG\""
 [[ "$ACTION" == persona && -n "$PERSONA_ARG" ]] && BODY+=",\"persona\":\"$PERSONA_ARG\""
+# A voice or persona switch is answered only once a session runs in it
+# (daemon/voice.js controlConfirmed), so the answer never claims a switch that
+# did not happen; bin/sotto marks its calls as via "cli" for the log.
+CTL_MAX_S=2
+if [[ ( "$ACTION" == voice && -n "$VOICE_ARG" ) || ( "$ACTION" == persona && -n "$PERSONA_ARG" ) ]]; then
+  BODY+=",\"confirm\":true"
+  [[ "$SOTTO_VIA" == cli ]] && BODY+=",\"via\":\"cli\""
+  CTL_MAX_S=8
+fi
 [[ "$ACTION" == window && -n "$WINDOW_ARG" ]] && BODY+=",\"window\":\"$WINDOW_ARG\""
 [[ "$ACTION" == key && -n "$KEY_SETUP" ]] && BODY+=",\"setup\":true"
 BODY+=",\"session\":{$SESSION}"
@@ -590,7 +622,7 @@ BODY+=",\"config\":{\"voice\":\"$CFG_VOICE\"$IDLE_JSON,\"speaking_policy\":\"$CF
 # post_control: POST the body; pass a one-line JSON answer through and exit.
 post_control() {
   read_key
-  RESP="$(printf '%s' "$BODY" | curl -s -m 2 -X POST \
+  RESP="$(printf '%s' "$BODY" | curl -s -m "$CTL_MAX_S" -X POST \
     -H 'Content-Type: application/json' \
     -H @<(key_header "$KEY") \
     --data-binary @- "$BASE/control?format=hook")"

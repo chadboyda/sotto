@@ -265,7 +265,7 @@ async function main() {
   const firstLiveId = liveId;
   const tSwitch = Date.now();
   const sw = toggle("voice cedar");
-  check("toggle.sh voice cedar: switching message", sw.status === 0 && sw.out?.stopReason === "sotto: voice set to cedar. Switching the live session now.", `${sw.out?.stopReason} (${sw.ms} ms)`);
+  check("toggle.sh voice cedar: confirmed switch message", sw.status === 0 && sw.out?.stopReason === "sotto: voice set to cedar. The live session now speaks in it.", `${sw.out?.stopReason} (${sw.ms} ms)`);
   const created2 = await until(() => readLog().find((e) => e.ev === "session.create" && ts(e) >= tSwitch && e.ok), 20000);
   check("replacement session created in cedar (reason reconnect)", created2?.voice === "cedar" && created2?.reason === "reconnect" && created2.live_id !== firstLiveId, `${created2?.voice} ${created2?.reason}`);
   const live2 = await until(async () => { const s = await status(); return s.state === "live" && s.live?.session_id === created2?.live_id ? s : null; }, 20000);

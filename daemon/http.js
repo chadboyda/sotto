@@ -94,7 +94,7 @@ export function createHttpServer({ voice, port, daemonKey, pageToken, pageSecret
     if (p === "/healthz" && method === "GET") return send(res, 200, voice.healthz());
     if (p === "/control" && method === "POST") {
       if (!keyOk(req)) return err(res, 403, "bad_key");
-      const r = voice.control(body);
+      const r = voice.controlConfirmed ? await voice.controlConfirmed(body) : voice.control(body);
       if (url.searchParams.get("format") === "hook") send(res, 200, { continue: false, stopReason: r.message });
       else send(res, 200, { ok: r.ok, state: r.state, message: r.message });
       onControlAnswered?.(body.action);

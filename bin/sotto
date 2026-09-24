@@ -97,7 +97,7 @@ fi
 PORT="${PORT%%[[:space:]]*}"
 
 # --- run the /talk handler --------------------------------------------------------
-ENVV=(CLAUDE_PLUGIN_DATA="$D" CLAUDE_PLUGIN_ROOT="$ROOT")
+ENVV=(CLAUDE_PLUGIN_DATA="$D" CLAUDE_PLUGIN_ROOT="$ROOT" SOTTO_VIA=cli)
 [[ "$PORT" =~ ^[0-9]+$ ]] && ENVV+=(CLAUDE_PLUGIN_OPTION_PORT="$PORT")
 # The working directory lets /talk persona find the project's own personas
 # (<project>/.claude/sotto-personas) when no voice session names the project.
