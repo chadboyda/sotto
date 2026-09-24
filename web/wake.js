@@ -32,6 +32,42 @@ export const SENSITIVITY = Object.freeze({
 });
 export const SENSITIVITIES = Object.freeze(["off", "low", "medium", "high"]);
 
+/**
+ * Presets for the native app's relayed mic (daemon/native-session.js, profile
+ * "native"). The page's presets were tuned on Chrome's getUserMedia with AGC
+ * and noise suppression: a quiet floor near -70 dBFS and speech boosted to
+ * about -30. The app captures raw (split mode: no voice processing, no AGC).
+ * Measured on a MacBook Pro microphone: a floor of about -55 dBFS, most of it
+ * mains hum and rumble under 150 Hz, and conversational speech at 1 m around
+ * -45 to -35 dBFS, so speech sat 10 dB or less above the floor and only a
+ * shout cleared medium's 11 dB bar (the one wake that fired: level -32.6,
+ * SNR 24). For this profile the detector analyses a 150 Hz high-passed copy
+ * (the uplink is untouched), which removes most of that floor, and the bars
+ * are set for speech at -45 dBFS or louder over it. The other gates
+ * (periodicity, flatness, band share, syllabic swing, voiced density,
+ * minimum voiced time) are the same, so clicks, fans and steady tones stay out.
+ */
+export const SENSITIVITY_NATIVE = Object.freeze({
+  low: Object.freeze({ snrDb: 11, minDb: -54, minSpeechMs: 400 }),
+  medium: Object.freeze({ snrDb: 7, minDb: -62, minSpeechMs: 300 }),
+  high: Object.freeze({ snrDb: 5, minDb: -68, minSpeechMs: 240 }),
+});
+/** The native profile's analysis high-pass (4th-order Butterworth). */
+export const NATIVE_HPF_HZ = 150;
+/**
+ * Native profile: the first WARMUP_MS after arming only measure the floor
+ * (20th percentile of those frames; never above a seeded floor + 6 dB). The
+ * first frame alone is no floor: measured on a MacBook Pro mic, a start-up
+ * frame 15 dB below the room seeded -70 dBFS, and the room's steady, periodic
+ * hum then sat 11 dB above it and woke the detector within a second.
+ */
+const WARMUP_MS = 400;
+const SEED_LEEWAY_DB = 6;
+/** A near miss is reported for a candidate at least this long (shorter blips are not worth a line). */
+const NEAR_MIN_MS = 120;
+/** Frames within this many dB of the SNR bar (and of minDb) count toward a near-miss candidate. */
+const NEAR_MARGIN_DB = 5;
+
 // Frame classification. Voiced speech is harmonic (strong periodicity at a
 // 70-400 Hz pitch), concentrated in 80-4000 Hz and not noise-flat. Keyboard
 // clicks and fans are broadband and aperiodic; a click is also too short.
@@ -50,6 +86,8 @@ const HANGOVER_MS = 160;
  * level range (voiced frames and the dips between them) before it may wake.
  */
 const MIN_MODULATION_DB = 5;
+/** Frames at the start of a run left out of its level swing (see MIN_MODULATION_DB). */
+const ONSET_SKIP_FRAMES = 2;
 /** At least this share of a run's frames must be voiced. */
 const MIN_DENSITY = 0.55;
 /**
@@ -189,9 +227,71 @@ export function frameFeatures(frame, sampleRate) {
 }
 
 /** Preset for a sensitivity name; unknown names fall back to medium. `off` → null. */
-export function sensitivityPreset(name) {
+export function sensitivityPreset(name, profile = "page") {
   if (name === "off") return null;
-  return SENSITIVITY[name] || SENSITIVITY.medium;
+  const table = profile === "native" ? SENSITIVITY_NATIVE : SENSITIVITY;
+  return table[name] || table.medium;
+}
+
+/**
+ * Streaming 4th-order Butterworth high-pass (two RBJ biquads), for analysis
+ * only: `process(frame)` returns a filtered copy and keeps its state between
+ * frames.
+ */
+export function createHighPass(sampleRate, hz = NATIVE_HPF_HZ) {
+  const stages = [0.5411961, 1.306563].map((q) => {
+    const w0 = (2 * Math.PI * hz) / sampleRate;
+    const c = Math.cos(w0);
+    const al = Math.sin(w0) / (2 * q);
+    const a0 = 1 + al;
+    return { b0: (1 + c) / 2 / a0, b1: -(1 + c) / a0, b2: (1 + c) / 2 / a0, a1: (-2 * c) / a0, a2: (1 - al) / a0, x1: 0, x2: 0, y1: 0, y2: 0 };
+  });
+  return {
+    process(frame) {
+      const out = new Float32Array(frame.length);
+      for (let i = 0; i < frame.length; i++) {
+        let v = frame[i];
+        for (const st of stages) {
+          const y = st.b0 * v + st.b1 * st.x1 + st.b2 * st.x2 - st.a1 * st.y1 - st.a2 * st.y2;
+          st.x2 = st.x1; st.x1 = v; st.y2 = st.y1; st.y1 = y;
+          v = y;
+        }
+        out[i] = v;
+      }
+      return out;
+    },
+  };
+}
+
+/**
+ * The device's noise floor, for seeding a detector (profile "native"): the
+ * 10th percentile of the analysis level over the last `windowMs`, so speech
+ * and the assistant's voice on the mic don't raise it. Digital zeros (muted
+ * or blocked frames) are ignored.
+ */
+export function createFloorTracker({ sampleRate = 24000, windowMs = 8000, hz = NATIVE_HPF_HZ } = {}) {
+  const hpf = createHighPass(sampleRate, hz);
+  let levels = [];
+  let keep = 0;
+  return {
+    push(frame) {
+      const x = hpf.process(frame);
+      let e = 0;
+      for (let i = 0; i < x.length; i++) e += x[i] * x[i];
+      const d = db(e / x.length);
+      if (d < -100) return;
+      if (!keep) keep = Math.max(1, Math.round((windowMs / 1000) * (sampleRate / frame.length)));
+      levels.push(d);
+      if (levels.length > keep) levels.shift();
+    },
+    /** dBFS, or null until 1 s of frames was seen. */
+    get floorDb() {
+      if (!keep || levels.length < keep / 8) return null;
+      const sorted = [...levels].sort((a, b) => a - b);
+      return Math.min(FLOOR_MAX_DB, Math.max(FLOOR_MIN_DB, sorted[Math.floor(sorted.length * 0.1)]));
+    },
+    reset() { levels = []; },
+  };
 }
 
 /**
@@ -206,15 +306,53 @@ export function sensitivityPreset(name) {
  * up), so a fan or air conditioner raises the bar instead of waking.
  * `boostDb` raises the SNR bar (the daemon raises it after false wakes).
  * A trigger fires once per speech run.
+ *
+ * `profile: "native"` (the app's raw mic, relayed to the daemon) analyses a
+ * 150 Hz high-passed copy with SENSITIVITY_NATIVE; `floorDb` seeds the floor
+ * (the device's floor measured while live). Either way digital zeros (muted
+ * or blocked frames) never move the floor.
+ *
+ * A candidate that got close but did not wake (a burst of frames within
+ * NEAR_MARGIN_DB of the bars, at least NEAR_MIN_MS long) is reported once,
+ * when it ends, as `near: {ms, voiced_ms, level_db, snr_db, floor_db, bar_db, reason}`,
+ * `reason` naming what held it back: `snr` or `level` (too quiet), `periodicity`,
+ * `flatness` or `band` (not voice-like), `short` (voiced, but under minSpeechMs),
+ * `density` or `modulation` (a long run that failed the speech-shape checks).
  */
-export function createVad({ sampleRate = 48000, sensitivity = "medium", boostDb = 0, floorDb = null } = {}) {
-  let preset = sensitivityPreset(sensitivity) || SENSITIVITY.medium;
+export function createVad({ sampleRate = 48000, sensitivity = "medium", boostDb = 0, floorDb = null, profile = "page" } = {}) {
+  const native = profile === "native";
+  const fallback = native ? SENSITIVITY_NATIVE.medium : SENSITIVITY.medium;
+  let preset = sensitivityPreset(sensitivity, profile) || fallback;
   let boost = Number(boostDb) || 0;
-  let floor = floorDb;
+  const clampFloor = (v) => Math.min(FLOOR_MAX_DB, Math.max(FLOOR_MIN_DB, v));
+  const seed = Number.isFinite(floorDb) ? clampFloor(floorDb) : null;
+  let floor = native ? null : seed;
+  const hpf = native ? createHighPass(sampleRate) : null;
+  let warm = native ? [] : null; // warm-up levels (native), null once the floor is set
   let samples = 0;
   let run = null;
   let recent = []; // runs that ended lately: {onset, end, voicedMs}
+  let cand = null; // near-miss candidate: {start, last, frames, voicedMs, maxDb, maxSnr, fails:{}, runFail, fired}
   const msOf = (n) => (n / sampleRate) * 1000;
+
+  function endCandidate() {
+    const c = cand;
+    cand = null;
+    if (!c || c.fired) return null;
+    const ms = msOf(c.last - c.start);
+    if (ms < NEAR_MIN_MS) return null;
+    let reason = c.runFail;
+    if (!reason && c.voicedMs > 0) reason = "short";
+    if (!reason) {
+      let best = 0;
+      for (const [k, v] of Object.entries(c.fails)) if (v > best) { best = v; reason = k; }
+    }
+    return {
+      ms: Math.round(ms), voiced_ms: Math.round(c.voicedMs), level_db: Math.round(c.maxDb * 10) / 10,
+      snr_db: Math.round(c.maxSnr * 10) / 10, floor_db: Math.round(floor * 10) / 10,
+      bar_db: preset.snrDb + boost, reason: reason || "snr",
+    };
+  }
 
   return {
     get floorDb() {
@@ -223,8 +361,11 @@ export function createVad({ sampleRate = 48000, sensitivity = "medium", boostDb 
     get samples() {
       return samples;
     },
+    get profile() {
+      return native ? "native" : "page";
+    },
     setSensitivity(name) {
-      preset = sensitivityPreset(name) || SENSITIVITY.medium;
+      preset = sensitivityPreset(name, profile) || fallback;
     },
     setBoost(v) {
       boost = Math.max(0, Number(v) || 0);
@@ -232,41 +373,58 @@ export function createVad({ sampleRate = 48000, sensitivity = "medium", boostDb 
     reset() {
       run = null;
       recent = [];
+      cand = null;
     },
     /**
      * @returns {{db:number, floorDb:number, snrDb:number, voiced:boolean, speaking:boolean,
-     *            trigger:boolean, onsetSample:number|null, voicedMs:number}}
+     *            trigger:boolean, onsetSample:number|null, voicedMs:number, near:object|null}}
      */
     process(frame) {
-      const f = frameFeatures(frame, sampleRate);
+      const f = frameFeatures(hpf ? hpf.process(frame) : frame, sampleRate);
       const start = samples;
       samples += frame.length;
       const frameMs = msOf(frame.length);
-      if (floor === null) floor = Math.min(FLOOR_MAX_DB, Math.max(FLOOR_MIN_DB, f.db));
-      const snr = f.db - floor;
-      const voiced =
-        f.db >= preset.minDb &&
-        snr >= preset.snrDb + boost &&
-        f.bandRatio >= MIN_BAND_RATIO &&
-        f.periodicity >= MIN_PERIODICITY &&
-        f.flatness <= MAX_FLATNESS;
+      const zero = f.db < -100; // digital silence: muted, blocked or a gap, never the room
+      if (warm) {
+        if (!zero) warm.push(f.db);
+        if (msOf(samples) >= WARMUP_MS && warm.length >= 5) {
+          const sorted = warm.slice(2).sort((x, y) => x - y); // the high-pass settles over the first frames
+          let v = sorted[Math.floor(sorted.length * 0.2)];
+          if (seed !== null) v = Math.min(v, seed + SEED_LEEWAY_DB);
+          floor = clampFloor(v);
+          warm = null;
+        }
+      } else if (floor === null && !zero) floor = clampFloor(f.db);
+      const snr = floor === null ? 0 : f.db - floor;
+      const bar = preset.snrDb + boost;
+      const loudEnough = f.db >= preset.minDb;
+      const aboveBar = snr >= bar;
+      const voiceLike = f.bandRatio >= MIN_BAND_RATIO && f.periodicity >= MIN_PERIODICITY && f.flatness <= MAX_FLATNESS;
+      const voiced = !zero && floor !== null && loudEnough && aboveBar && voiceLike;
 
       let trigger = false;
+      let runFail = null;
       if (voiced) {
-        if (!run) run = { onset: start, lastVoiced: start, voicedMs: 0, frames: 0, minDb: f.db, maxDb: f.db, fired: false };
+        if (!run) run = { onset: start, lastVoiced: start, voicedMs: 0, frames: 0, minDb: Infinity, maxDb: -Infinity, fired: false };
         run.voicedMs += frameMs;
         run.lastVoiced = start;
       }
       if (run) {
         run.frames++;
-        run.minDb = Math.min(run.minDb, f.db);
-        run.maxDb = Math.max(run.maxDb, f.db);
+        // The swing is measured after the onset: the first frames straddle the
+        // start of any sound, so a steady tone that begins abruptly would
+        // otherwise show a "syllable" there.
+        if (run.frames > ONSET_SKIP_FRAMES) {
+          run.minDb = Math.min(run.minDb, f.db);
+          run.maxDb = Math.max(run.maxDb, f.db);
+        }
         if (!voiced && msOf(start - run.lastVoiced) > HANGOVER_MS) {
           if (run.voicedMs >= CHAIN_MIN_MS) recent.push({ onset: run.onset, end: run.lastVoiced + frame.length, voicedMs: run.voicedMs });
           run = null;
         } else if (!run.fired && run.voicedMs >= preset.minSpeechMs) {
           const density = run.voicedMs / (run.frames * frameMs);
-          if (density >= MIN_DENSITY && run.maxDb - run.minDb >= MIN_MODULATION_DB) {
+          const swing = run.maxDb > run.minDb ? run.maxDb - run.minDb : 0;
+          if (density >= MIN_DENSITY && swing >= MIN_MODULATION_DB) {
             run.fired = true;
             trigger = true;
             // Chain back over the short runs just before this one (same utterance).
@@ -276,12 +434,33 @@ export function createVad({ sampleRate = 48000, sensitivity = "medium", boostDb 
               onset = recent[i].onset;
             }
             run.onset = onset;
-          }
+          } else runFail = density < MIN_DENSITY ? "density" : "modulation";
         }
       }
+
+      // Near-miss bookkeeping (log only): frames close to the bars form a candidate.
+      let near = null;
+      const close = !zero && floor !== null && snr >= bar - NEAR_MARGIN_DB && f.db >= preset.minDb - NEAR_MARGIN_DB;
+      if (close || voiced) {
+        if (!cand) cand = { start, last: start, frames: 0, voicedMs: 0, maxDb: f.db, maxSnr: snr, fails: {}, runFail: null, fired: false };
+        cand.last = start + frame.length;
+        cand.frames++;
+        cand.maxDb = Math.max(cand.maxDb, f.db);
+        cand.maxSnr = Math.max(cand.maxSnr, snr);
+        if (voiced) cand.voicedMs += frameMs;
+        else {
+          const why = !aboveBar ? "snr" : !loudEnough ? "level" : f.periodicity < MIN_PERIODICITY ? "periodicity" : f.flatness > MAX_FLATNESS ? "flatness" : "band";
+          cand.fails[why] = (cand.fails[why] || 0) + 1;
+        }
+        if (runFail) cand.runFail = runFail;
+        if (trigger) cand.fired = true;
+      } else if (cand && msOf(start - cand.last) > HANGOVER_MS) {
+        near = endCandidate();
+      }
+
       // Forget ended runs older than the pre-roll (the audio is gone anyway).
       while (recent.length && msOf(samples - recent[0].end) > PRE_ROLL_MS) recent.shift();
-      if (!run && !voiced) {
+      if (!run && !voiced && !zero && floor !== null) {
         // Minimum tracking: follow quiet frames down quickly, up slowly (~2.7 s).
         const a = f.db < floor ? 0.2 : 0.008;
         floor = Math.min(FLOOR_MAX_DB, Math.max(FLOOR_MIN_DB, floor + a * (f.db - floor)));
@@ -295,6 +474,7 @@ export function createVad({ sampleRate = 48000, sensitivity = "medium", boostDb 
         trigger,
         onsetSample: run ? run.onset : null,
         voicedMs: run ? run.voicedMs : 0,
+        near,
       };
     },
   };

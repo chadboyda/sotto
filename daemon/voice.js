@@ -22,6 +22,7 @@ import { readTranscriptTail, readAbsorbed, gitBranch } from "./claude-context.js
 import { truncate } from "./log.js";
 import { usageToday } from "./format.js";
 import { WakeGovernor, WAKE_SOURCES, sleepDecision, idleSecondsOf } from "./wake.js";
+import { QUIET_MS } from "./update.js";
 import { decodeWavB64, wavDurationMs, transcribeWithFallback, wakeInstruction } from "./transcribe.js";
 import { normalizeKeyInput, validateKey, keyWhere } from "./apikey.js";
 
@@ -29,6 +30,10 @@ import { normalizeKeyInput, validateKey, keyWhere } from "./apikey.js";
 const CANT_HEAR_SAY_MS = 10 * 60 * 1000;
 // A silent-mic window swap (SPEC §6.16 "Silent mic") at most this often.
 const MIC_SILENT_SWAP_MS = 60 * 1000;
+/** How long a confirmed /control persona|voice waits for the new session (toggle.sh curl -m is longer). */
+const CONFIRM_MS = 5000;
+/** How often a deferred stale-app swap re-checks for a quiet moment (scheduleStaleSwap). */
+const STALE_SWAP_POLL_MS = 5000;
 // What /talk status and the page say when macOS blocks the app's microphone.
 export const APP_MIC_BLOCKED = "Sotto can't use the microphone: allow it in System Settings > Privacy & Security > Microphone";
 // Idle/sleep is checked this often while live. Short, because the idle
@@ -160,6 +165,8 @@ export class Voice {
     // Persona chosen while live (SPEC §4.6): the replacement greets in the new personality.
     this.personaSwitch = null;
     this.switchGen = 0;
+    // userConfig's voice (the fallback below prefs.json); config.voice is the voice in effect.
+    this.configVoice = this.config.voice;
     this.config.voice = resolveVoice({ prefs: readPrefs(this.paths), configVoice: this.config.voice });
     // Per-bind nonce in the voice marker ("[sotto voice <nonce>]"), so a
     // peer message or typed text that merely contains the marker is not taken
@@ -607,7 +614,9 @@ export class Voice {
   // ---- /control ---------------------------------------------------------------------
   control(req = {}) {
     const action = req.action;
-    this.log.info("control", { action, state: this.state });
+    // `via: "cli"`: bin/sotto (Claude acting on the user's spoken request), logged on persona.set / voice.set.
+    const via = req.via === "cli" ? "cli" : "control";
+    this.log.info("control", { action, state: this.state, ...(via === "cli" ? { via } : {}) });
     // Every /talk (re)starts a missing desktop-app install (SPEC §6.16), so a
     // failed or interrupted one never waits for a window to open.
     if (action !== "shutdown" && action !== "app") {
@@ -624,12 +633,12 @@ export class Voice {
       case "off": r = this.off("user"); break;
       case "status": r = { ok: true, message: this.statusMessage() }; break;
       case "policy": r = this.setPolicy(req.policy); break;
-      case "voice": r = req.voice == null || req.voice === "" ? { ok: true, message: voiceListMessage(this.currentVoice(req.config)) } : this.setVoice(req.voice, "control"); break;
+      case "voice": r = req.voice == null || req.voice === "" ? { ok: true, message: voiceListMessage(this.currentVoice(req.config)) } : this.setVoice(req.voice, via); break;
       case "persona": {
         if (req.persona == null || req.persona === "") {
           const list = this.personaList(req.session);
           r = { ok: true, message: personaListMessage(this.currentPersona(list).id, list) };
-        } else r = this.setPersona(req.persona, "control", { session: req.session });
+        } else r = this.setPersona(req.persona, via, { session: req.session });
         break;
       }
       case "restart": r = this.manualRestart(); break;
@@ -645,6 +654,47 @@ export class Voice {
     }
     const out = { ok: r.ok, state: this.state, message: r.message };
     this.log.info("control.result", { action, ok: out.ok, state: out.state });
+    // `confirm` (toggle.sh for /talk persona|voice <name>, so bin/sotto): a
+    // switch is reported done only once a session runs in it (controlConfirmed).
+    const pending = r.ok && (r.switching || this.state === "connecting" || this.state === "reconnecting");
+    if (req.confirm === true && pending && (action === "persona" || action === "voice") && (r.persona || r.voice)) {
+      const what = action === "persona" ? `persona ${r.persona}` : `voice ${r.voice}`;
+      out.confirm = {
+        action, persona: action === "persona" ? r.persona : null, voice: r.voice,
+        done: action === "persona"
+          ? `sotto: persona set to ${r.persona} with the ${r.voice} voice. The live session now runs as ${r.persona}.`
+          : `sotto: voice set to ${r.voice}. The live session now speaks in it.`,
+        what,
+      };
+    }
+    return out;
+  }
+
+  /**
+   * /control, waiting for a confirmed switch (SPEC §5.9): the answer to
+   * `sotto persona <x>` / `sotto voice <x>` says the switch happened only
+   * after a Live session was created in it; otherwise it is an ERROR line
+   * (the choice is saved, but the CLI must not claim success).
+   */
+  async controlConfirmed(req = {}) {
+    const out = this.control(req);
+    const c = out.confirm;
+    delete out.confirm;
+    if (!c) return out;
+    const t0 = this.clock.now();
+    const done = () => !!this.live && this.live.voice === c.voice && (c.persona === null || this.live.persona === c.persona);
+    const ok = await new Promise((resolve) => {
+      const check = () => {
+        if (done()) return resolve(true);
+        if (this.clock.now() - t0 >= CONFIRM_MS || this.state === "off" || this.state === "paused" || this.state === "sleeping") return resolve(false);
+        this.clock.setTimeout(check, 100);
+      };
+      check();
+    });
+    this.log.info("control.confirm", { action: c.action, ok, ms: this.clock.now() - t0, persona: c.persona, voice: c.voice, state: this.state });
+    out.ok = ok;
+    out.state = this.state;
+    out.message = ok ? c.done : `sotto: ERROR ${c.what} is saved, but the live session did not switch to it within ${CONFIRM_MS / 1000} s (state ${this.state}). See the daemon log.`;
     return out;
   }
 
@@ -719,8 +769,9 @@ export class Voice {
   /** The detached installer finished (window.js): tell the page. */
   appInstallResult(r) {
     if (r.ok) {
-      // The swap replaced the bundle under a running app, whose mic is now silent.
-      this.checkStaleApp("install").catch((e) => this.log.error("app.stale_error", { message: String(e && e.message) }));
+      // The install replaced the bundle under a running app: swap it for the
+      // new one, but only at a quiet moment (below).
+      this.scheduleStaleSwap("install");
       if (this.sse.count > 0 && !this.chrome.appLaunched) this.notice("info", "app_ready", "The Sotto desktop app is installed. The next /talk opens it.");
       return;
     }
@@ -733,8 +784,10 @@ export class Voice {
     if (!session || typeof session.socket !== "string" || !session.socket) return { ok: false, message: MSG.noSocket };
     const prevConfig = this.config;
     this.config = normalizeConfig(config, prevConfig);
-    // prefs.json (/talk voice, the page, the CLI) beats userConfig (§4.5).
-    this.config.voice = resolveVoice({ prefs: readPrefs(this.paths), configVoice: this.config.voice });
+    // prefs.json (/talk voice, the page, the CLI) beats userConfig (§4.5), and
+    // the persona's own voice beats both while it applies (effectiveVoice).
+    this.configVoice = this.config.voice;
+    this.config.voice = this.effectiveVoice();
     this.clear("exit");
     if (this.state === "closing") this.offGen++; // cancel the tail of an in-flight off
 
@@ -955,7 +1008,31 @@ export class Voice {
    */
   currentVoice(config) {
     if (this.owner) return this.config.voice;
-    return resolveVoice({ prefs: readPrefs(this.paths), configVoice: config?.voice ?? this.config.voice });
+    return this.effectiveVoice(config?.voice ?? this.configVoice);
+  }
+
+  /**
+   * The voice a session is created in, resolved from prefs.json every time
+   * (SPEC §4.5, §4.6): the persona's own voice while "switch to the persona's
+   * voice" is on and the persona names one, else prefs.voice > userConfig >
+   * default. prefs.json is the one source of truth, so the persona's voice
+   * survives every re-creation (reconnect, wake, restart, handover) instead of
+   * living in a copy that one path forgets.
+   */
+  effectiveVoice(configVoice = this.configVoice ?? this.config.voice, list = null) {
+    const prefs = readPrefs(this.paths);
+    return this.personaOwnVoice(prefs, list) || resolveVoice({ prefs, configVoice });
+  }
+
+  /**
+   * The chosen persona's own voice when it applies (a persona was chosen, the
+   * toggle is on), else null. `list`: the caller's persona list (an unbound
+   * /talk persona sees its own project's personas).
+   */
+  personaOwnVoice(prefs = readPrefs(this.paths), list = null) {
+    if (!prefs.persona || !personaVoiceOn(prefs)) return null;
+    const p = findPersona(list || this.cachedPersonaList(), prefs.persona);
+    return p ? normalizeVoice(p.voice) : null;
   }
 
   /** {voices, current, live, switching} for GET /api/voices. */
@@ -1001,9 +1078,14 @@ export class Voice {
     const v = normalizeVoice(name);
     if (!v) return { ok: false, message: unknownVoiceMessage(name), code: "bad_voice" };
     const prev = this.currentVoice();
-    try { writePrefs(this.paths, { voice: v }); } catch (e) { this.log.error("prefs.write_error", { message: e.message }); }
-    this.config = { ...this.config, voice: v };
-    this.log.info("voice.set", { voice: v, from: prev, source, state: this.state });
+    // An explicit voice choice beats the persona's own voice: it turns that
+    // toggle off, so prefs.json says what is in effect (the toggle shows it).
+    const patch = { voice: v };
+    const own = this.personaOwnVoice();
+    if (own && own !== v) patch.persona_voice = false;
+    try { writePrefs(this.paths, patch); } catch (e) { this.log.error("prefs.write_error", { message: e.message }); }
+    this.config = { ...this.config, voice: this.effectiveVoice() };
+    this.log.info("voice.set", { voice: v, from: prev, source, state: this.state, ...(patch.persona_voice === false ? { persona_voice: false } : {}) });
     const switching = this.state === "live" && !!this.sideband && !!this.live && this.live.voice !== v;
     if (switching) this.switchLiveVoice(v);
     else if (this.state === "reconnecting") this.voiceSwitch = v; // the replacement confirms the new voice
@@ -1116,7 +1198,14 @@ export class Voice {
   /** Whether choosing a persona also switches to its voice (persisted). */
   setPersonaVoice(on) {
     try { writePrefs(this.paths, { persona_voice: !!on }); } catch (e) { this.log.error("prefs.write_error", { message: e.message }); }
-    this.log.info("persona.use_voice", { on: !!on });
+    const v = this.effectiveVoice();
+    const changedVoice = v !== this.config.voice;
+    this.log.info("persona.use_voice", { on: !!on, voice: v });
+    if (changedVoice) {
+      this.config = { ...this.config, voice: v };
+      if (this.state === "live" && this.sideband && this.live && this.live.voice !== v) this.switchLiveVoice(v);
+      else if (this.state === "reconnecting") this.voiceSwitch = v;
+    }
     this.changed();
     return { ok: true, use_voice: !!on };
   }
@@ -1132,17 +1221,19 @@ export class Voice {
     const list = this.personaList(session);
     const p = findPersona(list, name);
     if (!p) return { ok: false, message: unknownPersonaMessage(name, list), code: "bad_persona" };
-    const prefs = readPrefs(this.paths);
     const prev = this.currentPersona(list).id;
-    const patch = { persona: p.id };
-    let voice = null;
-    if (personaVoiceOn(prefs) && p.voice && p.voice !== this.currentVoice()) {
-      voice = p.voice;
-      patch.voice = voice;
+    const prevVoice = this.currentVoice();
+    // Only the persona is stored: its voice follows from it (effectiveVoice),
+    // and prefs.voice keeps the user's own choice for when the toggle is off.
+    try { writePrefs(this.paths, { persona: p.id }); } catch (e) { this.log.error("prefs.write_error", { message: e.message }); }
+    if (readPrefs(this.paths).persona !== p.id) {
+      this.log.error("persona.set_failed", { persona: p.id, via: source });
+      return { ok: false, message: `sotto: ERROR could not save the persona to ${this.paths.prefs}.`, code: "prefs_write" };
     }
-    try { writePrefs(this.paths, patch); } catch (e) { this.log.error("prefs.write_error", { message: e.message }); }
-    if (voice) this.config = { ...this.config, voice };
-    this.log.info("persona.set", { persona: p.id, from: prev, source: p.source, via: source, voice, state: this.state });
+    const effective = this.effectiveVoice(undefined, list);
+    const voice = effective !== prevVoice ? effective : null;
+    this.config = { ...this.config, voice: effective };
+    this.log.info("persona.set", { persona: p.id, from: prev, source: p.source, via: source, voice: effective, voice_changed: !!voice, state: this.state });
     const live = this.state === "live" && !!this.sideband && !!this.live;
     const switching = live && (this.live.persona !== p.id || this.live.voice !== this.config.voice);
     if (switching) this.switchLivePersona(p);
@@ -1466,6 +1557,31 @@ export class Voice {
   }
 
   /**
+   * Swap a stale app after an install only at a quiet moment, with the same
+   * gate as the self-update (restartBlocker, QUIET_MS of no speech, no
+   * delegation or Claude work in flight): quitting it mid-conversation dropped
+   * the voice for about 2.7 s while a request was in flight (v0.3.2 install).
+   * With no voice session nothing is at risk, so it swaps at once. An old app
+   * that is actually broken (only digital silence from its mic) is swapped at
+   * once by onMicSilent, not here.
+   */
+  scheduleStaleSwap(reason) {
+    const attempt = (first) => {
+      const why = this.owner ? this.restartBlocker(QUIET_MS) : null;
+      if (why === null || why === "no_owner") {
+        this.clear("staleSwap");
+        this.staleSwapWaiting = null;
+        this.checkStaleApp(reason).catch((e) => this.log.error("app.stale_error", { message: String(e && e.message) }));
+        return;
+      }
+      if (first) this.log.info("app.swap_deferred", { reason, blocker: why });
+      this.staleSwapWaiting = why;
+      this.timer("staleSwap", () => attempt(false), STALE_SWAP_POLL_MS);
+    };
+    attempt(true);
+  }
+
+  /**
    * Quit app processes that run a replaced bundle (SPEC §6.16 "Stale app"):
    * at daemon start and after every install. One that hosts our page moves
    * the voice to a fresh app window; others just quit.
@@ -1638,7 +1754,9 @@ export class Voice {
     this.vocab = vocab;
     const persona = this.currentPersona();
     const instructions = renderForPolicy(owner.project, this.policy, vocab.text, persona);
-    const voice = this.config.voice;
+    // Resolved from prefs.json for every session (start, reconnect, wake, restart, handover).
+    const voice = this.effectiveVoice();
+    this.config.voice = voice;
     return { ok: true, why, owner, apiKey, instructions, seed, voice, persona };
   }
 
@@ -2450,7 +2568,8 @@ export class Voice {
   restore(snap) {
     if (!snap || !snap.owner || typeof snap.owner.socket !== "string") return false;
     this.config = { ...this.config, ...(snap.config || {}) };
-    this.config.voice = resolveVoice({ prefs: readPrefs(this.paths), configVoice: this.config.voice });
+    this.configVoice = this.config.voice;
+    this.config.voice = this.effectiveVoice();
     this.runtimePolicy = POLICIES.includes(snap.runtime_policy) ? snap.runtime_policy : null;
     this.owner = { ...snap.owner };
     this.nonce = typeof snap.nonce === "string" && /^[0-9a-f]+$/.test(snap.nonce) ? snap.nonce : randomBytes(6).toString("hex");

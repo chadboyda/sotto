@@ -470,6 +470,70 @@ test("voice wake on relayed audio: speech while sleeping starts a wake session a
   assert.ok(ws2);
 });
 
+test("voice wake, native profile: the floor measured while live seeds the detector; -45 dBFS speech over a hum floor wakes", async (t) => {
+  const h = await setup(t);
+  h.on();
+  const { link } = await h.attach();
+  const ws = await h.startPrimary();
+  // A raw MacBook-like floor: 60 Hz hum (removed by the analysis high-pass) plus a quiet broadband hiss.
+  let ph = 0;
+  let seed = 7;
+  const rnd = () => { seed = (seed * 1664525 + 1013904223) >>> 0; return seed / 4294967296 - 0.5; };
+  const floorFrame = () => {
+    const b = Buffer.alloc(FRAME_BYTES);
+    for (let j = 0; j < 480; j++) { ph += (2 * Math.PI * 60) / 24000; b.writeInt16LE(Math.round(50 * Math.sin(ph) + 2 * rnd()), j * 2); }
+    return b;
+  };
+  for (let i = 0; i < 150; i++) { h.mic(link, floorFrame()); await h.clock.advance(20); }
+  const pp = h.voice.goToSleep("idle");
+  h.closeReply(ws);
+  await pp;
+  const listen = h.log.entries.find((e) => e.ev === "wake.listen");
+  assert.equal(listen.profile, "native");
+  assert.ok(Number.isFinite(listen.floor_db) && listen.floor_db < -60, `seeded floor ${listen.floor_db}`);
+  // A voiced, syllabic vowel at about -45 dBFS (the page's presets needed a shout on this path).
+  const n = Math.round(1.5 * 24000);
+  const voice = Buffer.alloc(n * 2);
+  for (let i = 0; i < n; i++) {
+    const tt = i / 24000;
+    const env = 0.55 + 0.45 * Math.sin(2 * Math.PI * 4 * tt);
+    let v = 0;
+    for (let k = 1; k <= 12; k++) v += Math.sin(2 * Math.PI * 140 * k * tt) / k;
+    voice.writeInt16LE(Math.round(260 * env * v + 50 * Math.sin((2 * Math.PI * 60 * i) / 24000)), i * 2);
+  }
+  h.voice.transcribe = null;
+  for (let off = 0; off + FRAME_BYTES <= voice.length; off += FRAME_BYTES) h.mic(link, voice.subarray(off, off + FRAME_BYTES));
+  await h.clock.advance(0);
+  assert.equal(h.ctl.counters.wake_triggers, 1);
+  const trig = h.log.entries.find((e) => e.ev === "wake.trigger");
+  assert.ok(trig.level_db < -35 && trig.level_db > -55, `level ${trig.level_db}`);
+  assert.ok("near_misses" in trig && "floor_db" in trig);
+});
+
+test("voice wake, native profile: a near miss is logged at debug level with its reason", async (t) => {
+  const h = await setup(t);
+  h.on();
+  const { link } = await h.attach();
+  const ws = await h.startPrimary();
+  const pp = h.voice.goToSleep("idle");
+  h.closeReply(ws);
+  await pp;
+  const hiss = () => { const b = Buffer.alloc(FRAME_BYTES); for (let j = 0; j < 480; j++) b.writeInt16LE(Math.round((Math.random() - 0.5) * 8), j * 2); return b; };
+  for (let i = 0; i < 60; i++) h.mic(link, hiss());
+  // 100 ms of vowel: loud and voiced, but too short to wake.
+  const n = Math.round(0.2 * 24000);
+  const blip = Buffer.alloc(n * 2);
+  for (let i = 0; i < n; i++) { let v = 0; for (let k = 1; k <= 8; k++) v += Math.sin((2 * Math.PI * 150 * k * i) / 24000) / k; blip.writeInt16LE(Math.round(2000 * v), i * 2); }
+  for (let off = 0; off + FRAME_BYTES <= blip.length; off += FRAME_BYTES) h.mic(link, blip.subarray(off, off + FRAME_BYTES));
+  for (let i = 0; i < 30; i++) h.mic(link, hiss());
+  assert.equal(h.ctl.counters.wake_triggers, 0);
+  const near = h.log.entries.filter((e) => e.ev === "wake.near");
+  assert.equal(near.length, 1);
+  assert.equal(near[0].lvl, "debug");
+  assert.equal(near[0].reason, "short");
+  assert.equal(h.ctl.counters.wake_near, 1);
+});
+
 test("can't hear: a silent mic for 20 s raises notice cant_hear; an input transcript clears it", async (t) => {
   const h = await setup(t);
   h.on();

@@ -178,7 +178,15 @@ test("session create: instructions carry the chosen persona; default without pre
   ins = h2.fetchCalls[0].body.session.instructions;
   assert.ok(ins.includes("Your persona is Vic."));
   assert.ok(ins.includes(BUILTIN_PERSONAS.find((p) => p.id === "vic").body));
-  assert.deepEqual(h2.fetchCalls[0].body.session.audio, { output: { voice: "marin" } }, "prefs persona alone does not change the voice");
+  // One source of truth (prefs.json): the chosen persona's own voice applies while the toggle is on.
+  const vicVoice = BUILTIN_PERSONAS.find((p) => p.id === "vic").voice;
+  assert.deepEqual(h2.fetchCalls[0].body.session.audio, { output: { voice: vicVoice } }, "the persona brings its voice");
+
+  const h3 = await makeHarness();
+  t.after(() => h3.cleanup());
+  fs.writeFileSync(path.join(h3.dataDir, "prefs.json"), '{"persona":"vic","voice":"cedar","persona_voice":false}');
+  await h3.goLive();
+  assert.deepEqual(h3.fetchCalls[0].body.session.audio, { output: { voice: "cedar" } }, "toggle off: the user's own voice");
 });
 
 test("control persona: list, set with the persona's voice, already, unknown — without a Live session", async (t) => {
@@ -188,7 +196,8 @@ test("control persona: list, set with the persona's voice, already, unknown — 
   assert.equal(r.message, personaListMessage("sotto", h.voice.personaList()));
   r = h.voice.control({ action: "persona", persona: "Moss" });
   assert.equal(r.message, "sotto: persona set to moss with the cedar voice. It applies to the next voice session.");
-  assert.deepEqual(JSON.parse(fs.readFileSync(path.join(h.dataDir, "prefs.json"), "utf8")), { voice: "cedar", persona: "moss" });
+  assert.deepEqual(JSON.parse(fs.readFileSync(path.join(h.dataDir, "prefs.json"), "utf8")), { persona: "moss" }, "only the persona is stored; its voice follows");
+  assert.equal(h.voice.currentVoice(), "cedar");
   r = h.voice.control({ action: "persona", persona: "moss" });
   assert.equal(r.message, "sotto: persona is already moss.");
   r = h.voice.control({ action: "persona", persona: "robot" });
@@ -198,7 +207,8 @@ test("control persona: list, set with the persona's voice, already, unknown — 
   h.voice.setPersonaVoice(false);
   r = h.voice.control({ action: "persona", persona: "tempo" });
   assert.equal(r.message, "sotto: persona set to tempo. It applies to the next voice session.");
-  assert.deepEqual(JSON.parse(fs.readFileSync(path.join(h.dataDir, "prefs.json"), "utf8")), { voice: "cedar", persona: "tempo", persona_voice: false });
+  assert.deepEqual(JSON.parse(fs.readFileSync(path.join(h.dataDir, "prefs.json"), "utf8")), { persona: "tempo", persona_voice: false });
+  assert.equal(h.voice.currentVoice(), "marin", "toggle off: back to the user's voice (default)");
 });
 
 test("control persona: finds the unbound caller's project personas through its session", async (t) => {

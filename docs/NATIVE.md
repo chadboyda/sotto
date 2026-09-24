@@ -243,7 +243,7 @@ These are handled **in the app**, with no daemon command: mic/speaker list and c
 
 ### 4.5 Parity on relayed audio (B2, milestone M3)
 The daemon now sees both streams, so it runs the page's **pure** modules in Node instead of porting them to Swift. They are imported from `web/`.
-- **Voice wake:** while `sleeping`, `createVad`/`createClipRecorder` from `web/wake.js` run on mic frames. On a trigger, the daemon calls `startNativeSession("wake")` and passes the clip to the existing `onWakeAudio` path. `WakeGovernor` and its cooldowns are unchanged.
+- **Voice wake:** while `sleeping`, `createVad` (profile `native`: high-passed analysis, `SENSITIVITY_NATIVE`, floor seeded from the mic's floor measured while live; SPEC §7.6)/`createClipRecorder` from `web/wake.js` run on mic frames. `wake.listen` logs `profile` and `floor_db`, `wake.trigger` adds `level_db`, `floor_db` and `near_misses`, and near misses are `wake.near` at debug level. On a trigger, the daemon calls `startNativeSession("wake")` and passes the clip to the existing `onWakeAudio` path. `WakeGovernor` and its cooldowns are unchanged.
 - **Can't hear:** `createHearingMonitor` from `web/lib.js` runs on mic RMS. It raises `notice cant_hear` and later sends `notice_clear cant_hear`. `onCantHear` is unchanged.
 - **Echo:** `createLeakEstimator`/`classifyLeak` from `web/echo.js` compare speaker frames (aligned by `audio_stats`) with the mic. The result goes to `onPageEcho` and, above threshold, `notice echo_detected`. There is no echo gate DSP in v0.3.0, because VPIO does the AEC. The transcript echo filter (SPEC §6.8.1) is unchanged.
 

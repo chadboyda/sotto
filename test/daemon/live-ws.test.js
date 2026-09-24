@@ -183,11 +183,15 @@ test("pacer: fills silence once the app is more than 60 ms behind; a late burst 
 /** Feed the pacer an app stream at `fps` for `ms`; returns how many real frames went out. */
 async function stream(clock, p, sent, { ms, fps = 50, value = 1 }) {
   const before = sent.length;
-  let next = 0;
-  for (let t = 0; t < ms; t += 1) {
-    while (next <= t) { p.push(frame(value)); next += 1000 / fps; }
-    await clock.advance(1);
+  // One step per app frame (fractional ms kept exact), so a minute of audio stays cheap.
+  let t = 0;
+  for (let k = 0; ; k++) {
+    const at = Math.round((k * 1000) / fps);
+    if (at >= ms) break;
+    if (at > t) { await clock.advance(at - t); t = at; }
+    p.push(frame(value));
   }
+  if (ms > t) await clock.advance(ms - t);
   return sent.slice(before).filter((b) => b[0] === value).length;
 }
 

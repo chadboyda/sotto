@@ -128,3 +128,39 @@ test("checkStaleApp: a stale app not hosting our page just quits; one hosting it
   assert.equal(await h.voice.checkStaleApp("install"), false);
   assert.equal(w.replaced.length, 1);
 });
+
+test("stale app after an install: swapped only at a quiet moment, never mid-conversation or mid-request", async (t) => {
+  const h = await makeHarness();
+  t.after(() => h.cleanup());
+  await h.goLive();
+  const w = appWindow(h, { stale: [{ pid: 4957, startMs: 0 }] });
+  // Just live (the user and voice talking): the install finishes, the swap waits.
+  h.voice.appInstallResult({ ok: true });
+  await tick();
+  assert.equal(w.replaced.length, 0, "not swapped mid-conversation");
+  const deferred = h.log.entries.find((e) => e.ev === "app.swap_deferred");
+  assert.equal(deferred.reason, "install");
+  assert.equal(deferred.blocker, "recent_speech");
+  // Claude is working on a request: still waits, past the quiet period.
+  h.voice.delegation.claudeBusy = true;
+  await h.clock.advance(60_000);
+  await tick();
+  assert.equal(w.replaced.length, 0, "not swapped mid-request");
+  // Request done and 45 s of quiet: swapped at the next check.
+  h.voice.delegation.claudeBusy = false;
+  await h.clock.advance(5000);
+  await tick();
+  await tick();
+  assert.deepEqual(w.replaced, [{ reason: "stale_app_install", chrome: false }]);
+  assert.equal(h.log.entries.filter((e) => e.ev === "app.swap_deferred").length, 1, "logged once");
+});
+
+test("stale app after an install: with voice off it is swapped at once", async (t) => {
+  const h = await makeHarness();
+  t.after(() => h.cleanup());
+  const w = appWindow(h, { stale: [{ pid: 4957, startMs: 0 }], launched: false });
+  h.voice.appInstallResult({ ok: true });
+  await tick();
+  await tick();
+  assert.deepEqual(w.quitStale, ["install"]);
+});

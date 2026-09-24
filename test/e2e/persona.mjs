@@ -164,7 +164,7 @@ async function main() {
   // Switch, as Claude would by voice (sotto persona tempo runs the same handler).
   const tSwitch = Date.now();
   const sw = toggle(`persona ${PERSONA}`);
-  check("toggle.sh persona switches the live session", sw.status === 0 && sw.out?.stopReason === `sotto: persona set to ${PERSONA} with the tempo voice. Switching the live session now.`, sw.out?.stopReason);
+  check("toggle.sh persona switches the live session", sw.status === 0 && sw.out?.stopReason === `sotto: persona set to ${PERSONA} with the tempo voice. The live session now runs as ${PERSONA}.`, sw.out?.stopReason);
   const created2 = await until(() => readLog().find((e) => e.ev === "session.create" && e.ok && ts(e) >= tSwitch - 50), 20000);
   check("a new session in the new persona and voice", created2?.persona === PERSONA && created2?.voice === "tempo" && created2?.reason === "reconnect", JSON.stringify(created2 && { persona: created2.persona, voice: created2.voice, reason: created2.reason }));
   const live2 = await until(async () => { const s = await status(); return s.state === "live" && s.live?.session_id !== liveId ? s : null; }, 20000);
