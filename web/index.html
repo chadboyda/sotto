@@ -38,6 +38,11 @@
     <symbol id="i-key" viewBox="0 0 24 24"><circle cx="8" cy="15" r="4"/><path d="m11 12 8.5-8.5M16.5 6.5l2.5 2.5M14 9l2 2"/></symbol>
   </svg>
 
+  <!-- The string (web/string.js): one canvas under the whole panel. It draws the peg,
+       the string, Claude's bead and stars, the eclipse and the approval frame; the
+       page's text and controls sit above it. Decoration only: the page works without it. -->
+  <canvas class="string-canvas" id="string-canvas" aria-hidden="true"></canvas>
+
   <div class="app">
     <header class="top">
       <!-- Left: what the voice is doing (word) and where (project); right: what it costs. -->
@@ -45,7 +50,7 @@
         <span class="glyph" id="status-glyph" aria-hidden="true"></span>
         <div class="status-text">
           <span class="status-word" id="status-label">Starting</span>
-          <!-- Priority when the header is short of room (app.js fitHeader): the word and
+          <!-- Priority when the header is short of room (header.js fitHeader): the word and
                the money always stay; the project goes first, then the detail, then the "Today"
                pill, then "Session". -->
           <span class="status-sub">
@@ -62,18 +67,15 @@
         <span class="pill pill-today" id="usage-today" title="Voice time billed today"><svg class="pill-icon" aria-hidden="true"><use href="#i-calendar"/></svg><span class="pill-label">Today</span><span class="pill-value" id="usage-today-value">0:00</span></span>
         <span class="pill pill-cost" id="usage-cost" title="Today's cost at $0.05 per minute"><span class="pill-label">Cost</span><span class="pill-value" id="usage-cost-value">$0.00</span></span>
       </div>
-      <button type="button" class="icon-btn gear" id="settings-btn" aria-label="Settings" aria-haspopup="dialog" aria-controls="settings">
-        <svg aria-hidden="true"><use href="#i-gear"/></svg>
-      </button>
     </header>
-
-    <!-- One banner at a time; the count says how many more are waiting. -->
-    <div class="banners" id="banners"></div>
 
     <main class="main">
       <section class="stage" aria-label="Voice">
+        <!-- The headline: who has the floor, else Claude's news (lib.headline). -->
+        <p class="word" id="stage-word" data-tone="" tabindex="-1">Starting</p>
+        <!-- The string's row. The peg is the mute button: a 64 px target over the peg the
+             canvas draws; its glyph is real DOM (crisp, and it crossfades). -->
         <div class="dial" id="dial">
-          <canvas class="dial-canvas" id="dial-canvas" aria-hidden="true"></canvas>
           <button type="button" class="mute" id="mute-btn" aria-label="Mute" aria-pressed="false" aria-keyshortcuts="M" aria-describedby="stage-word" disabled>
             <!-- Stacked glyphs that crossfade (styles.css .mute-icon): all stay in the DOM. -->
             <span class="mute-icons" aria-hidden="true">
@@ -85,15 +87,25 @@
             </span>
           </button>
         </div>
+        <!-- One line under the string, in a fixed box: a note (muted, connecting) or the
+             latest caption. Nothing here changes height. -->
         <div class="readout">
-          <p class="word" id="stage-word" data-tone="" tabindex="-1">Starting</p>
           <p class="sub" id="stage-sub" hidden></p>
           <ol class="steps" id="connect-steps" aria-label="Connecting" hidden></ol>
+          <section class="captions" id="captions-panel" aria-label="Conversation">
+            <!-- The latest line; a line that does not fit keeps its newest words. -->
+            <ol id="captions">
+              <li class="line" id="cap-prev" hidden><span class="who"></span><span class="text"></span></li>
+              <li class="line latest" id="cap-latest" hidden><span class="who"></span><span class="text"></span></li>
+            </ol>
+            <p class="captions-empty" id="captions-empty">What you and Sotto say will appear here.</p>
+          </section>
           <p class="hint" id="key-hint" hidden><span class="keys"><kbd>M</kbd><span id="key-hint-space"> or <kbd>Space</kbd></span> <span id="key-hint-verb">to mute</span></span></p>
         </div>
       </section>
 
-      <!-- Card view: paused, allow microphone, errors, off, moved to another window. -->
+      <!-- Card view: paused, allow microphone, errors, off, moved to another window. It
+           takes the Claude zone; the string stays above it, dormant. -->
       <section class="card" id="overlay" data-tone="neutral" aria-labelledby="overlay-title" hidden>
         <div class="pointer" id="prompt-pointer" hidden>
           <svg class="pointer-arrow" viewBox="0 0 64 56" aria-hidden="true"><path d="M58 52C52 26 34 12 8 8"/><path d="M16 3 7 8l7 7"/></svg>
@@ -127,40 +139,58 @@
         <p class="kbd-hint" id="overlay-kbd">or press <kbd>Space</kbd></p>
       </section>
 
+      <!-- Claude's page: a moon-phase glyph and one quiet row, then Claude's own words in
+           a serif page (rendered markdown). An approval replaces the page with the question. -->
       <section class="claude" id="claude" aria-label="Claude Code">
         <div class="claude-head">
-          <span class="claude-icon" aria-hidden="true"></span>
-          <span class="claude-title" id="claude-title">Claude is idle</span>
+          <span class="claude-icon moon" id="claude-moon" data-phase="new" aria-hidden="true"><svg viewBox="0 0 12 12"><g class="ph-new"><circle cx="6" cy="6" r="4.6"/></g><g class="ph-waxing"><circle cx="6" cy="6" r="4.6" stroke-opacity=".45"/><path d="M6 1.4a4.6 4.6 0 0 1 0 9.2a2.2 4.6 0 0 0 0-9.2z"/></g><g class="ph-eclipse"><circle cx="6" cy="6" r="5.2"/><circle cx="6" cy="6" r="3.3"/></g><g class="ph-full"><circle cx="6" cy="6" r="4.8"/></g></svg></span>
+          <span class="claude-title" id="claude-title">Claude</span>
+          <span class="claude-detail" id="claude-detail">Idle</span>
           <!-- Background agents are counted, never narrated: the user watches the parent session. -->
           <span class="claude-agents" id="claude-agents" hidden></span>
-          <span class="claude-time" id="claude-time"></span>
+          <span class="claude-time" id="claude-time" hidden><svg aria-hidden="true"><use href="#i-timer"/></svg><span id="claude-time-value"></span></span>
         </div>
-        <p class="claude-step" id="claude-step" hidden></p>
-        <pre class="claude-command" id="claude-command" hidden></pre>
-        <p class="claude-note" id="claude-note" hidden><span class="note-full">Waiting for your approval in the terminal. Approve or deny it there; Sotto can't approve for you.</span><span class="note-short">Approve or deny it in the terminal.</span></p>
-        <div class="claude-summary" id="summary" hidden></div>
-        <button type="button" class="more" id="more-btn" aria-expanded="false" aria-controls="summary" hidden>More</button>
         <p class="claude-request" id="claude-request" hidden></p>
+        <div class="claude-page" id="claude-page">
+          <div class="claude-flow" id="claude-flow">
+            <div class="claude-history serif" id="claude-history"></div>
+            <div class="claude-step serif" id="claude-step" hidden></div>
+            <div class="claude-summary serif" id="summary" hidden></div>
+            <button type="button" class="more" id="more-btn" aria-expanded="false" aria-controls="summary" hidden>More</button>
+          </div>
+          <!-- The question: each part rises into place (styles.css), the zone never moves. -->
+          <div class="claude-ask" id="claude-ask" hidden>
+            <pre class="claude-command" id="claude-command" hidden></pre>
+            <div class="claude-why serif" id="claude-why" hidden></div>
+            <p class="claude-note" id="claude-note" hidden><span class="note-full">Waiting for your approval in the terminal. Approve or deny it there; Sotto can't approve for you.</span><span class="note-short">Approve or deny it in the terminal.</span></p>
+          </div>
+        </div>
       </section>
 
-      <section class="captions" id="captions-panel" aria-label="Conversation">
-        <!-- Exactly two lines: the one before (dimmer) and the latest (large). A line that
-             does not fit is dropped whole; the latest keeps its newest words. -->
-        <ol id="captions">
-          <li class="line" id="cap-prev" hidden><span class="who"></span><span class="text"></span></li>
-          <li class="line latest" id="cap-latest" hidden><span class="who"></span><span class="text"></span></li>
-        </ol>
-        <p class="captions-empty" id="captions-empty">What you and Sotto say will appear here.</p>
-      </section>
+      <!-- Notices float over the bottom of the page, above the footer: one at a time, and
+           a banner coming or going never moves anything. -->
+      <div class="banners" id="banners"></div>
     </main>
 
     <footer class="bottom">
-      <button type="button" class="btn" id="pause-btn" title="Pause the paid voice session; resume any time">
-        <svg aria-hidden="true"><use href="#i-pause"/></svg><span>Pause</span>
+      <!-- The persona: its tuning drawn as a tiny string, its name and its voice. Opens Settings. -->
+      <button type="button" class="pchip" id="persona-chip" aria-label="Persona and voice" aria-haspopup="dialog" aria-controls="settings">
+        <svg class="pc-glyph" width="30" height="20" viewBox="0 0 30 20" aria-hidden="true"><circle cx="4" cy="10" r="2.6" stroke-opacity=".55"/><path id="chip-wave" d="M8 10H26"/><circle cx="27.5" cy="10" r="1.2" class="pc-bridge"/></svg>
+        <span class="pc-name" id="chip-name">Sotto</span>
+        <span class="pc-voice" id="chip-voice"></span>
+        <svg class="pc-chev" viewBox="0 0 10 10" aria-hidden="true"><path d="M2.5 4l2.5 2.5L7.5 4"/></svg>
       </button>
-      <button type="button" class="btn danger" id="stop-btn" title="Turn voice off for Claude Code">
-        <svg aria-hidden="true"><use href="#i-power"/></svg><span>End voice</span>
-      </button>
+      <div class="ctl">
+        <button type="button" class="icon-btn" id="pause-btn" title="Pause the paid voice session; resume any time">
+          <svg aria-hidden="true"><use href="#i-pause"/></svg><span class="sr-only">Pause</span>
+        </button>
+        <button type="button" class="icon-btn end" id="stop-btn" title="Turn voice off for Claude Code">
+          <svg aria-hidden="true"><use href="#i-power"/></svg><span class="sr-only">End voice</span>
+        </button>
+        <button type="button" class="icon-btn gear" id="settings-btn" aria-label="Settings" aria-haspopup="dialog" aria-controls="settings">
+          <svg aria-hidden="true"><use href="#i-gear"/></svg>
+        </button>
+      </div>
     </footer>
   </div>
 

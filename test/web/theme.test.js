@@ -60,8 +60,8 @@ test("no flash: a stored choice is on <html> before <body> exists; System follow
     assert.ok(await until(() => page.eval(`!window.__old && document.readyState === "complete"`), 10000), "reloaded");
     await page.frames();
   };
-  const LIGHT = "rgb(244, 245, 247)";
-  const DARK = "rgb(11, 13, 16)";
+  const LIGHT = "rgb(251, 252, 253)";
+  const DARK = "rgb(5, 7, 12)";
   for (const [os, stored, attr, want] of [
     ["light", "dark", "dark", DARK],
     ["dark", "light", "light", LIGHT],

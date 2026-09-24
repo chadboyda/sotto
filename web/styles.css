@@ -1,16 +1,16 @@
-/* sotto voice window.
+/* sotto voice window: the Filament + Orrery panel (design/concepts-v2/hybrid).
  *
- * Hybrid of design/a-instrument (the dial, the graphite palette) and
- * design/c-ambient (the quiet text area). System fonts only, no build step,
- * no external requests (SPEC §7.1). Polished in design/polish (macOS-native
- * control sizes, cool neutrals, shadows instead of hard borders).
+ * Filament's layout: one lit string across the panel (web/string.js draws it on a
+ * canvas under everything), a headline above it, one caption line under it, and
+ * Claude's own words below in a serif page. Orrery's moments are events on that
+ * string: the eclipse approval, the sunrise wake, milestone stars, voice tides.
+ * The idle panel is a still image. Every zone is a fixed box: a state change fades
+ * content inside its box and never moves another zone (test/web/layout.test.js).
+ * System fonts only, no build step, no external requests (SPEC §7.1).
  *
- * Contrast (WCAG 2.x, measured on --bg / --surface-1 / --control-bg / --fill over
- * --bg, both themes; the numbers are in design/polish/index.html):
- *   text tokens >= 4.5:1 (lowest: light --live on --surface-2)
- *   --edge      >= 3:1 (form fields and the mute button edge, where the boundary
- *               is the only cue; labelled buttons carry their label instead)
- *   --line      decorative dividers only, never a control's only edge
+ * Contrast: text tokens >= 4.5:1 on --ground in both themes (--ink3 is for glyphs
+ * only; --fg-3 is its text-safe twin); the gold line is 3.2:1 on white, its text
+ * (--need-ink) 5.4:1; --edge >= 3:1 where a boundary is a field's only cue.
  */
 
 /* ---------- tokens: scales ---------- */
@@ -18,15 +18,15 @@
   --font-ui: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", system-ui, sans-serif;
   --font-display: -apple-system, BlinkMacSystemFont, "SF Pro Display", "Segoe UI", system-ui, sans-serif;
   --font-mono: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, monospace;
+  /* Claude's page: New York where the system has it, else a book serif. */
+  --font-serif: "New York", ui-serif, "Iowan Old Style", Charter, "Palatino Linotype", Georgia, serif;
 
   --text-meta: 12px;
   --text-small: 13px;
   --text-body: 15px;
   --text-lead: 17px;
-  --text-state: 24px;
-  --text-title: 22px;
+  --text-title: 17px;
 
-  /* One 4/8 grid for every gap, padding and control height. */
   --space-1: 4px;
   --space-2: 8px;
   --space-3: 12px;
@@ -35,9 +35,6 @@
   --space-6: 32px;
   --gutter: 16px;
 
-  /* Radii are concentric: an inner surface's radius = its container's radius minus
-     the padding between them (banner 14 = action 6 + 8; card 18 = command 6 + 12;
-     segmented 12 = segment 8 + 4). */
   --radius-xs: 4px;
   --radius-sm: 6px;
   --radius-md: 8px;
@@ -45,12 +42,24 @@
   --radius-xl: 14px;
   --radius-2xl: 18px;
 
-  --hit: 44px;      /* icon buttons and the primary action */
-  --hit-min: 40px;  /* the floor for every other control (pseudo-element extends smaller ones) */
-  --control: 36px;  /* macOS "large" push button */
+  --hit: 44px;
+  --hit-min: 40px;
+  --control: 36px;
   --control-sm: 32px;
-  /* The dial grows with the room it has: ~200 px at 640 tall, 340 px at 900. */
-  --dial: clamp(176px, min(calc(100dvh - 448px), calc(100vw - 56px)), 340px);
+
+  /* The panel's geometry (hybrid IMPLEMENTATION §1, the 420 x 640 panel). The peg sits
+     on the left gutter; every text zone starts on one column right of it. */
+  --peg-r: 22px;
+  --peg-x: calc(var(--gutter) + var(--peg-r) + 2px);
+  --col-x: calc(var(--peg-x) + var(--peg-r) + 11px);
+  --header-h: 46px;
+  --footer-h: 54px;
+  --word-size: 20px;
+  --word-h: 26px;
+  --cap-size: 13px;
+  --cap-h: 22px;
+  --serif-size: 19px;
+  --serif-lh: 28px;
 
   --dur-instant: 80ms;
   --dur-fast: 150ms;
@@ -59,73 +68,70 @@
   --dur-icon: 300ms;
   --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
   --ease-in: cubic-bezier(0.4, 0, 1, 1);
-  /* Icon crossfades (scale 0.25 -> 1, opacity 0 -> 1, blur 4px -> 0). */
+  /* The hybrid's one curve (IMPLEMENTATION §4). */
   --ease-swap: cubic-bezier(0.2, 0, 0, 1);
 }
 
 /* ---------- tokens: light (base) ----------
-   Cool neutrals only: no cream, sand or beige surface anywhere. Tones (amber, red)
-   live in ink, icons and hairline rings, never in a warm wash over the surface. */
+   A printed page: pure cool white, black type, no cream or beige anywhere. The eclipse
+   is the one place night enters it. Tones live in ink, glyphs and lines, never in a
+   warm wash over a surface. */
 :root {
   color-scheme: light;
-  --bg: #F4F5F7;
+  --ground: #FBFCFD;
+  --lift: #FBFCFD;
+  --ink: #0C0D12;
+  --ink2: rgba(12, 13, 18, 0.64);
+  --ink3: rgba(12, 13, 18, 0.5);
+  --hair: rgba(12, 13, 18, 0.08);
+  --hair2: rgba(12, 13, 18, 0.16);
+  --cap: rgba(12, 13, 18, 0.05);
+  --string: rgba(12, 13, 18, 0.72);
+  --bead: #0C0D12;
+  --star: #1A2A44;
+  --night: #070B16;
+  --you: #12B3A0;
+  --you-ink: #0A7568;
+  --voice: #5B63E6;
+  --voice-ink: #4A51D6;
+  /* Star gold: the line is 3.2:1 on white (a component boundary), its text 5.4:1. */
+  --need: #C4800E;
+  --need-ink: #A55200;
+  --muted: #E0357A;
+  --muted-ink: #B81A5C;
+  --err: #C4180C;
+  --glow: 0.35;
+  /* The shared tokens the drawer, banners and cards use, mapped onto the page. */
+  --bg: #FBFCFD;
   --surface-1: #FFFFFF;
-  --surface-2: #ECEEF2;
-  --surface-sunken: #E6E9ED;
+  --surface-2: #F0F2F5;
   --control-bg: #FFFFFF;
-  --fill: rgba(0, 0, 0, 0.05);
-  --fill-hover: rgba(0, 0, 0, 0.08);
-  --line: #E0E3E8;
-  --hairline: rgba(0, 0, 0, 0.12); /* the usage readout's slot dividers */
+  --fill: rgba(12, 13, 18, 0.05);
+  --fill-hover: rgba(12, 13, 18, 0.08);
+  --line: rgba(12, 13, 18, 0.08);
+  --hairline: rgba(12, 13, 18, 0.16);
   --edge: #7A8391;
-  --fg: #0F1217;
-  --fg-2: #434B57;
-  --fg-3: #5B6472;
-  --tick-rest: #BFC5CE;
-
-  --live: #2F7A12;
-  --live-tint: #E6F2DF;
-  --work: #2352C4;
-  --work-tint: #E4EBFA;
-  --attn: #8A5700;
-  /* Light: no amber wash (it read as beige); the amber ring and ink carry the tone. */
-  --attn-tint: #FFFFFF;
-  --attn-edge: #A8740E;
-  --attn-icon: #A8740E; /* amber glyphs on neutral surfaces, >= 3:1 */
-  --err: #BE2B1D;
-  --err-tint: #FDECEA;
-  --mute: #6A3FD0;
-  --mute-tint: #ECE5FB;
-  /* Sotto's own ink: a cool steel, not green/blue/amber/violet, and never the
-     near-black text colour (a black sunburst outweighed everything else). */
-  --voice: #3B5170;
-  --voice-rest: #A9B1BC;
-  /* Bloom: a pale tint wash in light mode (a dark glow on a light page reads as dirt). */
-  --bloom-you: #DCEFD2;
-  --bloom-voice: #DCE4F0;
-  --bloom-mute: #E4DBFA;
-  /* Attention: no warm wash behind the dial on a light page (it read as cream); the
-     amber bezel ring and its pulse carry it. The bloom fades to the page colour. */
-  --bloom-attn: #F4F5F7;
-  /* The dial at rest on a light page: quieter bezel ticks and outer ring (dial.js). */
-  --dial-bezel-alpha: 0.26;
-  --dial-rest-alpha: 0.62;
-
+  --fg: #0C0D12;
+  --fg-2: #55585F;
+  --fg-3: #686B73;
+  --live: #0A7568;
+  --work: #4A51D6;
+  --attn: #A55200;
+  --attn-edge: #C4800E;
+  --attn-icon: #C4800E;
+  --err-tint: rgba(196, 24, 12, 0.08);
+  --mute: #B81A5C;
   --on-signal: #FFFFFF;
-  --focus: #2352C4;
-  --selection: #CFDCF7;
-  /* Shadows as borders: a 1px ring, a lift and an ambient layer, all transparent so
-     they sit right on any surface. */
-  --shadow-border: 0 0 0 1px rgba(0, 0, 0, 0.07), 0 1px 2px -1px rgba(0, 0, 0, 0.08), 0 2px 4px 0 rgba(0, 0, 0, 0.03);
-  --shadow-border-hover: 0 0 0 1px rgba(0, 0, 0, 0.1), 0 1px 2px -1px rgba(0, 0, 0, 0.1), 0 2px 4px 0 rgba(0, 0, 0, 0.05);
-  --shadow-control: 0 0 0 1px rgba(0, 0, 0, 0.1), 0 1px 1px rgba(0, 0, 0, 0.06), 0 1px 3px -1px rgba(0, 0, 0, 0.1);
-  --shadow-raised: 0 0 0 1px rgba(0, 0, 0, 0.06), 0 1px 2px rgba(0, 0, 0, 0.05), 0 6px 16px -6px rgba(0, 0, 0, 0.12);
-  --shadow-drawer: 0 0 0 1px rgba(0, 0, 0, 0.06), 0 -12px 32px -8px rgba(0, 0, 0, 0.18);
-  --shadow-mute: inset 0 1px 0 rgba(255, 255, 255, 0.9), 0 1px 2px rgba(0, 0, 0, 0.08), 0 6px 16px rgba(0, 0, 0, 0.07);
-  --shadow-key: 0 0 0 1px rgba(0, 0, 0, 0.1), 0 1px 0 rgba(0, 0, 0, 0.12);
-  --scrim: rgba(0, 0, 0, 0.18);
-  --drawer-bg: rgba(255, 255, 255, 0.86);
-  --mute-bg: var(--surface-1);
+  --focus: #0064E1;
+  --selection: rgba(91, 99, 230, 0.2);
+  --shadow-border: 0 0 0 1px rgba(12, 13, 18, 0.07), 0 1px 2px -1px rgba(12, 13, 18, 0.08), 0 2px 4px 0 rgba(12, 13, 18, 0.03);
+  --shadow-border-hover: 0 0 0 1px rgba(12, 13, 18, 0.1), 0 1px 2px -1px rgba(12, 13, 18, 0.1), 0 2px 4px 0 rgba(12, 13, 18, 0.05);
+  --shadow-control: 0 0 0 1px rgba(12, 13, 18, 0.1), 0 1px 1px rgba(12, 13, 18, 0.06), 0 1px 3px -1px rgba(12, 13, 18, 0.1);
+  --shadow-raised: 0 0 0 1px rgba(12, 13, 18, 0.06), 0 1px 2px rgba(12, 13, 18, 0.05), 0 6px 16px -6px rgba(12, 13, 18, 0.12);
+  --shadow-drawer: 0 0 0 1px rgba(12, 13, 18, 0.06), 0 -12px 32px -8px rgba(12, 13, 18, 0.18);
+  --shadow-key: 0 0 0 1px rgba(12, 13, 18, 0.1), 0 1px 0 rgba(12, 13, 18, 0.12);
+  --scrim: rgba(12, 13, 18, 0.18);
+  --drawer-bg: rgba(255, 255, 255, 0.9);
 }
 
 /* ---------- tokens: dark ----------
@@ -135,125 +141,138 @@
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) {
     color-scheme: dark;
-    --bg: #0B0D10;
-    --surface-1: #14171C;
-    --surface-2: #1C2027;
-    --surface-sunken: #07080A;
-    --control-bg: #1E2229;
-    --fill: rgba(255, 255, 255, 0.06);
+    /* Deep space, not neutral grey: a cool blue-black with a static lift behind the
+       string (Orrery's depth, no stars). */
+    --ground: #05070C;
+    --lift: #0C1222;
+    --ink: #F2F4F8;
+    --ink2: rgba(242, 244, 248, 0.66);
+    --ink3: rgba(242, 244, 248, 0.46);
+    --hair: rgba(255, 255, 255, 0.07);
+    --hair2: rgba(255, 255, 255, 0.15);
+    --cap: rgba(255, 255, 255, 0.065);
+    --string: rgba(236, 242, 255, 0.55);
+    --bead: #FFFFFF;
+    --star: #E6EDF7;
+    --night: #03050A;
+    --you: #5EEAD4;
+    --you-ink: #5EEAD4;
+    --voice: #A5B4FC;
+    --voice-ink: #A5B4FC;
+    --need: #FFB547;
+    --need-ink: #FFC56E;
+    --muted: #FF6FAE;
+    --muted-ink: #FF8FC0;
+    --err: #FF6B61;
+    --glow: 1;
+    --bg: #05070C;
+    --surface-1: #0E131F;
+    --surface-2: #151B29;
+    --control-bg: #161C2A;
+    --fill: rgba(255, 255, 255, 0.065);
     --fill-hover: rgba(255, 255, 255, 0.1);
-    --line: #252A32;
-    --hairline: rgba(255, 255, 255, 0.12);
+    --line: rgba(255, 255, 255, 0.07);
+    --hairline: rgba(255, 255, 255, 0.15);
     --edge: #626C7B;
-    --fg: #ECEFF4;
-    --fg-2: #AAB2BF;
-    --fg-3: #8B94A3;
-    --tick-rest: #333A45;
-    --live: #8BD96B;
-    --live-tint: #16241A;
-    --work: #7FA8FF;
-    --work-tint: #141E33;
-    --attn: #F0B43C;
-    --attn-tint: #211B10;
-    --attn-edge: #B8871F;
-    --attn-icon: #F0B43C;
-    --err: #FF7A6B;
-    --err-tint: #2E1614;
-    --mute: #B9A2FF;
-    --mute-tint: #1F1A33;
-    --voice: #ECEFF4;
-    --voice-rest: #4A5361;
-    --bloom-you: rgba(139, 217, 107, 0.3);
-    --bloom-voice: rgba(236, 239, 244, 0.2);
-    --bloom-mute: rgba(185, 162, 255, 0.26);
-    --bloom-attn: rgba(240, 180, 60, 0.26);
-    --dial-bezel-alpha: 0.45;
-    --dial-rest-alpha: 0.9;
-    --on-signal: #0B0D10;
-    --focus: #7FA8FF;
-    --selection: #2A3C66;
-    /* Dark: one white ring; depth shadows vanish on a dark page. */
+    --fg: #F2F4F8;
+    --fg-2: #A9AFBC;
+    --fg-3: #8A91A0;
+    --live: #5EEAD4;
+    --work: #A5B4FC;
+    --attn: #FFC56E;
+    --attn-edge: #FFB547;
+    --attn-icon: #FFB547;
+    --err-tint: rgba(255, 107, 97, 0.12);
+    --mute: #FF8FC0;
+    --on-signal: #05070C;
+    --focus: #0A84FF;
+    --selection: rgba(165, 180, 252, 0.28);
     --shadow-border: 0 0 0 1px rgba(255, 255, 255, 0.08);
     --shadow-border-hover: 0 0 0 1px rgba(255, 255, 255, 0.13);
     --shadow-control: inset 0 1px 0 rgba(255, 255, 255, 0.05), 0 0 0 1px rgba(255, 255, 255, 0.1), 0 1px 2px rgba(0, 0, 0, 0.5);
     --shadow-raised: 0 0 0 1px rgba(255, 255, 255, 0.09), 0 8px 24px -8px rgba(0, 0, 0, 0.7);
     --shadow-drawer: 0 0 0 1px rgba(255, 255, 255, 0.08), 0 -12px 32px -8px rgba(0, 0, 0, 0.7);
-    --shadow-mute: inset 0 1px 0 rgba(255, 255, 255, 0.06), 0 1px 0 rgba(0, 0, 0, 0.6), 0 8px 20px rgba(0, 0, 0, 0.45);
     --shadow-key: 0 0 0 1px rgba(255, 255, 255, 0.12), 0 1px 0 rgba(0, 0, 0, 0.6);
-    --scrim: rgba(0, 0, 0, 0.5);
-    --drawer-bg: rgba(20, 23, 28, 0.86);
-    --mute-bg: var(--surface-2);
+    --scrim: rgba(0, 0, 0, 0.55);
+    --drawer-bg: rgba(12, 16, 26, 0.9);
   }
 }
 :root[data-theme="dark"] {
     color-scheme: dark;
-    --bg: #0B0D10;
-    --surface-1: #14171C;
-    --surface-2: #1C2027;
-    --surface-sunken: #07080A;
-    --control-bg: #1E2229;
-    --fill: rgba(255, 255, 255, 0.06);
+    /* Deep space, not neutral grey: a cool blue-black with a static lift behind the
+       string (Orrery's depth, no stars). */
+    --ground: #05070C;
+    --lift: #0C1222;
+    --ink: #F2F4F8;
+    --ink2: rgba(242, 244, 248, 0.66);
+    --ink3: rgba(242, 244, 248, 0.46);
+    --hair: rgba(255, 255, 255, 0.07);
+    --hair2: rgba(255, 255, 255, 0.15);
+    --cap: rgba(255, 255, 255, 0.065);
+    --string: rgba(236, 242, 255, 0.55);
+    --bead: #FFFFFF;
+    --star: #E6EDF7;
+    --night: #03050A;
+    --you: #5EEAD4;
+    --you-ink: #5EEAD4;
+    --voice: #A5B4FC;
+    --voice-ink: #A5B4FC;
+    --need: #FFB547;
+    --need-ink: #FFC56E;
+    --muted: #FF6FAE;
+    --muted-ink: #FF8FC0;
+    --err: #FF6B61;
+    --glow: 1;
+    --bg: #05070C;
+    --surface-1: #0E131F;
+    --surface-2: #151B29;
+    --control-bg: #161C2A;
+    --fill: rgba(255, 255, 255, 0.065);
     --fill-hover: rgba(255, 255, 255, 0.1);
-    --line: #252A32;
-    --hairline: rgba(255, 255, 255, 0.12);
+    --line: rgba(255, 255, 255, 0.07);
+    --hairline: rgba(255, 255, 255, 0.15);
     --edge: #626C7B;
-    --fg: #ECEFF4;
-    --fg-2: #AAB2BF;
-    --fg-3: #8B94A3;
-    --tick-rest: #333A45;
-    --live: #8BD96B;
-    --live-tint: #16241A;
-    --work: #7FA8FF;
-    --work-tint: #141E33;
-    --attn: #F0B43C;
-    --attn-tint: #211B10;
-    --attn-edge: #B8871F;
-    --attn-icon: #F0B43C;
-    --err: #FF7A6B;
-    --err-tint: #2E1614;
-    --mute: #B9A2FF;
-    --mute-tint: #1F1A33;
-    --voice: #ECEFF4;
-    --voice-rest: #4A5361;
-    --bloom-you: rgba(139, 217, 107, 0.3);
-    --bloom-voice: rgba(236, 239, 244, 0.2);
-    --bloom-mute: rgba(185, 162, 255, 0.26);
-    --bloom-attn: rgba(240, 180, 60, 0.26);
-    --dial-bezel-alpha: 0.45;
-    --dial-rest-alpha: 0.9;
-    --on-signal: #0B0D10;
-    --focus: #7FA8FF;
-    --selection: #2A3C66;
-    /* Dark: one white ring; depth shadows vanish on a dark page. */
+    --fg: #F2F4F8;
+    --fg-2: #A9AFBC;
+    --fg-3: #8A91A0;
+    --live: #5EEAD4;
+    --work: #A5B4FC;
+    --attn: #FFC56E;
+    --attn-edge: #FFB547;
+    --attn-icon: #FFB547;
+    --err-tint: rgba(255, 107, 97, 0.12);
+    --mute: #FF8FC0;
+    --on-signal: #05070C;
+    --focus: #0A84FF;
+    --selection: rgba(165, 180, 252, 0.28);
     --shadow-border: 0 0 0 1px rgba(255, 255, 255, 0.08);
     --shadow-border-hover: 0 0 0 1px rgba(255, 255, 255, 0.13);
     --shadow-control: inset 0 1px 0 rgba(255, 255, 255, 0.05), 0 0 0 1px rgba(255, 255, 255, 0.1), 0 1px 2px rgba(0, 0, 0, 0.5);
     --shadow-raised: 0 0 0 1px rgba(255, 255, 255, 0.09), 0 8px 24px -8px rgba(0, 0, 0, 0.7);
     --shadow-drawer: 0 0 0 1px rgba(255, 255, 255, 0.08), 0 -12px 32px -8px rgba(0, 0, 0, 0.7);
-    --shadow-mute: inset 0 1px 0 rgba(255, 255, 255, 0.06), 0 1px 0 rgba(0, 0, 0, 0.6), 0 8px 20px rgba(0, 0, 0, 0.45);
     --shadow-key: 0 0 0 1px rgba(255, 255, 255, 0.12), 0 1px 0 rgba(0, 0, 0, 0.6);
-    --scrim: rgba(0, 0, 0, 0.5);
-    --drawer-bg: rgba(20, 23, 28, 0.86);
-    --mute-bg: var(--surface-2);
+    --scrim: rgba(0, 0, 0, 0.55);
+    --drawer-bg: rgba(12, 16, 26, 0.9);
 }
 
 /* ---------- base ---------- */
 *, *::before, *::after { box-sizing: border-box; }
 html {
   height: 100%;
-  /* Crisper, lighter text on macOS, applied once at the root. */
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
-  /* Every figure (clocks, cost, counts, key digits) holds its width as it changes. */
+  /* Every figure (clocks, cost, counts) holds its width as it changes. */
   font-variant-numeric: tabular-nums;
 }
 body {
   height: 100%;
   margin: 0;
-  background: var(--bg);
-  color: var(--fg);
-  font: 400 var(--text-body)/1.45 var(--font-ui);
-  overflow: hidden; /* the window never scrolls; panels collapse by priority instead */
+  /* Dark: deep space with one still, faint lift behind the string, painted once
+     (never animated). Light: lift = ground, a flat printed page. */
+  background: radial-gradient(120% 46% at 30% var(--lift-y, 124px), var(--lift), var(--ground) 72%) var(--ground);
+  color: var(--ink);
+  font: 400 var(--text-small)/1.35 var(--font-ui);
+  overflow: hidden; /* the window never scrolls; zones are fixed boxes */
 }
 ::selection { background: var(--selection); }
 button, select, input { font: inherit; color: inherit; }
@@ -262,14 +281,13 @@ ol { padding: 0; list-style: none; }
 h2 { text-wrap: balance; }
 p, li { text-wrap: pretty; }
 [hidden] { display: none !important; }
-:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+:focus-visible { outline: 3px solid color-mix(in srgb, var(--focus) 75%, transparent); outline-offset: 2px; border-radius: 8px; }
 .sr-only {
   position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
   overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0;
 }
 .sprite { position: absolute; width: 0; height: 0; overflow: hidden; }
 svg { fill: none; stroke: currentColor; stroke-width: 1.75; stroke-linecap: round; stroke-linejoin: round; }
-/* A keycap: a raised ring, not a bordered box. */
 kbd {
   display: inline-block;
   min-width: 20px;
@@ -282,140 +300,416 @@ kbd {
   font: 600 11px/20px var(--font-ui);
   text-align: center;
 }
+.serif { font-family: var(--font-serif); font-weight: 400; letter-spacing: -0.003em; color: var(--ink); text-wrap: pretty; }
 
-/* Enter motion only after the first render (app.js sets data-motion once the page
-   has settled): what is already on screen at load never animates in. */
-@keyframes rise { from { opacity: 0; translate: 0 -4px; filter: blur(2px); } }
-@keyframes item-in { from { opacity: 0; translate: 0 6px; filter: blur(4px); } }
+/* Enter motion only after the first render (app.js sets data-motion once the page has
+   settled): what is already on screen at load never animates in. */
+@keyframes rise { from { opacity: 0; translate: 0 -4px; } }
+@keyframes item-in { from { opacity: 0; translate: 0 6px; } }
+
+/* ---------- the string's canvas ----------
+   Fixed under the whole panel; web/string.js sizes it and draws only while something
+   moves. Pointer events pass through to the controls above it. */
+.string-canvas { position: fixed; inset: 0; width: 100%; height: 100%; pointer-events: none; z-index: 0; }
 
 /* ---------- layout ---------- */
 .app {
+  position: relative;
+  z-index: 1;
   height: 100dvh;
   display: flex;
   flex-direction: column;
 }
 .app > * { flex: none; }
 .app > .main {
+  position: relative;
   flex: 1 1 auto;
   min-height: 0;
   display: flex;
   flex-direction: column;
-  padding: 0 var(--gutter);
-  gap: var(--space-4);
+  padding-right: var(--gutter);
 }
 
 /* ---------- header ----------
-   Two groups on the 4/8 grid. Left: the status glyph, the state word (15/600, in the
-   state's ink) and under it a quieter line (the detail, e.g. "Still billing", then the
-   project). Right: the usage readout (Session, Today, Cost), one quiet capsule of
-   fixed-width tabular figures so nothing moves while they tick; then the gear (44 px hit). */
+   The state word and the project on one line; on the right one flat capsule of
+   symbols and fixed-width tabular figures (the shipped pills-v2 spirit: no word
+   labels, no outline). The settings gear lives in the footer. */
 .top {
   display: flex;
   align-items: center;
   gap: var(--space-3);
-  min-height: 64px;
-  padding: var(--space-3) var(--space-1) var(--space-3) var(--gutter);
-  color: var(--fg-2);
+  height: var(--header-h);
+  padding: 0 14px 0 var(--gutter);
+  color: var(--ink2);
 }
 .top > * { flex: none; }
-/* Desktop app (SPEC §6.16): the panel draws the page under its transparent title bar;
-   the app sets .host-app and --host-inset-top (the title bar height) so the header
-   starts below the window buttons. */
-html.host-app .top { padding-top: calc(var(--space-2) + var(--host-inset-top, 28px)); min-height: calc(56px + var(--host-inset-top, 28px)); }
-/* Only the left group shrinks, and inside it only the project name (ellipsis); app.js
-   fitHeader hides whole items once anything else would be clipped. */
-.status { flex: 0 1 auto; display: flex; align-items: flex-start; gap: var(--space-2); min-width: 0; margin-right: auto; white-space: nowrap; }
-.status-text { display: flex; flex-direction: column; gap: 0; min-width: 0; overflow: hidden; }
-.status-word { color: var(--fg); font: 600 var(--text-body)/20px var(--font-ui); letter-spacing: -0.01em; }
-.status-sub { display: flex; gap: var(--space-1); min-width: 0; font-size: var(--text-meta); line-height: 16px; color: var(--fg-2); }
+/* Desktop app (SPEC §6.16): the panel draws the page under its transparent title bar. */
+html.host-app .top { height: calc(var(--header-h) + var(--host-inset-top, 28px)); padding-top: var(--host-inset-top, 28px); }
+.status { flex: 0 1 auto; display: flex; align-items: center; min-width: 0; margin-right: auto; white-space: nowrap; }
+.glyph { display: none; }
+.status-text { display: flex; align-items: baseline; gap: 10px; min-width: 0; overflow: hidden; }
+.status-word { flex: none; color: var(--ink); font: 600 var(--text-meta)/16px var(--font-ui); letter-spacing: 0.005em; transition: color var(--dur-base) var(--ease-swap); }
+.status-sub { display: flex; gap: var(--space-1); min-width: 0; font-size: var(--text-meta); line-height: 16px; color: var(--ink2); }
 .status-sub:not(:has(> :not([hidden]))) { display: none; }
 .status-detail { flex: none; font-weight: 600; }
-.status-detail:not([hidden]) + .project:not([hidden])::before { content: "·"; margin-right: var(--space-1); color: var(--fg-3); }
-/* A very long project name is capped; it is the first thing to go when room is short. */
+.status-detail:not([hidden]) + .project:not([hidden])::before { content: "·"; margin-right: var(--space-1); color: var(--ink3); }
 .project { flex: 0 1 auto; min-width: 0; max-width: 24ch; overflow: hidden; text-overflow: ellipsis; }
-/* The usage readout (design/pills-v2, variant D): ambient metadata, one flat capsule
-   (--fill, no ring, no lift: nothing about it says "button") holding Session, Today
-   and Cost as quiet inline slots split by hairlines. Each slot is an 11 px symbol in
-   --fg-3 (timer, calendar; the cost's "$" is its own) and a 12 px medium tabular
-   figure in a box of fixed width, so a ticking clock never moves anything: m:ss and
-   mm:ss both fit 4.6ch (four tabular digits and a narrow colon), h:mm:ss and
-   hh:mm:ss fit 7ch, and the box widens once, at the hour (data-wide,
-   lib.usagePills). The cost reserves "$00.00" (6ch; "<$0.01" fits too) and widens
-   at $100. Figures sit right-aligned so
-   the seconds digit stays put. The words "Session", "Today", "Cost" stay in the DOM
-   for screen readers. A hairline sits before every slot that follows a shown one
-   (Session hides off-live, Today first when room is short). Text labels were tried
-   (variant A) and need ~40 px more than a 420 px header has beside "Listening". */
-.usage { display: flex; align-items: center; height: 24px; padding: 0 10px; border-radius: 12px; background: var(--fill); }
+body[data-status="attention"] .status-word { color: var(--need-ink); }
+body[data-status="muted"] .status-word,
+body[data-status="muted"] .status-detail { color: var(--muted-ink); }
+body[data-status="error"] .status-word { color: var(--err); }
+/* The usage capsule: 26 px, radius 13, filled --cap, no outline, a 5 px inset; the
+   slots split by hairlines. Each figure sits right-aligned in a fixed box (m:ss and
+   mm:ss in 4.6ch, h:mm:ss in 7ch, widening once at the hour; the cost reserves
+   "$00.00"), so a ticking clock never moves anything. The words stay for screen readers. */
+.usage { display: flex; align-items: center; height: 26px; padding: 0 5px; border-radius: 13px; background: var(--cap); transition: opacity 450ms var(--ease-swap); }
 .usage[hidden], .pill[hidden] { display: none; }
-.pill { display: flex; align-items: center; gap: var(--space-1); white-space: nowrap; }
-.pill:not([hidden]) ~ .pill::before { content: ""; width: 1px; height: 12px; margin: 0 var(--space-2); background: var(--hairline); }
-.pill-icon { width: 11px; height: 11px; flex: none; stroke-width: 1.8; color: var(--fg-3); }
+.pill { position: relative; display: flex; align-items: center; gap: 6px; height: 26px; padding: 0 9px; white-space: nowrap; }
+.pill:not([hidden]) ~ .pill::before { content: ""; position: absolute; left: 0; top: 7px; bottom: 7px; width: 1px; background: var(--hair2); }
+.pill-icon { width: 12px; height: 12px; flex: none; stroke-width: 1.8; color: var(--ink3); }
 .pill-label { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
 .pill-value {
   display: block;
   width: 4.6ch;
-  font-size: var(--text-meta);
+  font-size: 11.5px;
   line-height: 16px;
-  font-weight: 500;
+  font-weight: 600;
   font-variant-numeric: tabular-nums;
   text-align: right;
-  color: var(--fg-2);
+  color: var(--ink);
 }
 .pill-value[data-wide] { width: 7ch; }
 .pill-cost .pill-value { width: 6ch; }
 .pill-cost .pill-value[data-wide] { width: 7ch; }
-/* The gear's 44 px box has 12 px of air around the icon; pull it in so the visible
-   gap to the pills is 16 and the icon's right edge sits on the 16 px gutter less
-   its 4 px ring of air (the same inset the banner's close button has). */
-.gear { margin-left: calc(var(--space-1) * -1); }
 
-/* Status glyph: the SHAPE carries the meaning, colour supports it. 12 px, centred on
-   the 20 px first line (4 px down). */
-.glyph { position: relative; width: 12px; height: 12px; margin-top: var(--space-1); flex: none; color: var(--fg-3); }
-.glyph::before { content: ""; position: absolute; inset: 1px; border-radius: 50%; border: 2px solid currentColor; }
-body[data-status="live"] .glyph { color: var(--live); }
-body[data-status="live"] .glyph::before { inset: 2px; background: currentColor; box-shadow: 0 0 0 3px color-mix(in srgb, currentColor 18%, transparent); }
-body[data-status="live"] .status-word { color: var(--live); }
-body[data-status="muted"] .glyph { color: var(--mute); }
-body[data-status="muted"] .glyph::after { content: ""; position: absolute; left: 5px; top: -1px; width: 2px; height: 14px; background: currentColor; transform: rotate(-45deg); border-radius: 1px; }
-body[data-status="muted"] .status-word,
-body[data-status="muted"] .status-detail { color: var(--mute); }
-body[data-status="attention"] .glyph { color: var(--attn); }
-/* A triangle's visual centre sits low: lift it 1 px. */
-body[data-status="attention"] .glyph::before { inset: -1px 0 1px; border: 0; border-radius: 0; background: currentColor; clip-path: polygon(50% 4%, 100% 94%, 0 94%); }
-body[data-status="attention"] .status-word { color: var(--attn); }
-body[data-status="error"] .glyph { color: var(--err); }
-body[data-status="error"] .glyph::before { inset: 1px; border: 0; border-radius: 1px; background: currentColor; transform: rotate(45deg) scale(0.8); }
-body[data-status="error"] .status-word { color: var(--err); }
-body[data-status="paused"] .glyph::before { inset: 1px 2px; border: 0; border-radius: 0; border-left: 3px solid currentColor; border-right: 3px solid currentColor; }
-body[data-status="connecting"] .glyph::before { border-style: dashed; }
-/* Sleeping: a crescent, like the mute button's glyph. */
-body[data-status="sleeping"] .glyph::before { border: 0; background: radial-gradient(circle at 72% 30%, transparent 42%, currentColor 44%); }
-
+/* ---------- buttons ---------- */
 .icon-btn {
   position: relative;
   display: inline-grid;
   place-items: center;
-  width: var(--hit);
-  height: var(--hit);
+  width: var(--hit-min);
+  height: var(--hit-min);
   border: 0;
-  border-radius: var(--radius-lg);
+  border-radius: 20px;
   background: transparent;
-  color: var(--fg-2);
+  color: var(--ink2);
   cursor: pointer;
-  transition-property: background-color, color, scale;
+  transition-property: background-color, color, scale, opacity;
   transition-duration: var(--dur-fast);
-  transition-timing-function: var(--ease-out);
+  transition-timing-function: var(--ease-swap);
 }
-.icon-btn svg { width: 20px; height: 20px; }
-.icon-btn:hover { background: var(--fill); color: var(--fg); }
-.icon-btn:active { scale: 0.96; }
+.icon-btn svg { width: 18px; height: 18px; stroke-width: 1.5; }
+.icon-btn:hover:not(:disabled) { background: var(--hair); color: var(--ink); }
+.icon-btn:active:not(:disabled) { scale: 0.96; }
+.icon-btn:disabled { cursor: default; opacity: 0.4; }
+.icon-btn.end:hover:not(:disabled) { color: var(--err); }
+
+/* ---------- stage: headline, peg + string, one caption line ---------- */
+.stage { flex: none; padding-top: var(--space-4); }
+.word {
+  height: var(--word-h);
+  margin-left: var(--col-x);
+  font: 600 var(--word-size)/var(--word-h) var(--font-display);
+  letter-spacing: -0.012em;
+  color: var(--ink);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  transition: color var(--dur-base) var(--ease-swap);
+}
+/* A new headline fades in over the old slot (200 ms); nothing around it moves. */
+.word[data-fade="true"] { animation: word-in 200ms var(--ease-swap); }
+@keyframes word-in { from { opacity: 0; } to { opacity: 1; } }
+.word[data-tone="attn"] { color: var(--need-ink); }
+.word[data-tone="muted"] { color: var(--muted-ink); }
+.word[data-tone="err"] { color: var(--err); }
+.word:focus { outline: none; }
+/* The string's row: 44 px around the string's y. The peg is drawn by the canvas; the
+   button over it is a 64 px target, transparent, with a real glyph. */
+.dial { position: relative; height: calc(var(--peg-r) * 2); margin-top: 14px; }
+.mute {
+  position: absolute;
+  left: calc(var(--peg-x) - 32px);
+  top: calc(var(--peg-r) - 32px);
+  width: 64px;
+  height: 64px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--ink);
+  display: grid;
+  place-items: center;
+  cursor: pointer;
+  transition-property: color, scale, opacity;
+  transition-duration: var(--dur-base);
+  transition-timing-function: var(--ease-swap);
+}
+.mute:active:not(:disabled) { scale: 0.96; }
+.mute:disabled { cursor: default; color: var(--ink3); }
+.mute-icons { display: grid; width: calc(var(--peg-r) * 0.82); aspect-ratio: 1; opacity: 0.85; }
+.mute-icon {
+  grid-area: 1 / 1;
+  width: 100%;
+  height: 100%;
+  stroke-width: 1.6;
+  transition-property: opacity, scale, visibility;
+  transition-duration: var(--dur-icon);
+  transition-timing-function: var(--ease-swap);
+}
+.mute-icon.ico-slash, .mute-icon.ico-pause, .mute-icon.ico-moon { opacity: 0; scale: 0.25; visibility: hidden; }
+body[data-floor="muted"] .mute { color: var(--muted); }
+body[data-floor="muted"] .mute-icon.ico-slash,
+body[data-floor="paused"] .mute-icon.ico-pause,
+body[data-floor="error"] .mute-icon.ico-slash,
+body[data-floor="off"] .mute-icon.ico-slash { opacity: 1; scale: 1; visibility: visible; }
+body[data-floor="paused"] .mute-icon.ico-mic { opacity: 0; scale: 0.25; visibility: hidden; }
+/* Asleep the peg shows its night side: the mic glyph dims to 45%. */
+body[data-floor="sleeping"] .mute-icons { opacity: 0.45; }
+/* In eclipse the glyph is gold on the dark disc: the control stays findable at the loudest moment. */
+body[data-eclipse="true"] .mute { color: var(--need); }
+body[data-eclipse="true"] .mute-icons { opacity: 0.9; }
+.mute[data-pending="true"] { opacity: 0.7; }
+
+/* The caption line: a fixed 22 px box on the text column. A note (muted, connecting)
+   or the latest caption; a line that does not fit keeps its newest words (app.js). */
+.readout { position: relative; height: var(--cap-h); margin-left: var(--col-x); font-size: var(--cap-size); line-height: var(--cap-h); color: var(--ink2); }
+.readout > * { position: absolute; inset: 0; }
+.sub { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--ink2); }
+body[data-floor="muted"] .sub { color: var(--muted-ink); }
+.sub:not([hidden]) ~ .captions { visibility: hidden; }
+.steps:not([hidden]) ~ .captions { visibility: hidden; }
+.steps li { display: none; align-items: center; white-space: nowrap; }
+.steps li[data-state="active"] { display: flex; color: var(--ink2); }
+.steps li[data-state="active"]::after { content: "…"; }
+.hint { display: none !important; }
+.captions { overflow: hidden; }
+.captions ol { display: flex; flex-direction: column; justify-content: flex-end; }
+/* One line only: the previous line never shows in this box. */
+#cap-prev { display: none !important; }
+.line { display: block; color: var(--ink2); }
+.who { font-weight: 600; font-size: 0.88em; letter-spacing: 0.02em; margin-right: 6px; color: var(--you-ink); }
+.line.assistant .who { color: var(--voice-ink); }
+.text { color: var(--ink2); }
+.captions-empty { color: var(--fg-3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+/* ---------- Claude's page ----------
+   Starts on the text column, ends 20 px inside the string's bridge, so the approval
+   frame (drawn by the canvas from the peg to the bridge) encloses it. */
+.claude {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  margin: 18px 20px 26px var(--col-x);
+  font-size: var(--text-small);
+}
+.claude > * { min-width: 0; }
+.claude-head { display: flex; align-items: center; height: 16px; font-size: 12.5px; line-height: 16px; font-weight: 600; color: var(--ink); white-space: nowrap; min-width: 0; }
+.claude-title { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; letter-spacing: -0.003em; }
+.claude-detail { flex: none; margin-left: 5px; font-weight: 500; color: var(--ink2); }
+.claude-detail::before { content: "·"; margin-right: 5px; }
+.claude-detail:empty { display: none; }
+.claude-agents { flex: 0 100 auto; min-width: 0; margin-left: var(--space-2); overflow: hidden; text-overflow: ellipsis; font-weight: 500; font-size: var(--text-meta); color: var(--fg-3); }
+/* Claude's elapsed time: a plain tabular figure with a timer symbol, no box, fixed width. */
+.claude-time { flex: none; display: inline-flex; align-items: center; justify-content: flex-end; gap: 5px; width: 58px; margin-left: auto; font-weight: 500; color: var(--ink2); }
+.claude-agents:not([hidden]) + .claude-time { margin-left: var(--space-2); }
+.claude-time svg { width: 11px; height: 11px; flex: none; stroke-width: 1.6; color: var(--ink3); }
+body[data-claude="approval"] .claude-time { font-weight: 600; color: var(--need-ink); }
+body[data-claude="approval"] .claude-time svg { color: var(--need-ink); }
+body[data-claude="approval"] .claude-title { color: var(--need-ink); }
+/* The moon phase: new (idle), waxing (working), eclipsed (needs you), full (done).
+   The phases differ by how much is filled, so they read without color. */
+.moon { flex: none; width: 12px; height: 12px; margin-right: var(--space-2); color: var(--ink); }
+.moon svg { display: block; width: 12px; height: 12px; stroke-width: 1.2; }
+.moon g { display: none; }
+.moon[data-phase="new"] { color: var(--ink3); }
+.moon[data-phase="new"] .ph-new,
+.moon[data-phase="waxing"] .ph-waxing,
+.moon[data-phase="eclipse"] .ph-eclipse,
+.moon[data-phase="full"] .ph-full { display: inline; }
+.moon .ph-waxing path, .moon .ph-eclipse circle + circle, .moon .ph-full circle { fill: currentColor; stroke: none; }
+.moon[data-phase="eclipse"] { color: var(--need-ink); }
+.moon[data-phase="full"] { color: var(--ink2); }
+/* The request line keeps its height when empty, so the page below never moves. */
+.claude-request { flex: none; height: 16px; margin-top: 6px; font-size: var(--text-meta); line-height: 16px; color: var(--fg-3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.claude-request[hidden] { display: block !important; visibility: hidden; }
+.claude-request[data-tone="error"] { color: var(--err); }
+.claude-request[data-tone="warn"] { color: var(--need-ink); }
+/* The page: a fixed box. Words fade in; if the flow overflows, it slides up under a
+   top fade (app.js sets the offset), never a scroller over live text. */
+.claude-page { position: relative; flex: 1 1 auto; min-height: 0; margin-top: 4px; overflow: hidden; }
+.claude-page[data-clipped="true"] {
+  -webkit-mask-image: linear-gradient(to bottom, transparent 0, transparent 10px, #000 68px);
+  mask-image: linear-gradient(to bottom, transparent 0, transparent 10px, #000 68px);
+}
+.claude-flow { position: absolute; left: 0; right: 0; top: 0; transition: translate 260ms var(--ease-swap); }
+.claude[data-expanded="true"] .claude-page { overflow-y: auto; overscroll-behavior: contain; scrollbar-width: thin; scrollbar-color: var(--hair2) transparent; -webkit-mask-image: none; mask-image: none; }
+.claude[data-expanded="true"] .claude-flow { position: static; translate: none !important; }
+.claude-history, .claude-step, .claude-summary { font-size: var(--serif-size); line-height: var(--serif-lh); }
+.msg { margin-bottom: 0.9em; }
+.claude-history .msg { opacity: 0.42; }
+.claude-history .msg:not(:last-child) { opacity: 0.3; }
+body[data-claude="finished"] .claude-history .msg { opacity: 0.3; }
+body[data-claude="idle"] .claude-summary { opacity: 0.55; }
+.serif p { margin: 0 0 0.55em; }
+.serif ul, .serif ol { list-style: none; margin: 0.2em 0 0.55em; padding: 0; }
+.serif li { position: relative; padding-left: 1.05em; }
+.serif ul > li::before { content: ""; position: absolute; left: 0.1em; top: 0.72em; width: 0.42em; height: 1px; background: currentColor; opacity: 0.55; }
+.serif ol { counter-reset: md; }
+.serif ol > li { counter-increment: md; padding-left: 1.4em; }
+.serif ol > li::before { content: counter(md) "."; position: absolute; left: 0; color: var(--ink2); font-variant-numeric: tabular-nums; }
+.serif code { font-family: var(--font-mono); font-size: 0.84em; letter-spacing: 0; text-decoration: underline; text-decoration-color: var(--hair2); text-underline-offset: 0.28em; text-decoration-thickness: 1px; }
+.serif strong { font-weight: 600; }
+.serif a { color: inherit; text-decoration: underline; text-decoration-color: var(--hair2); text-underline-offset: 0.22em; }
+/* A code block (expanded view only): bare mono under a hairline, never a box. */
+.serif pre { margin: 0 0 0.55em; padding: 2px 0 2px 12px; border-left: 1px solid var(--hair2); overflow-x: auto; font-size: 0.8em; line-height: 1.5; color: var(--ink2); }
+.serif pre code { text-decoration: none; font-size: 1em; }
+.serif .md-omitted { color: var(--fg-3); font-family: var(--font-ui); font-size: var(--text-small); }
+.more {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  min-height: 32px;
+  margin: -4px 0 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--ink);
+  font: 600 12.5px/1 var(--font-ui);
+  text-decoration: underline;
+  text-decoration-color: var(--hair2);
+  text-underline-offset: 3px;
+  cursor: pointer;
+}
+.more::after { content: ""; position: absolute; inset: -6px -8px; }
+.more:hover { text-decoration-color: currentColor; }
+/* New words fade in; nothing moves (only after the first render). */
+html[data-motion="on"] .claude-step .msg:last-child,
+html[data-motion="on"] .claude-summary { animation: fade-in 320ms var(--ease-swap) both; }
+@keyframes fade-in { from { opacity: 0; } }
+
+/* ---------- the approval: the question in the frame of light ----------
+   The canvas draws the eclipse and the frame; the page shows the question. While the
+   moon crosses (data-eclipsing, 0 to 750 ms), Claude's page stays exactly as it was
+   and dims to 15%. At totality (data-claude="approval") the question takes its place:
+   each part rises 10 px, staggered 60 ms, as the frame runs out (1.0 s into the eclipse). */
+.claude-ask { position: absolute; inset: 0; display: flex; flex-direction: column; padding-top: 2px; }
+.claude-command {
+  flex: none;
+  margin: 0 0 10px;
+  font: 500 calc(var(--serif-size) * 0.9)/1.45 var(--font-mono);
+  letter-spacing: -0.01em;
+  color: var(--ink);
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 7.4em;
+  overflow-y: auto;
+}
+.claude-why { flex: 0 1 auto; min-height: 0; overflow: hidden; font-size: calc(var(--serif-size) - 2px); line-height: calc(var(--serif-lh) - 4px); color: var(--ink2); }
+.claude-why p { margin: 0 0 0.4em; }
+.claude-note { flex: none; margin-top: auto; padding-top: var(--space-3); font-size: 12.5px; line-height: 18px; color: var(--ink2); }
+.claude-note .note-short { display: none; }
+body[data-eclipsing="true"] .claude-flow { opacity: 0.15; transition: opacity 450ms var(--ease-out) 300ms; }
+body[data-claude="approval"] .claude-flow { opacity: 0; visibility: hidden; }
+html[data-motion="on"] body[data-claude="approval"] .claude-ask > * { animation: ask-rise 320ms var(--ease-swap) both; animation-delay: 250ms; }
+html[data-motion="on"] body[data-claude="approval"] .claude-ask > :nth-child(2) { animation-delay: 310ms; }
+html[data-motion="on"] body[data-claude="approval"] .claude-ask > :nth-child(3) { animation-delay: 370ms; }
+@keyframes ask-rise { from { opacity: 0; translate: 0 10px; } }
+/* The world dims while the moon crosses: usage and footer recede; the question and
+   the caption stay at full strength. */
+body[data-view="live"][data-eclipsing="true"] .usage,
+body[data-view="live"][data-claude="approval"] .usage { opacity: 0.45; }
+body[data-view="live"][data-eclipsing="true"] .usage { transition-delay: 300ms; }
+body[data-view="live"][data-eclipsing="true"] .bottom,
+body[data-view="live"][data-claude="approval"] .bottom { opacity: 0.5; }
+body[data-view="live"][data-eclipsing="true"] .bottom { transition-delay: 300ms; }
+body[data-view="live"] .bottom:hover,
+body[data-view="live"] .bottom:focus-within { opacity: 1 !important; transition-delay: 0ms; }
+
+/* ---------- footer ---------- */
+.bottom {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  height: var(--footer-h);
+  padding: 0 10px 0 12px;
+  transition: opacity 450ms var(--ease-swap);
+}
+.ctl { display: flex; gap: var(--space-2); }
+/* The persona chip: its tuning as a tiny string, the name and the voice. */
+.pchip {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  min-width: 0;
+  height: var(--hit-min);
+  padding: 0 10px 0 6px;
+  border: 0;
+  border-radius: 20px;
+  background: transparent;
+  color: var(--ink);
+  cursor: pointer;
+  transition-property: background-color, scale;
+  transition-duration: var(--dur-fast);
+  transition-timing-function: var(--ease-swap);
+}
+.pchip:hover { background: var(--hair); }
+.pchip:active { scale: 0.96; }
+.pc-glyph { flex: none; width: 30px; height: 20px; stroke-width: 1.4; }
+.pc-glyph .pc-bridge { fill: currentColor; stroke: none; fill-opacity: 0.55; }
+.pc-name { font-weight: 600; font-size: 13px; white-space: nowrap; }
+.pc-voice { color: var(--ink2); font-size: var(--text-meta); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.pc-chev { flex: none; width: 10px; height: 10px; margin-left: -4px; stroke-width: 1.5; color: var(--ink3); }
+
+/* Push buttons (cards, the drawer): a filled surface and a shadow ring, pill-shaped. */
+.btn {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-height: var(--control);
+  padding: 0 var(--space-4);
+  border: 0;
+  border-radius: var(--radius-md);
+  background: var(--control-bg);
+  box-shadow: var(--shadow-control);
+  color: var(--ink);
+  font-size: var(--text-small);
+  font-weight: 600;
+  line-height: 18px;
+  cursor: pointer;
+  transition-property: background-color, box-shadow, color, scale;
+  transition-duration: var(--dur-fast);
+  transition-timing-function: var(--ease-swap);
+}
+.btn::after { content: ""; position: absolute; inset: calc((var(--control) - var(--hit)) / 2) 0; }
+.btn:has(> svg:first-child) { padding-left: 14px; }
+.btn svg { width: 16px; height: 16px; flex: none; stroke-width: 1.9; }
+.btn:hover:not(:disabled) { background: var(--surface-2); }
+.btn:active:not(:disabled) { scale: 0.96; }
+.btn:disabled { cursor: default; color: var(--fg-3); background: transparent; box-shadow: var(--shadow-border); }
+.btn.danger { color: var(--err); }
+.btn.danger:hover:not(:disabled) { background: var(--err-tint); }
+/* The card's one action: a 44 px pill, filled ink (the secondary one is an outline). */
+.btn.primary { min-height: var(--hit); width: 100%; border-radius: 22px; background: var(--ink); box-shadow: none; color: var(--ground); font-size: 14px; }
+.btn.primary::after { inset: 0; }
+.btn.primary:hover:not(:disabled) { background: color-mix(in srgb, var(--ink) 86%, var(--ground)); }
+.btn kbd { background: transparent; box-shadow: none; }
+.btn.primary.secondary { background: transparent; box-shadow: inset 0 0 0 1.5px var(--hair2); color: var(--ink); }
+.btn.primary.secondary:hover:not(:disabled) { background: var(--hair); }
+.banner-action { flex: none; min-height: var(--control-sm); padding: 0 var(--space-3); border-radius: 16px; background: var(--fill); box-shadow: none; font-weight: 600; }
+.banner-action::after { inset: calc((var(--control-sm) - var(--hit-min)) / 2) 0; }
+.banner-action:hover:not(:disabled) { background: var(--fill-hover); }
 
 /* ---------- banners: one at a time ----------
-   A raised neutral surface; the tone is in the icon alone, never in a tinted wash or
-   a warm ring (the old amber fill and edge read as beige on the light page). */
-.banners { padding: 0 var(--gutter) var(--space-2); }
+   A raised neutral surface floating over the bottom of the page, above the footer: a
+   banner coming or going moves nothing. The tone is in the icon alone, never in a
+   tinted wash or a warm ring. */
+.banners { position: absolute; z-index: 5; left: var(--gutter); right: var(--gutter); bottom: 12px; }
 .banners:empty { display: none; }
 .banner {
   display: flex;
@@ -452,396 +746,27 @@ html[data-motion="on"] .banner[data-enter="true"] > .icon-btn { animation-delay:
 .banner[data-leaving="true"] {
   opacity: 0;
   translate: 0 -4px;
-  filter: blur(2px);
-  pointer-events: none;
+    pointer-events: none;
   transition-property: opacity, translate, filter;
   transition-duration: var(--dur-fast);
   transition-timing-function: var(--ease-in);
 }
 
-/* ---------- stage: the dial ---------- */
-/* The stage takes two thirds of the free height (the captions one third) and centres
-   the dial + word in it, so a tall window gives the instrument room instead of an
-   empty band above the captions. */
-.stage {
-  flex: 2 0 auto;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: var(--space-3);
-  padding-top: var(--space-2);
-}
-.dial {
-  position: relative;
-  width: var(--dial);
-  height: var(--dial);
-  flex: none;
-  display: grid;
-  place-items: center;
-}
-.dial-canvas {
-  position: absolute;
-  inset: 0;
-  width: 100%;
-  height: 100%;
-}
-/* Level-free motion runs on the compositor: layers drawn once by dial.js, moved
-   by transform/opacity here, and paused whenever they are not shown. */
-.dial-layer {
-  position: absolute;
-  inset: 0;
-  width: 100%;
-  height: 100%;
-  pointer-events: none;
-  opacity: 0;
-  transition: opacity var(--dur-slow) var(--ease-out);
-  animation: dial-turn 2.4s linear infinite paused;
-}
-/* The bloom is drawn once; app state sets its opacity (dial.js setBloom). */
-.dial-bloom { animation: none; transition: none; opacity: 0; }
-/* The bezel ratchets one tick (3 degrees) per second while someone talks, like a
-   watch bezel; 3-degree steps keep it aligned with the work chase below. */
-.dial-bezel { opacity: 0.78; animation-duration: 120s; animation-timing-function: steps(120); }
-.dial[data-spin="true"] .dial-bezel { opacity: 1; animation-play-state: running; }
-/* Claude Code working: 16 lit bezel ticks chase round in tick-sized steps (25 a
-   second). While the voice connection is down the chase dims and stops. */
-.dial-work { animation-duration: 4.8s; animation-timing-function: steps(120); }
-.dial[data-work="true"] .dial-work { opacity: 1; animation-play-state: running; }
-.dial[data-work="dim"] .dial-work { opacity: 0.35; }
-.dial-sweep { animation-duration: 1.6s; animation-timing-function: steps(48); }
-.dial[data-sweep="true"] .dial-sweep { opacity: 0.9; animation-play-state: running; }
-/* An opacity animation would hold its keyframe while paused, so the pulse only exists while shown. */
-.dial-attn { animation: none; }
-.dial[data-attn="true"] .dial-attn { opacity: 1; animation: dial-pulse 0.7s ease-in-out infinite alternate; }
-@keyframes dial-turn { to { rotate: 1turn; } }
-@keyframes dial-pulse { from { opacity: 0.5; } to { opacity: 1; } }
-.mute {
-  position: relative;
-  width: calc(var(--dial) * 0.405);
-  height: calc(var(--dial) * 0.405);
-  min-width: 56px;
-  min-height: 56px;
-  border-radius: 50%;
-  border: 2px solid var(--edge);
-  background: var(--mute-bg);
-  color: var(--fg);
-  box-shadow: var(--shadow-mute);
-  display: grid;
-  place-items: center;
-  cursor: pointer;
-  transition-property: background-color, border-color, color, scale;
-  transition-duration: var(--dur-base);
-  transition-timing-function: var(--ease-out);
-}
-.mute:active:not(:disabled) { scale: 0.96; }
-.mute:disabled { cursor: default; border-style: dashed; color: var(--fg-3); }
-/* The glyphs are stacked and crossfade: the leaving one shrinks to 0.25 and blurs
-   out while the arriving one grows in (both stay in the DOM, so either direction
-   animates and a change mid-way retargets). */
-.mute-icons { display: grid; width: 38%; aspect-ratio: 1; }
-.mute-icon {
-  grid-area: 1 / 1;
-  width: 100%;
-  height: 100%;
-  stroke-width: 1.9;
-  transition-property: opacity, scale, filter, visibility;
-  transition-duration: var(--dur-icon);
-  transition-timing-function: var(--ease-swap);
-}
-/* A hidden glyph is also visibility:hidden (flipped at the end of the fade, discrete),
-   so WebKit never paints its blur: the dial canvas under it redraws every frame, and
-   three live blur filters over it cost the app's main thread ~60 ms at p95. */
-.mute-icon.ico-slash, .mute-icon.ico-pause, .mute-icon.ico-moon { opacity: 0; scale: 0.25; filter: blur(4px); visibility: hidden; }
-
-body[data-floor="listening"] .mute,
-body[data-floor="you"] .mute { border-color: var(--live); }
-body[data-floor="voice"] .mute { border-color: var(--voice); }
-body[data-floor="muted"] .mute { background: var(--mute); border-color: var(--mute); color: var(--on-signal); }
-body[data-floor="muted"] .mute-icon.ico-slash,
-body[data-floor="paused"] .mute-icon.ico-pause,
-body[data-floor="sleeping"] .mute-icon.ico-moon,
-body[data-floor="error"] .mute-icon.ico-slash,
-body[data-floor="off"] .mute-icon.ico-slash { opacity: 1; scale: 1; filter: none; visibility: visible; }
-/* Sleeping has its own glyph: a crescent; paused, two bars. */
-body[data-floor="paused"] .mute-icon.ico-mic,
-body[data-floor="sleeping"] .mute-icon.ico-mic { opacity: 0; scale: 0.25; filter: blur(4px); visibility: hidden; }
-body[data-floor="sleeping"][data-listening="true"] .mute { border-color: color-mix(in srgb, var(--live) 60%, var(--edge)); }
-.mute[data-pending="true"] { border-style: dashed; }
-
-.readout {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: var(--space-1);
-  text-align: center;
-  min-width: 0;
-}
-.word {
-  font: 600 var(--text-state)/1.15 var(--font-display);
-  letter-spacing: -0.02em;
-  text-wrap: balance;
-  transition-property: color;
-  transition-duration: var(--dur-base);
-  transition-timing-function: var(--ease-out);
-}
-/* Live view: the word is a slow summary in a fixed slot (SPEC-DEVIATIONS "status
-   word"). One line, and the line under it always keeps its height, so nothing
-   below (the Claude card, the captions) moves when the floor changes. */
-body[data-view="live"] .word { white-space: nowrap; max-width: 100%; overflow: hidden; text-overflow: ellipsis; }
-.word[data-fade="true"] { animation: word-in 260ms var(--ease-out); }
-@keyframes word-in { from { opacity: 0.25; filter: blur(2px); } to { opacity: 1; filter: blur(0); } }
-body[data-view="live"] .sub { min-height: calc(var(--text-small) * 1.45); line-height: 1.45; white-space: nowrap; max-width: 100%; overflow: hidden; text-overflow: ellipsis; }
-body[data-floor="you"] .word { color: var(--live); }
-body[data-floor="muted"] .word { color: var(--mute); }
-.word[data-tone="attn"] { color: var(--attn) !important; }
-.word:focus { outline: none; }
-.sub { color: var(--fg-2); font-size: var(--text-small); text-wrap: balance; }
-.hint { margin-top: var(--space-1); color: var(--fg-3); font-size: var(--text-small); display: flex; align-items: center; gap: var(--space-1); }
-.hint .keys { display: inline-flex; align-items: center; gap: var(--space-1); }
-
-.steps { display: flex; flex-direction: column; gap: var(--space-1); margin-top: var(--space-1); text-align: left; font-size: var(--text-small); }
-.steps li { display: flex; align-items: center; gap: var(--space-2); color: var(--fg-3); }
-.steps li::before {
-  content: "";
-  width: 12px; height: 12px; flex: none;
-  border-radius: 50%;
-  border: 1.5px solid var(--edge);
-}
-.steps li[data-state="active"] { color: var(--fg); }
-.steps li[data-state="active"]::before { border-color: var(--fg); border-right-color: transparent; animation: spin 900ms linear infinite; }
-.steps li[data-state="done"] { color: var(--fg-2); }
-.steps li[data-state="done"]::before { border-color: var(--live); background: var(--live); box-shadow: inset 0 0 0 2px var(--bg); }
-@keyframes spin { to { rotate: 360deg; } }
-
-/* ---------- Claude Code card (one card, four states) ----------
-   The border stays 1 px and transparent in every state (rings are box-shadows), so
-   a state change never nudges the layout by a pixel. */
-.claude {
-  flex: none;
-  display: grid;
-  gap: var(--space-1);
-  padding: var(--space-3) 0;
-  border: 1px solid transparent;
-  border-top-color: var(--line);
-  font-size: var(--text-small);
-  transition-property: background-color, border-color, box-shadow;
-  transition-duration: var(--dur-base);
-  transition-timing-function: var(--ease-out);
-}
-/* Never wider than the panel (SPEC §6.10.4, the 0.3.2 report of a clipped approval
-   card): grid items may shrink below their content; short of room the agents
-   chip gives way first, then the title, both with an ellipsis; the time keeps its size. */
-.claude { min-width: 0; max-width: 100%; }
-.claude > * { min-width: 0; }
-.claude-head { display: flex; align-items: center; gap: var(--space-2); min-height: 20px; color: var(--fg-2); min-width: 0; }
-.claude-title { font-weight: 600; color: var(--fg); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.claude-time { flex: none; white-space: nowrap; }
-body[data-claude="idle"] .claude-title { font-weight: 400; color: var(--fg-2); }
-.claude-time { margin-left: auto; color: var(--fg-3); }
-.claude-icon { width: 14px; height: 14px; flex: none; border-radius: 50%; border: 2px solid var(--fg-3); }
-.claude-step { color: var(--fg); font-size: var(--text-body); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-/* A plain-words tool line stands in only while Claude has said nothing lately: quieter. */
-.claude-step[data-secondary="true"] { color: var(--fg-2); font-size: var(--text-small); line-height: calc(var(--text-body) * 1.4); }
-.claude-agents { color: var(--fg-3); font-size: var(--text-meta); white-space: nowrap; flex: 0 100 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
-.claude-agents:not([hidden]) + .claude-time:not(:empty)::before { content: "·"; margin-right: var(--space-1); }
-.claude-agents:not([hidden]) { margin-left: auto; }
-/* 4 px either side of the separator: pull the time back over half the 8 px gap. */
-.claude-agents:not([hidden]) + .claude-time { margin-left: calc(var(--space-1) * -1); }
-.claude-summary p, .claude-summary ul, .claude-summary ol { margin: 0 0 0.35em; }
-.claude-summary ul, .claude-summary ol { padding-left: 1.25em; }
-.claude-summary code { font-family: var(--font-mono, ui-monospace, monospace); font-size: 0.92em; padding: 0 3px; border-radius: var(--radius-xs); background: var(--fill); }
-.claude-summary pre { margin: 0 0 0.35em; padding: var(--space-2); overflow-x: auto; border-radius: var(--radius-sm); background: var(--fill); }
-.claude-summary pre code { padding: 0; background: none; }
-.claude-summary a { color: inherit; text-decoration: underline; text-underline-offset: 2px; }
-.claude-summary .md-omitted { color: var(--fg-3); }
-.claude-request { color: var(--fg-3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.claude-request[data-tone="error"] { color: var(--err); }
-.claude-request[data-tone="warn"] { color: var(--attn); }
-/* Rendered markdown (paragraphs, lists): clamped by height, since line-clamp does
-   not reach into block children. */
-.claude-summary {
-  color: var(--fg);
-  font-size: var(--text-body);
-  line-height: 1.45;
-  text-wrap: pretty;
-  max-height: calc(3 * 1.45em);
-  overflow: hidden;
-}
-.claude[data-expanded="true"] .claude-summary { max-height: 40vh; overflow-y: auto; }
-.more {
-  position: relative;
-  justify-self: start;
-  min-height: var(--hit);
-  margin: calc(var(--space-2) * -1) 0 calc(var(--space-2) * -1) calc(var(--space-2) * -1);
-  padding: 0 var(--space-2);
-  border: 0;
-  background: transparent;
-  color: var(--work);
-  font-weight: 600;
-  font-size: var(--text-small);
-  cursor: pointer;
-  border-radius: var(--radius-md);
-  transition-property: scale;
-  transition-duration: var(--dur-fast);
-  transition-timing-function: var(--ease-out);
-}
-.more:hover { text-decoration: underline; text-underline-offset: 3px; }
-.more:active { scale: 0.96; }
-/* Lines that join a card stagger in (only after the first render). */
-html[data-motion="on"] .claude-step,
-html[data-motion="on"] .claude-command,
-html[data-motion="on"] .claude-note,
-html[data-motion="on"] .claude-summary { animation: item-in 280ms var(--ease-out) both; }
-html[data-motion="on"] .claude-command,
-html[data-motion="on"] .claude-summary { animation-delay: 80ms; }
-html[data-motion="on"] .claude-note { animation-delay: 160ms; }
-
-/* working / finished / approval: a raised surface. Radius 18 = the command's 6 + the
-   card's 12 px padding. */
-body[data-claude="working"] .claude,
-body[data-claude="finished"] .claude,
-body[data-claude="approval"] .claude {
-  padding: var(--space-3);
-  border-radius: var(--radius-2xl);
-  border-color: transparent;
-  background: var(--surface-1);
-  box-shadow: var(--shadow-border);
-}
-body[data-claude="working"] .claude { box-shadow: 0 0 0 1px color-mix(in srgb, var(--work) 40%, transparent), 0 1px 2px -1px rgba(0, 0, 0, 0.08), 0 2px 4px 0 rgba(0, 0, 0, 0.03); }
-/* Static on purpose: the dial's bezel chase already says "working", and a spinning
-   icon cost a compositor frame every vsync for as long as Claude worked. */
-body[data-claude="working"] .claude-icon { border-color: var(--work); border-right-color: transparent; rotate: 45deg; }
-body[data-claude="working"] .claude-title { color: var(--work); }
-body[data-claude="finished"] .claude-icon { border: 0; background: var(--live); clip-path: none; mask: none; position: relative; }
-body[data-claude="finished"] .claude-icon::after { content: ""; position: absolute; left: 4px; top: 2px; width: 4px; height: 7px; border: solid var(--on-signal); border-width: 0 2px 2px 0; rotate: 45deg; }
-
-/* approval: the loudest state. An amber ring (1.5 px) on a lifted card, the
-   full command, names the terminal. The surface stays neutral in light mode. */
-body[data-claude="approval"] .claude {
-  background: var(--attn-tint);
-  box-shadow: 0 0 0 1.5px var(--attn-edge), 0 1px 2px rgba(0, 0, 0, 0.06), 0 6px 16px -6px rgba(0, 0, 0, 0.14);
-}
-/* The triangle's visual centre is low: lift it 1 px against the title's x-height. */
-body[data-claude="approval"] .claude-icon { border: 0; border-radius: 0; background: var(--attn-icon); clip-path: polygon(50% 4%, 100% 94%, 0 94%); width: 16px; height: 16px; translate: 0 -1px; }
-body[data-claude="approval"] .claude-title { color: var(--attn); font-size: var(--text-body); }
-.claude-command {
-  margin: var(--space-1) 0 2px;
-  padding: var(--space-2) var(--space-3);
-  border-radius: var(--radius-sm);
-  background: var(--fill);
-  color: var(--fg);
-  font: 500 var(--text-small)/1.45 var(--font-mono);
-  white-space: pre-wrap;
-  word-break: break-word;
-  max-height: 7.4em;
-  overflow-y: auto;
-}
-.claude-note { color: var(--fg); }
-.claude-note .note-short { display: none; }
-
-/* ---------- captions: latest large, the one before it dimmer ---------- */
-.captions {
-  /* Sized by the layout, not by its text (app.js refits on resize): two lines of
-     room, shrinking first when the window is short. No fade mask, no scroller. */
-  flex: 1 1 8.5rem;
-  min-height: 0;
-  overflow: hidden;
-  display: flex;
-  flex-direction: column;
-  justify-content: flex-end;
-  padding-bottom: var(--space-2);
-}
-.captions ol { display: flex; flex-direction: column; gap: var(--space-2); }
-.line { display: grid; gap: 2px; }
-.who { display: flex; align-items: center; gap: var(--space-1); font-size: var(--text-meta); font-weight: 600; color: var(--fg-2); }
-.who::before { content: ""; width: 8px; height: 8px; border-radius: 50%; background: var(--live); }
-.line.assistant .who::before {
-  width: 9px; height: 8px; border-radius: 0;
-  background: linear-gradient(var(--fg-2), var(--fg-2)) 0 50% / 2px 4px no-repeat,
-              linear-gradient(var(--fg-2), var(--fg-2)) 50% 50% / 2px 8px no-repeat,
-              linear-gradient(var(--fg-2), var(--fg-2)) 100% 50% / 2px 5px no-repeat;
-}
-/* The previous line: smaller and dimmer, but full opacity (4.5:1) with its label. */
-.text { color: var(--fg-2); font-size: var(--text-body); text-wrap: pretty; }
-.line.latest .text { color: var(--fg); font-size: var(--text-lead); line-height: 1.4; letter-spacing: -0.01em; }
-.line.new-session { border-top: 1px dashed var(--line); padding-top: var(--space-2); }
-.captions-empty { color: var(--fg-3); font-size: var(--text-small); }
-
-/* ---------- footer ---------- */
-.bottom {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--space-4);
-  padding: var(--space-3) var(--gutter);
-  border-top: 1px solid var(--line);
-}
-/* Push buttons: macOS "large" size (36 px), a filled surface and a shadow ring
-   instead of a hard 1 px border. The hit area reaches 44 px through ::after. */
-.btn {
-  position: relative;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 6px;
-  min-height: var(--control);
-  padding: 0 var(--space-4);
-  border: 0;
-  border-radius: var(--radius-md);
-  background: var(--control-bg);
-  box-shadow: var(--shadow-control);
-  color: var(--fg);
-  font-size: var(--text-small);
-  font-weight: 600;
-  line-height: 18px;
-  cursor: pointer;
-  transition-property: background-color, box-shadow, color, scale;
-  transition-duration: var(--dur-fast);
-  transition-timing-function: var(--ease-out);
-}
-.btn::after { content: ""; position: absolute; inset: calc((var(--control) - var(--hit)) / 2) 0; }
-/* Icon + label: 2 px less padding on the icon side, so the pair looks centred. */
-.btn:has(> svg:first-child) { padding-left: 14px; }
-.btn svg { width: 16px; height: 16px; flex: none; stroke-width: 1.9; }
-.btn:hover:not(:disabled) { background: var(--surface-2); }
-.btn:active:not(:disabled) { scale: 0.96; }
-.btn:disabled { cursor: default; color: var(--fg-3); background: transparent; box-shadow: var(--shadow-border); }
-.btn.danger { margin-left: auto; color: var(--err); }
-.btn.danger:hover:not(:disabled) { background: var(--err-tint); }
-.btn.primary { background: var(--fg); box-shadow: 0 1px 2px rgba(0, 0, 0, 0.16); color: var(--bg); min-height: var(--hit); width: 100%; border-radius: var(--radius-lg); font-size: var(--text-body); }
-.btn.primary::after { inset: 0; }
-.btn.primary:hover:not(:disabled) { background: var(--fg-2); }
-.btn kbd { background: transparent; box-shadow: none; }
-/* A secondary card action (Sleeping: talking is the primary way back). */
-.btn.primary.secondary { background: var(--control-bg); box-shadow: var(--shadow-control); color: var(--fg); }
-.btn.primary.secondary:hover:not(:disabled) { background: var(--surface-2); }
-/* In a banner: a tinted, borderless button (32 px, 6 px radius = 14 - 8). */
-.banner-action { flex: none; min-height: var(--control-sm); padding: 0 var(--space-3); border-radius: var(--radius-sm); background: var(--fill); box-shadow: none; font-weight: 600; }
-.banner-action::after { inset: calc((var(--control-sm) - var(--hit-min)) / 2) 0; }
-.banner-action:hover:not(:disabled) { background: var(--fill-hover); }
-
-/* ---------- card view (paused, errors, allow mic, off) ---------- */
-body[data-view="card"] .claude,
-body[data-view="card"] .captions,
-body[data-view="card"] .readout { display: none; }
-/* Every card keeps a dormant dial above its copy: the instrument is the product's
-   face from the first run on. */
-body[data-view="card"] .stage { flex: none; padding-top: var(--space-3); }
-/* Card views sit in the optical middle; Allow-microphone stays at the top, under Chrome's bubble. */
-body[data-view="card"]:not([data-card="permission"]) .main { justify-content: center; padding-bottom: 4vh; }
-body[data-view="card"] { --dial: clamp(112px, calc(100dvh - 500px), 200px); }
+/* ---------- card view (paused, errors, allow mic, off) ----------
+   The card takes the Claude zone; the headline names the state in one word and the
+   string stays above, dormant (slack and faint). */
+body[data-view="card"] .claude { display: none; }
 body[data-dial="hidden"] .stage { display: none; }
 
 /* Only the middle of a card scrolls when the window is short; the title and the
    one action stay in view (a clipped "Try again" hides the only way out). */
 .card {
-  flex: 0 1 auto;
+  flex: 1 1 auto;
   min-height: 0;
   display: flex;
   flex-direction: column;
   gap: var(--space-3);
-  padding: var(--space-2) 0 var(--space-4);
+  margin: 18px 20px 26px var(--col-x);
 }
 /* A card that appears after the first render staggers in: title, body, action. */
 html[data-motion="on"] .card > * { animation: item-in 320ms var(--ease-out) both; }
@@ -862,16 +787,12 @@ html[data-motion="on"] .card > .kbd-hint { animation-delay: 240ms; }
   scrollbar-color: var(--edge) transparent;
 }
 .card-title:focus { outline: none; }
-.card-title { font: 600 var(--text-title)/1.2 var(--font-display); letter-spacing: -0.02em; text-wrap: balance; }
-body[data-view="card"][data-dial="small"] .card,
-body[data-view="card"][data-dial="small"] .card-scroll { text-align: center; align-items: center; }
-body[data-view="card"][data-dial="small"] .card-steps,
-body[data-view="card"][data-dial="small"] .pending { text-align: left; align-self: stretch; }
-.card-body { color: var(--fg-2); text-wrap: pretty; max-width: 42ch; }
+.card-title { font: 600 var(--text-title)/1.3 var(--font-display); letter-spacing: -0.01em; text-wrap: balance; }
+.card-body { font-family: var(--font-serif); font-size: calc(var(--serif-size) - 2px); line-height: calc(var(--serif-lh) - 4px); color: var(--ink2); text-wrap: pretty; max-width: 46ch; }
 .card-note { color: var(--fg-3); font-size: var(--text-small); text-wrap: pretty; }
 .card[data-tone="err"] .card-title { color: var(--fg); }
 .card[data-tone="attn"] .card-title { color: var(--fg); }
-.card-steps { counter-reset: step; display: grid; gap: var(--space-2); padding: var(--space-3); border-radius: var(--radius-lg); background: var(--surface-1); box-shadow: var(--shadow-border); }
+.card-steps { counter-reset: step; display: grid; gap: var(--space-2); }
 .card-steps li { counter-increment: step; display: grid; grid-template-columns: 24px 1fr; gap: var(--space-2); align-items: start; color: var(--fg); font-size: var(--text-small); }
 .card-steps li::before {
   content: counter(step);
@@ -883,11 +804,11 @@ body[data-view="card"][data-dial="small"] .pending { text-align: left; align-sel
   font-size: var(--text-meta);
   font-weight: 600;
 }
-.pending { padding: var(--space-3) var(--space-4); border-radius: var(--radius-lg); background: var(--surface-1); box-shadow: var(--shadow-border); display: grid; gap: var(--space-1); }
+.pending { display: grid; gap: var(--space-1); padding-top: var(--space-2); border-top: 1px solid var(--hair); }
 .pending-title { display: flex; align-items: center; gap: var(--space-2); font-size: var(--text-small); font-weight: 600; color: var(--live); }
 .pending-title svg { width: 16px; height: 16px; stroke-width: 2.2; }
-.pending-text { color: var(--fg); text-wrap: pretty; display: -webkit-box; -webkit-line-clamp: 5; -webkit-box-orient: vertical; overflow: hidden; }
-.card-actions { align-self: stretch; margin-top: var(--space-2); display: grid; gap: var(--space-2); }
+.pending-text { color: var(--ink); font-family: var(--font-serif); font-size: calc(var(--serif-size) - 2px); line-height: calc(var(--serif-lh) - 4px); text-wrap: pretty; display: -webkit-box; -webkit-line-clamp: 5; -webkit-box-orient: vertical; overflow: hidden; }
+.card-actions { align-self: stretch; margin-top: auto; display: grid; gap: var(--space-2); }
 /* "Open System Settings" on a macOS mic block: a link styled as the secondary action. */
 .card-link { text-decoration: none; box-sizing: border-box; }
 .kbd-hint { color: var(--fg-3); font-size: var(--text-small); }
@@ -933,12 +854,10 @@ body[data-view="card"][data-dial="small"] .pending { text-align: left; align-sel
   font-size: var(--text-small);
   font-weight: 600;
 }
-body[data-card="permission"] .card { padding-top: 0; }
-/* The pointer sits at the top left of the window, under Chrome's bubble; the dial's
-   amber tick at 10 o'clock points the same way. */
-.main { position: relative; }
-body[data-card="permission"] .pointer { position: absolute; top: 0; left: calc(var(--gutter) - 8px); margin: 0; z-index: 1; }
-body[data-card="permission"][data-dial="small"] .stage { padding-top: 52px; }
+/* The pointer sits at the top left of the window, under Chrome's bubble. */
+body[data-card="permission"] .pointer { position: fixed; top: 4px; left: calc(var(--gutter) - 8px); margin: 0; z-index: 6; }
+body[data-card="permission"] .status { visibility: hidden; }
+body[data-card="permission"] .stage { padding-top: 56px; }
 
 /* ---------- settings drawer ----------
    A sheet from the bottom edge with a vibrancy-like material (translucent + blur).
@@ -1113,56 +1032,53 @@ body[data-card="permission"][data-dial="small"] .stage { padding-top: 52px; }
 .segmented button:disabled { cursor: default; opacity: 1; color: var(--fg-3); }
 .drawer-foot { color: var(--fg-3); font-size: var(--text-small); }
 
-/* ---------- priority collapse: the page never scrolls ----------
-   Order (design/AUDIT.md): the previous caption, then the delegation line, then the
-   Claude card shrinks to one line of summary. The approval instruction and the
-   finished summary (with More) never disappear; the captions give up room first. */
-@media (min-height: 860px) and (min-width: 560px) {
-  :root { --text-state: 28px; }
+/* ---------- sizes: every zone is a fixed box per size ---------- */
+/* Large (the 640 x 900 panel): a bigger peg, headline and page. */
+@media (min-width: 560px) and (min-height: 860px) {
+  :root {
+    --peg-r: 28px;
+    --header-h: 54px;
+    --word-size: 26px;
+    --word-h: 34px;
+    --cap-size: 15px;
+    --cap-h: 26px;
+    --serif-size: 22px;
+    --serif-lh: 32px;
+  }
+  .stage { padding-top: 22px; }
+  .dial { margin-top: 18px; }
 }
 @media (max-height: 600px) {
-  .main { gap: var(--space-3); }
-  .stage { gap: var(--space-2); }
-  .claude-request { display: none; }
+  :root { --serif-size: 17px; --serif-lh: 25px; }
+  .claude, .card { margin-top: 14px; margin-bottom: 20px; }
 }
-/* Compact: dial beside the word, one line of Claude, the last caption only. */
+/* Compact: the page shrinks to its head row and two lines. */
 @media (max-height: 520px) {
-  :root { --dial: 124px; --text-state: 20px; }
-  .top { min-height: 52px; padding-block: var(--space-2); }
-  html.host-app .top { padding-top: calc(var(--space-1) + var(--host-inset-top, 28px)); min-height: calc(48px + var(--host-inset-top, 28px)); }
-  .stage { flex-direction: row; justify-content: flex-start; gap: var(--space-4); padding-top: 0; }
-  .readout { align-items: flex-start; text-align: left; }
-  .steps { display: none; }
-  .claude { padding-block: var(--space-2) !important; gap: 2px; }
-  .claude-summary { max-height: 1.45em; }
-  .claude-command { max-height: 4.4em; }
+  :root { --header-h: 40px; --footer-h: 48px; }
+  .stage { padding-top: var(--space-2); }
+  .dial { margin-top: 8px; }
+  .claude, .card { margin-top: 10px; margin-bottom: 16px; }
+  .claude-request, .claude-request[hidden] { display: none !important; }
   .claude-note .note-full { display: none; }
   .claude-note .note-short { display: inline; font-weight: 600; }
-  .bottom { padding-block: var(--space-2); }
-  body[data-view="card"] .stage { display: none; }
-  .card { gap: var(--space-2); padding-bottom: var(--space-2); }
-  .card > .card-scroll { gap: var(--space-2); }
-  .card-title { font-size: var(--text-lead); }
-  .card-body, .card-steps li { font-size: var(--text-small); }
-  .card-steps { padding: var(--space-2); gap: var(--space-1); }
-  .card-actions { margin-top: 0; }
-  body[data-card="permission"] .card { padding-top: 48px; }
-}
-@media (max-height: 440px) {
-  :root { --dial: 112px; }
-  .hint { display: none; }
-  .claude-step:not(:only-of-type) { font-size: var(--text-small); }
+  .card-title { font-size: var(--text-body); }
+  .card-body { font-size: var(--text-small); line-height: 1.45; }
   .kbd-hint { display: none; }
 }
+@media (max-height: 420px) {
+  body[data-view="live"] .claude-page { display: none; }
+}
 @media (max-width: 380px) {
-  .bottom .btn { padding-inline: var(--space-3); }
+  .pc-voice { display: none; }
 }
 
 /* ---------- reduced motion: static shape changes only ---------- */
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after {
     animation-duration: 0.01ms !important;
+    animation-delay: 0ms !important;
     animation-iteration-count: 1 !important;
     transition-duration: 0.01ms !important;
+    transition-delay: 0ms !important;
   }
 }
