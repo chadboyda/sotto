@@ -9,6 +9,11 @@ import { speakable, summary, tokenChunks, fitTokens, firstSentences, clip, sente
 import { policyChangeInstruction } from "./prompt.js";
 
 const ANSWER = "Claude Code's answer: ";
+/** A bare acknowledgement ("Noted.", "Got it."): nothing to say to the user. */
+export function isAck(text) {
+  const t = String(text || "").trim();
+  return t.length <= 60 && /^(?:noted|got it|understood|acknowledged|ok(?:ay)?|will do|sounds good)\b[^?]*$/i.test(t) && t.split(/[.!]\s+/).filter(Boolean).length <= 1;
+}
 /** Very short spoken summaries (milestones, turns the user did not ask for by voice). */
 export const SHORT_SUMMARY_CHARS = 160;
 const RANK = { quiet: 0, milestones: 1, walkthrough: 2 };
@@ -85,6 +90,17 @@ export function route(source, policy, payload = {}, ctx = {}) {
       const { sum, S, R } = resultParts(payload.text);
       if (p !== "walkthrough" || !sum) return [act("thinking", null, BG + S)];
       return [act("commentary", null, `Claude Code finished: ${clip(firstSentences(sum, 1), SHORT_SUMMARY_CHARS)}`), ...R.map((r) => act("thinking", null, r))];
+    }
+    case "mirror_result": {
+      // A turn started by a mirror (§6.18): the user's words, said to the
+      // voice assistant, that Claude got as FYI. "Noted." means there was
+      // nothing to act on: tell the voice model silently (so it can say Claude
+      // has it). Anything else answers what the user said: spoken briefly
+      // under every policy, like a short answer.
+      const { sum, S, R } = resultParts(payload.text);
+      if (!sum || isAck(sum)) return [act("thinking", null, `${BG}Claude Code has seen what the user just told you and had nothing to add.`)];
+      const said = p === "walkthrough" ? sum : clip(firstSentences(sum, 2), 300);
+      return [act("commentary", null, `Claude Code, on what you just said: ${said}`), ...R.map((r) => act("thinking", null, r))];
     }
     case "background_voice": {
       // A background task launched while answering a voice request finished:
@@ -304,7 +320,7 @@ export const ATTENTION_DEDUPE_MS = 120000;
 /** The same question (tool_use_id or text) is announced once in this window. */
 export const QUESTION_DEDUPE_MS = 10 * 60_000;
 const ASKS = new Set(["AskUserQuestion", "ExitPlanMode"]);
-const RESULT_SOURCES = new Set(["voice_result", "typed_result", "other_result", "background_result", "background_voice"]);
+const RESULT_SOURCES = new Set(["voice_result", "typed_result", "other_result", "background_result", "background_voice", "mirror_result"]);
 
 export class Narrator {
   /**
@@ -368,7 +384,9 @@ export class Narrator {
     const spoke = actions.some((a) => a.kind === "commentary");
     if (source === "progress_text" && spoke) { this.lastProgressSpokenAt = now; if (policy === "milestones") this.lastLongProgressAt = now; }
     if (source === "tool_failure" && spoke) this.lastFailureSpokenAt = now;
-    if (RESULT_SOURCES.has(source)) { this.turnStartedAt = null; this.resultSpoken = spoke; this.idleSaid = false; }
+    // A mirror turn (§6.18) nobody asked for out loud must not be followed by
+    // "Claude Code is waiting for you" once Claude goes idle.
+    if (RESULT_SOURCES.has(source)) { this.turnStartedAt = null; this.resultSpoken = spoke || source === "mirror_result"; this.idleSaid = false; }
     this.emit(actions);
     return actions;
   }

@@ -201,7 +201,7 @@ test("connectReason", () => {
 });
 
 test("delegation labels and upsert keep the newest 3", () => {
-  for (const s of ["collecting", "sent", "delivered", "held_suspected", "answered", "answered_stale", "superseded", "dropped_echo", "dropped_empty", "failed", "orphaned"]) {
+  for (const s of ["collecting", "sent", "delivered", "held_suspected", "answered", "answered_stale", "superseded", "dropped_echo", "dropped_empty", "mirrored", "failed", "orphaned"]) {
     const { label, tone } = lib.delegationLabel(s);
     assert.ok(label && !label.includes("_"), s);
     assert.match(tone, /^(active|warn|done|muted|error)$/);

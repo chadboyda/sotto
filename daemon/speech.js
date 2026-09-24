@@ -288,3 +288,39 @@ export function tokenChunks(text, maxTokens = MAX_APPEND_TOKENS, maxChars = MAX_
   for (const c of chunks(text, maxChars)) visit(c, maxChars);
   return out;
 }
+
+// Trailing option lists: "- A", "1. A", "2) A", "(a) A", "a) A".
+const OPTION_LINE = /^(?:[-*•+]|\d{1,2}[.)]|\(?[a-hA-H][.)])\s+(\S.*)$/;
+const ASKING = /\b(?:which|what|how|should|shall|prefer|pick|choose|want|option|options|like|decide|either|or|ok|okay)\b/i;
+
+/**
+ * Is Claude's final message waiting for the user (SPEC §6.10.3)? Returns a
+ * short speakable form of the question, or null. Two shapes count:
+ *  - the message ends with a question ("Want me to merge it?");
+ *  - it ends with a list of 2 to 8 options introduced by a line that ends in
+ *    "?" or ":" and reads like a choice ("Which should I use:").
+ * Code blocks are ignored; nothing here is spoken as is (the caller sends it
+ * as silent context).
+ */
+export function awaitingQuestion(md) {
+  if (typeof md !== "string") return null;
+  const text = md.replace(/```[\s\S]*?(?:```|$)/g, "\n").replace(/\*\*|__/g, "");
+  const lines = text.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+  if (!lines.length) return null;
+  let i = lines.length;
+  while (i > 0 && OPTION_LINE.test(lines[i - 1])) i--;
+  const n = lines.length - i;
+  if (n >= 2 && n <= 8 && i > 0) {
+    const lead = lines[i - 1].replace(/^#+\s*/, "");
+    if (/[?:]\s*$/.test(lead) && ASKING.test(lead)) {
+      const opts = lines.slice(i).map((l) => clip(speakable(OPTION_LINE.exec(l)[1]).replace(/[.;:,]+$/, ""), 60)).filter(Boolean);
+      const q = speakable(lead.replace(/:\s*$/, "?")).replace(/[.]+$/, "?");
+      return clip(`${q} Options: ${opts.join("; ")}.`, 300);
+    }
+  }
+  const last = lines[lines.length - 1].replace(/[*_`)\]"'”’\s]+$/, "");
+  if (!/\?$/.test(last) || /^\|/.test(last)) return null;
+  const ss = sentences(speakable(last));
+  const q = ss.length ? ss[ss.length - 1] : "";
+  return q.trim() ? clip(q.trim(), 300) : null;
+}

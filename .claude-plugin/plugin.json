@@ -49,6 +49,11 @@
     "openai_api_key": {
       "type": "string", "title": "OpenAI API key (optional)", "sensitive": true,
       "description": "Optional. Leave empty to add the key in the voice window on first use (it is saved in your macOS Keychain). Needs access to gpt-live-1. An OPENAI_API_KEY environment variable, a .env file or the Keychain key takes precedence."
+    },
+    "mirror": {
+      "type": "string", "title": "Mirror speech to Claude", "default": "all",
+      "options": ["all", "decisions", "off"],
+      "description": "What you say to the voice that it does not hand to Claude still reaches Claude a few seconds later as background: all (everything but filler), decisions (only decisions, feedback and requests), or off."
     }
   }
 }

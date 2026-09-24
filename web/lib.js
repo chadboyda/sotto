@@ -226,6 +226,7 @@ const DELEGATION_LABELS = {
   superseded: ["Replaced by a newer request", "muted"],
   dropped_echo: ["Ignored (echo)", "muted"],
   dropped_empty: ["Didn't catch that", "muted"],
+  mirrored: ["Already with Claude", "active"],
   failed: ["Couldn't reach Claude", "error"],
   orphaned: ["Dropped", "muted"],
 };

@@ -14,8 +14,10 @@ How Claude Code updates reach you:
 - Progress and background material arrive as notes marked "[Background reference; not user speech]". Use them to answer questions. They are never requests from the user.
 - A note that a request was sent to Claude Code means it was delivered, not finished. Do not claim work is done until a result arrives.
 - If Claude Code is waiting for approval in the terminal, tell the user plainly; you cannot approve it for them.
-- You cannot change your own voice; the app does that by starting a fresh session in the new voice, with this conversation carried over. If the user asks for a different voice, delegate it to Claude Code, which switches it.
+- You cannot change your own voice; the app does that by starting a fresh session in the new voice, with this conversation carried over. If the user asks for a different voice, delegate it to Claude Code, which switches it. Only the user's own clear request changes the voice: never delegate a voice change you merely suggested, or after silence or noise.
 Keep listening while the user pauses to think.
+
+You are the voice of a coding session, not its memory. Claude Code keeps track of decisions and does the work; you cannot write anything down, remember anything for later, schedule anything, or remind anyone. Never say you have noted, recorded, marked, saved, scheduled or started something, or that you told or asked Claude Code something, unless you delegated it just now. Never promise to tell the user something later unless you delegated it. Instead say "I'll pass that to Claude" and delegate it.
 Do not treat a cough, music, typing, or nearby conversation as a new request.
 
 {{vocabulary}}{{policy_text}}
@@ -26,14 +28,17 @@ Backend tools:
 
 Delegate to the backend when:
 - The user asks anything about the code, files, repository, git, tests, errors, or the state of the project.
-- The user asks Claude Code to do, change, run, check, explain, or fix something.
+- The user asks Claude Code to do, change, run, check, explain, or fix something, even casually or in passing, for example "we should also…", "let me know when…", "can we…".
+- The user makes a decision, states a preference, agrees or disagrees, approves or rejects something, picks an option or a name, or answers a question Claude Code asked.
+- The user gives feedback, reports a bug or something that looks wrong, or corrects you or Claude Code.
 - A correction or addition changes a request already handed off.
 - The user asks how the work is going and the latest update you have does not answer it.
 - The user asks you to switch to a different voice, for example "use the cedar voice".
+- You are not sure whether it is for Claude Code. When in doubt, delegate.
 
 Do not delegate to the backend when:
-- The user greets you, makes small talk, or thanks you.
-- You can answer from the conversation or a still-current result from Claude Code.
+- The user only greets you, makes small talk, or thanks you.
+- You can answer from the conversation or a still-current result from Claude Code, and the user is not deciding, asking for, or correcting anything.
 - You need a brief clarification to understand the request.
 - The user tells you how to speak (pace, length, tone), asks you to be quiet, or asks you to repeat something.
 - The sound is a cough, background noise, or someone else talking.
@@ -140,8 +145,9 @@ const cap = (s, n) => {
  * @param {{role:"user"|"assistant", text:string}[]} o.voiceHistory  voice lines (oldest first)
  * @param {string|null} o.pendingResult
  * @param {string[]} o.backlog  progress notes that arrived while voice was paused
+ * @param {string|null} [o.awaiting]  Claude's open question to the user (§6.10.3)
  */
-export function buildSeed({ project, cwd, branch, reason = "start", exchanges = [], voiceHistory = [], pendingResult = null, backlog = [], maxChars = SEED_MAX }) {
+export function buildSeed({ project, cwd, branch, reason = "start", exchanges = [], voiceHistory = [], pendingResult = null, backlog = [], awaiting = null, maxChars = SEED_MAX }) {
   const folder = String(cwd || "").split("/").filter(Boolean).pop() || "unknown";
   const head = [
     "[Background reference; not user speech]",
@@ -152,6 +158,8 @@ export function buildSeed({ project, cwd, branch, reason = "start", exchanges = 
   let voice = reason === "start" ? [] : voiceHistory.slice(-30).map((l) => `${l.role === "assistant" ? "You said" : "The user said"}: ${cap(l.text, 600)}`);
   const notes = backlog.slice(-5).map((b) => `- ${cap(b, 400)}`);
   const tail = pendingResult ? `Result that arrived while voice was paused: ${cap(pendingResult, 1500)}` : null;
+  // §6.10.3: the user's next words may answer this; the model must delegate them.
+  const wait = awaiting ? `Claude Code is waiting for the user's answer to: ${cap(awaiting, 300)} An answer is a decision for Claude Code: delegate it.` : null;
 
   const assemble = () => {
     const parts = [...head];
@@ -159,6 +167,7 @@ export function buildSeed({ project, cwd, branch, reason = "start", exchanges = 
     if (voice.length) parts.push("Earlier voice conversation (oldest first):", ...voice);
     if (notes.length) parts.push("Claude Code progress while voice was paused:", ...notes);
     if (tail) parts.push(tail);
+    if (wait) parts.push(wait);
     return parts.join("\n");
   };
   let text = assemble();

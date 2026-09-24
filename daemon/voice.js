@@ -3,11 +3,12 @@
 // page (SSE) and Chrome window together. All time goes through `clock`.
 import { randomBytes } from "node:crypto";
 import { normalizeConfig, POLICIES, VOICES, openaiBase, wssBase, VERSION, MAX_APPEND_TOKENS, voiceMarker, BG } from "./config.js";
-import { estTokens, fitTokens, tokenChunks, speakable, summary, clip } from "./speech.js";
+import { estTokens, fitTokens, tokenChunks, speakable, summary, clip, awaitingQuestion } from "./speech.js";
 import { makeOwner, ownerStatus, isOwnerAlive } from "./owner.js";
 import { writeActive, removeActive, createPendingContext, removePendingContext, readUsage, writeUsage, localDate, StatusFileWriter } from "./statefiles.js";
 import { Transcript } from "./transcript.js";
 import { DelegationEngine } from "./delegation.js";
+import { Mirror, MIRROR_MODES } from "./mirror.js";
 import { Narrator, milestoneLabel, elicitationSpeech, serverName } from "./policy.js";
 import { SpeechQueue } from "./speaker.js";
 import { renderForPolicy, buildSeed, greeting, ownerSwitchInstruction, voiceSwitchGreeting, vocabularyUpdateInstruction, updateGreeting } from "./prompt.js";
@@ -41,7 +42,7 @@ const RECONNECT_MAX = 3;
 const RECONNECT_WATCH_MS = 30000;
 /** How long a missing page may take to come back before the window is reopened. */
 const RECONNECT_OPEN_MS = 4000;
-const RESULT_SOURCES = new Set(["voice_result", "typed_result", "permission", "question", "attention", "background_voice", "background_result", "voice_notice"]);
+const RESULT_SOURCES = new Set(["voice_result", "typed_result", "permission", "question", "attention", "background_voice", "background_result", "voice_notice", "mirror_result"]);
 const ASK_TOOLS = new Set(["AskUserQuestion", "ExitPlanMode"]);
 // States in which a Live session exists or is being created right now.
 // ("reconnecting" is not one: it only waits for the page to start a new one.)
@@ -69,7 +70,7 @@ const RESTART_WAIT_WORDS = {
 export function newCounters() {
   return {
     delegations: 0, inbox_sent: 0, inbox_failed: 0, thinking_sent: 0, commentary_sent: 0, instructions_sent: 0,
-    appends_acked: 0, appends_failed: 0, hooks: 0, sessions_created: 0,
+    appends_acked: 0, appends_failed: 0, hooks: 0, sessions_created: 0, mirror_sent: 0, mirror_failed: 0,
   };
 }
 
@@ -189,6 +190,23 @@ export class Voice {
         marker: () => voiceMarker(this.nonce),
         absorbed: (transcriptPath, contents) => readAbsorbed(transcriptPath, contents),
         vocabularyHint: (text) => vocabularyHint(text, this.vocab.terms),
+        // A late delegation of words the mirror already sent (§6.18).
+        claimMirror: () => this.mirror.claimRecent(),
+      },
+    });
+    // Claude is waiting for the user's answer (§6.10.3): {text, at, via} or null.
+    this.awaiting = null;
+    // Undelegated user speech → Claude as FYI (§6.18).
+    this.mirror = new Mirror({
+      clock: this.clock, transcript: this.transcript, delegation: this.delegation, log: this.log,
+      effects: {
+        mode: () => this.mirrorMode(),
+        live: () => !!(this.sideband && this.sideband.state !== "closed"),
+        marker: () => voiceMarker(this.nonce),
+        awaiting: () => !!this.awaiting,
+        send: ({ content, msgId }) => this.inboxSend(content, msgId, "later"),
+        sent: (r) => this.onMirrorSent(r),
+        vocabularyHint: (text) => vocabularyHint(text, this.vocab.terms),
       },
     });
     this.statusFile = new StatusFileWriter({ paths: this.paths, clock: this.clock, get: () => this.status() });
@@ -217,9 +235,9 @@ export class Voice {
       today: { date: today, seconds: Math.round(this.todaySeconds() * 10) / 10, cap_minutes: this.config.daily_cap_minutes },
       config: {
         voice: this.config.voice, idle_minutes: this.config.idle_minutes, idle_seconds: idleSecondsOf(this.config), speaking_policy: this.policy,
-        daily_cap_minutes: this.config.daily_cap_minutes, wake_sensitivity: this.config.wake_sensitivity,
+        daily_cap_minutes: this.config.daily_cap_minutes, wake_sensitivity: this.config.wake_sensitivity, mirror: this.mirrorMode(),
       },
-      claude: { busy: this.delegation.claudeBusy, last_event_at: iso(this.lastClaudeEventAt) },
+      claude: { busy: this.delegation.claudeBusy, last_event_at: iso(this.lastClaudeEventAt), awaiting_input: !!this.awaiting },
       page: { connected: this.sse.count > 0 || false, clients: this.sse.count },
       delegations: this.delegation.list(10),
       counters: { ...this.counters },
@@ -406,12 +424,47 @@ export class Voice {
     }
   }
 
-  async inboxSend(content, msgId) {
+  async inboxSend(content, msgId, priority = "next") {
     const o = this.owner;
     if (!o) return { ok: false, code: "no_owner" };
-    const r = await this.inbox.send({ socket: o.socket, token: o.token, content, msgId, priority: "next", log: this.log });
-    this.log.info("inbox.send", { ok: r.ok, code: r.code, msg_id: msgId, length: content.length });
+    const r = await this.inbox.send({ socket: o.socket, token: o.token, content, msgId, priority, log: this.log });
+    this.log.info("inbox.send", { ok: r.ok, code: r.code, msg_id: msgId, length: content.length, priority });
     return r;
+  }
+
+  // ---- transcript mirror (§6.18) and "Claude is waiting" (§6.10.3) ---------------------
+  /** userConfig `mirror`, overridden by env SOTTO_MIRROR (tests, e2e). */
+  mirrorMode() {
+    const e = this.env.SOTTO_MIRROR;
+    return MIRROR_MODES.includes(e) ? e : this.config.mirror || "all";
+  }
+
+  onMirrorSent({ text, lines, dropped, reason, ok, code }) {
+    this.log.info("mirror.send", { ok, code: code || null, reason, lines, dropped, chars: text.length, text: truncate(text, 300) });
+    if (!ok) { this.counters.mirror_failed++; return; }
+    this.counters.mirror_sent++;
+    if (this.delegation.claudeBusy) createPendingContext(this.paths);
+    // Tell the voice model, so it can truthfully say Claude has it.
+    this.deliver({ kind: "thinking", content: `[sotto] What the user just said was also passed to Claude Code as background, not as a request: "${clip(text, 240).replace(/"/g, "'")}". Claude Code will act on any decision or request in it.`, delegationId: null });
+  }
+
+  /** Claude ended its turn with a question, or asked one (AskUserQuestion): its answer matters. */
+  setAwaiting(text, via) {
+    const q = clip(String(text || "").trim(), 300);
+    if (!q) return;
+    this.awaiting = { text: q, at: this.clock.now(), via };
+    this.log.info("claude.awaiting", { via, chars: q.length });
+    const how = via === "ask" ? "Claude Code asked the user a question in the terminal and is waiting for the answer" : "Claude Code ended its turn with a question and is waiting for the user's answer";
+    this.deliver({ kind: "thinking", content: `${BG}${how}: "${q.replace(/"/g, "'")}". The user's next words may be that answer. An answer is a decision for Claude Code: delegate it.`, delegationId: null });
+    this.changed();
+  }
+
+  clearAwaiting() {
+    if (!this.awaiting) return;
+    this.awaiting = null;
+    this.log.info("claude.awaiting", { cleared: true });
+    this.deliver({ kind: "thinking", content: `${BG}Claude Code got a new message and is working again; it is no longer waiting for an answer.`, delegationId: null });
+    this.changed();
   }
 
   // ---- /control ---------------------------------------------------------------------
@@ -475,6 +528,8 @@ export class Voice {
       // must not be claimed by the new owner's next tool call.
       this.delegation.orphanAll();
       this.delegation.resetClaudeState();
+      this.mirror.discard(); // words said to the old project are not the new one's business
+      this.awaiting = null;
       this.narrator.resetTurn();
       removePendingContext(this.paths);
       this.owner = next;
@@ -782,7 +837,10 @@ export class Voice {
     switch (event) {
       case "UserPromptSubmit":
         this.delegation.onHook(event, b);
-        if (!this.delegation.wasStopped(b.prompt_id)) this.narrator.onTurnStart();
+        if (!this.delegation.wasStopped(b.prompt_id)) {
+          this.narrator.onTurnStart();
+          this.clearAwaiting();
+        }
         this.activity("turn_start", "Claude is working");
         break;
       case "PreToolUse": {
@@ -805,12 +863,16 @@ export class Voice {
         this.delegation.onHook(event, b);
         if (typeof b.delta === "string" && b.delta.trim()) this.activity("text", truncate(b.delta.trim(), 160));
         break;
-      case "Stop":
+      case "Stop": {
+        const q = awaitingQuestion(b.last_assistant_message);
+        if (q) this.setAwaiting(q, "stop");
+        else if (this.awaiting) { this.awaiting = null; this.changed(); } // an AskUserQuestion answered in the terminal
         this.narrator.flushMilestones();
         this.narrator.onStop(b);
         this.activity("turn_end", "Claude finished");
         this.delegation.onStop(b).catch((e) => this.log.error("stop.error", { message: String(e && e.message) }));
         break;
+      }
       case "StopFailure":
         this.narrator.onStop(b);
         this.activity("turn_end", "Claude hit an error");
@@ -831,6 +893,7 @@ export class Voice {
   onAsk(b) {
     const delegationId = typeof b.agent_id === "string" && b.agent_id ? null : this.delegation.activeVoiceId(b.prompt_id);
     const text = this.narrator.onQuestion(b.tool_name, b.tool_input, { toolUseId: b.tool_use_id, delegationId });
+    if (text) this.setAwaiting(text.replace(/^Claude's asking: /, "").replace(/ Answer in the terminal\.$/, ""), "ask");
     if (text) this.activity("question", b.tool_name === "ExitPlanMode" ? "Claude's plan needs your approval" : "Claude is asking you a question");
   }
 
@@ -990,6 +1053,7 @@ export class Voice {
       voiceHistory: this.transcript.recentLines(30),
       pendingResult: this.pendingResult && !this.wakeQueue.length ? this.pendingResult.text : null,
       backlog: this.backlog,
+      awaiting: this.awaiting ? this.awaiting.text : null,
     });
     this.vocab = vocab;
     const instructions = renderForPolicy(owner.project, this.policy, vocab.text);
@@ -1013,8 +1077,12 @@ export class Voice {
     }
 
     this.counters.sessions_created++;
+    // Words of the old session not yet sent anywhere go now: the new session's
+    // timeline restarts at 0 (§6.18).
+    this.mirror.flush("new_session");
     this.transcript.newSession();
     this.delegation.resetTimeline();
+    this.mirror.resetTimeline();
     const now = this.clock.now();
     this.live = { id: res.id, started_at: now, expires_at: Math.floor(now / 1000) + 7200, usage_seconds: 0, muted: false, reason: why, greeted: false, voice, wakeHandled: false };
     this.governor.onWake(why === "wake" ? "voice" : why === "notify" ? "notify" : why);
@@ -1124,6 +1192,7 @@ export class Voice {
     switch (evt.type) {
       case "session.input_transcript.delta":
         this.transcript.add("user", evt.delta, evt.start_ms, evt.end_ms);
+        this.mirror.onUserSpeech();
         if (typeof evt.delta === "string" && /[\p{L}\p{N}]/u.test(evt.delta)) this.governor.onHeardUser();
         break;
       case "session.output_transcript.delta":
@@ -1432,6 +1501,8 @@ export class Voice {
     const gen = ++this.offGen;
     this.log.info("off", { reason });
     this.keySetup = false;
+    // The user's last undelegated words still reach Claude (the owner is still bound).
+    if (reason === "user" && this.owner) this.mirror.flush("off");
     this.clear("waitingPage");
     this.clear("sessionEnd");
     this.clear("sessionEndOff");
@@ -1447,6 +1518,8 @@ export class Voice {
     this.speech.drain();
     this.nonce = null;
     this.voiceSwitch = null;
+    this.awaiting = null;
+    this.mirror.dispose();
     this.wakeQueue = [];
     this.governor.onEnd();
     this.clear("notifyWatch");
@@ -1517,6 +1590,8 @@ export class Voice {
     this.restarting = true;
     this.log.info("update.prepare", { reason, state: resume });
     this.clear("waitingPage");
+    // Unsent words go to Claude now: the successor starts a new timeline (§6.18).
+    if (this.owner) this.mirror.flush("restart");
     if (this.sideband || this.live) {
       this.command("disconnect", "update");
       await this.closeLive(3000);
@@ -1562,6 +1637,7 @@ export class Voice {
       last_error: this.lastError,
       pause_reason: this.pauseReason || null,
       window_app: !!this.chrome?.appLaunched,
+      awaiting: this.awaiting ? { ...this.awaiting } : null,
     };
   }
 
@@ -1591,6 +1667,8 @@ export class Voice {
     }
     if (snap.last_error && typeof snap.last_error.code === "string") this.lastError = snap.last_error;
     this.pauseReason = snap.pause_reason || null;
+    // Claude is still waiting for the user's answer (§6.10.3): the next session's seed says so.
+    this.awaiting = snap.awaiting && typeof snap.awaiting.text === "string" ? { text: clip(snap.awaiting.text, 300), at: Number(snap.awaiting.at) || 0, via: snap.awaiting.via === "ask" ? "ask" : "stop" } : null;
     if (snap.window_app) this.chrome?.adoptApp?.();
     try { writeActive(this.paths, { socket: this.owner.socket, port: this.port, key: this.daemonKey, nonce: this.nonce }); } catch (e) { this.log.error("active.write_error", { message: e.message }); }
     this.vocabularyFor(this.owner);
@@ -1616,6 +1694,7 @@ export class Voice {
   dispose() {
     for (const name of Object.keys(this.timers)) this.clear(name);
     this.delegation.dispose();
+    this.mirror.dispose();
     this.narrator.dispose();
     this.speech.drain();
     this.statusFile.stop();

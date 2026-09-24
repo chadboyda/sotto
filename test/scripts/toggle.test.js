@@ -130,7 +130,7 @@ describe("toggle.sh cold start", () => {
         project_dir: "/tmp/proj dir",
         transcript_path: "/tmp/t\u00e9st.jsonl",
       },
-      config: { voice: "marin", speaking_policy: "milestones", daily_cap_minutes: 120, wake_sensitivity: "medium", window: "auto", open_browser: true },
+      config: { voice: "marin", speaking_policy: "milestones", daily_cap_minutes: 120, wake_sensitivity: "medium", window: "auto", mirror: "all", open_browser: true },
     });
   });
 
@@ -236,10 +236,11 @@ describe("toggle.sh config", () => {
       CLAUDE_PLUGIN_OPTION_DAILY_CAP_MINUTES: "1440",
       CLAUDE_PLUGIN_OPTION_WAKE_SENSITIVITY: "high",
       CLAUDE_PLUGIN_OPTION_WINDOW: "app",
+      CLAUDE_PLUGIN_OPTION_MIRROR: "decisions",
     });
     parseOut(await run(TOGGLE, { env, input: stdinFor("on") }));
     assert.deepEqual(controlBodies(D)[0].config, {
-      voice: "cedar", idle_seconds: 90, idle_minutes: 0, speaking_policy: "walkthrough", daily_cap_minutes: 1440, wake_sensitivity: "high", window: "app", open_browser: true,
+      voice: "cedar", idle_seconds: 90, idle_minutes: 0, speaking_policy: "walkthrough", daily_cap_minutes: 1440, wake_sensitivity: "high", window: "app", mirror: "decisions", open_browser: true,
     });
   });
 
@@ -252,11 +253,12 @@ describe("toggle.sh config", () => {
       CLAUDE_PLUGIN_OPTION_DAILY_CAP_MINUTES: "-5",
       CLAUDE_PLUGIN_OPTION_WAKE_SENSITIVITY: "loud",
       CLAUDE_PLUGIN_OPTION_WINDOW: "none",
+      CLAUDE_PLUGIN_OPTION_MIRROR: "everything",
     });
     parseOut(await run(TOGGLE, { env, input: stdinFor("on") }));
     // Invalid idle values are left out, so the daemon applies its default (60 s).
     assert.deepEqual(controlBodies(D)[0].config, {
-      voice: "marin", speaking_policy: "milestones", daily_cap_minutes: 120, wake_sensitivity: "medium", window: "auto", open_browser: true,
+      voice: "marin", speaking_policy: "milestones", daily_cap_minutes: 120, wake_sensitivity: "medium", window: "auto", mirror: "all", open_browser: true,
     });
   });
 

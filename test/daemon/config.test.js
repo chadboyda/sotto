@@ -37,8 +37,11 @@ test("normalizeConfig validates and falls back", () => {
   assert.deepEqual(normalizeConfig({}), { ...DEFAULT_CONFIG });
   assert.equal(DEFAULT_CONFIG.idle_seconds, 60);
   assert.equal(DEFAULT_CONFIG.wake_sensitivity, "medium");
-  assert.deepEqual(normalizeConfig({ voice: "cedar", idle_minutes: 0, speaking_policy: "quiet", daily_cap_minutes: 1440, wake_sensitivity: "off", window: "chrome", open_browser: false }),
-    { voice: "cedar", idle_minutes: 0, idle_seconds: 0, speaking_policy: "quiet", daily_cap_minutes: 1440, wake_sensitivity: "off", window: "chrome", open_browser: false });
+  assert.deepEqual(normalizeConfig({ voice: "cedar", idle_minutes: 0, speaking_policy: "quiet", daily_cap_minutes: 1440, wake_sensitivity: "off", window: "chrome", mirror: "decisions", open_browser: false }),
+    { voice: "cedar", idle_minutes: 0, idle_seconds: 0, speaking_policy: "quiet", daily_cap_minutes: 1440, wake_sensitivity: "off", window: "chrome", mirror: "decisions", open_browser: false });
+  assert.equal(DEFAULT_CONFIG.mirror, "all");
+  assert.equal(normalizeConfig({ mirror: "everything" }).mirror, "all");
+  assert.equal(normalizeConfig({ mirror: "off" }).mirror, "off");
   assert.deepEqual(normalizeConfig({ voice: "nope", idle_minutes: 500, idle_seconds: 9000, speaking_policy: "loud", daily_cap_minutes: -1, wake_sensitivity: "loud" }), { ...DEFAULT_CONFIG });
   assert.equal(normalizeConfig({ window: "none" }).window, "auto"); // "none" is env-only (tests, probes)
   assert.equal(normalizeConfig({}, { ...DEFAULT_CONFIG, window: "app" }).window, "app");

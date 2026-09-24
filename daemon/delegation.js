@@ -24,8 +24,9 @@ import { VOICE_MARKER, BG } from "./config.js";
 import { clip } from "./speech.js";
 import { groupFragments, joinUserFragments } from "./transcript.js";
 import { isBackgroundLaunch } from "./policy.js";
+import { MIRROR_TAG } from "./mirror.js";
 
-export const FINAL_STATUSES = new Set(["answered", "answered_stale", "superseded", "dropped_echo", "dropped_empty", "failed", "orphaned", "interrupted"]);
+export const FINAL_STATUSES = new Set(["answered", "answered_stale", "superseded", "dropped_echo", "dropped_empty", "mirrored", "failed", "orphaned", "interrupted"]);
 const IN_FLIGHT = new Set(["sent", "delivered", "held_suspected"]);
 
 export const SETTLE_MIN_MS = 600;
@@ -89,6 +90,7 @@ export class DelegationEngine {
    *   marker()        → voice marker incl. the per-bind nonce        (optional)
    *   absorbed(transcriptPath, contents) → Set|null|Promise           (optional)
    *   vocabularyHint(text) → one-line note on likely misheard names, or null (optional)
+   *   claimMirror() → {text} of a mirror (§6.18) sent moments ago, claimed once, or null (optional)
    * @param {object} [o.log]
    */
   constructor({ clock, transcript, effects, log }) {
@@ -106,6 +108,7 @@ export class DelegationEngine {
     this.lastSentContent = null;
     this.lastSentAt = 0;
     this.lastHookAt = 0;
+    this.mirrorPrompts = []; // mirror messages Claude has picked up (UserPromptSubmit), newest last
     this.timers = new Set();
     // prompt_id → {origin: "voice"|"typed"|"task", tasks: [...]} (last 50 prompts)
     this.turns = new Map();
@@ -232,7 +235,26 @@ export class DelegationEngine {
       this.fx.append("thinking", ECHO_NOTE, this.idFor(rec));
       return;
     }
-    if (!text) {
+    // The words were already mirrored to Claude as an FYI because the model
+    // delegated late (§6.18): send them again, this time as the request the
+    // model says they are, so Claude answers and the answer is spoken.
+    let mirrored = null;
+    if (!text && !req.echoLines) {
+      try { mirrored = this.fx.claimMirror?.() || null; } catch { mirrored = null; }
+    }
+    if (mirrored) {
+      rec.text = mirrored.text;
+      this.log.info("delegation.request", { id: rec.id, rev: rec.rev, chars: mirrored.text.length, from_mirror: true });
+      if (mirrored.content && this.mirrorPrompts.includes(mirrored.content)) {
+        // Claude already has them and is answering (its mirror turn started):
+        // sending them again would get the same answer twice. Close the
+        // Live-side delegation quietly; the mirror turn's answer is spoken.
+        this.setStatus(rec, "mirrored");
+        this.fx.append("thinking", MIRRORED_NOTE, this.idFor(rec));
+        return;
+      }
+    }
+    if (!text && !mirrored) {
       this.setStatus(rec, "dropped_empty");
       this.fx.append("commentary", "I didn't catch the request clearly. Could you say it again?", this.idFor(rec));
       return;
@@ -245,9 +267,12 @@ export class DelegationEngine {
       return;
     }
 
-    let content = `${this.marker()} ${text}`;
+    let content = mirrored
+      ? `${this.marker()} Please act on and answer what I just said to the voice assistant: "${clip(mirrored.text, 1500).replace(/"/g, "'")}"`
+      : `${this.marker()} ${text}`;
+    const reqText = rec.text;
     const now = this.clock.now();
-    if (words(text).length <= 6 && this.transcript.lastAssistantSpeechAt && now - this.transcript.lastAssistantSpeechAt <= 15000) {
+    if (!mirrored && words(text).length <= 6 && this.transcript.lastAssistantSpeechAt && now - this.transcript.lastAssistantSpeechAt <= 15000) {
       const line = this.transcript.lastAssistantLine();
       if (line && line.text.trim()) {
         content += `\n(Replying to the voice assistant, which had just said: "${clip(line.text, 200).replace(/"/g, "'")}")`;
@@ -256,7 +281,7 @@ export class DelegationEngine {
     // Likely mishearings of glossary names ("in peccable" → impeccable), as a
     // note after the user's words; the words themselves are never changed.
     let hint = null;
-    try { hint = this.fx.vocabularyHint?.(text) || null; } catch { hint = null; }
+    try { hint = mirrored ? null : this.fx.vocabularyHint?.(text) || null; } catch { hint = null; }
     if (hint) content += `\n${hint}`;
     if (content === this.lastSentContent && now - this.lastSentAt < REPEAT_WINDOW_MS) content += " (repeated)";
 
@@ -276,7 +301,7 @@ export class DelegationEngine {
       this.lastSentAt = rec.sent_at;
       if (busy) this.fx.createPendingContext();
       this.fx.counters.inbox_sent++;
-      this.fx.append("thinking", `[sotto] Request sent to Claude Code: "${clip(text, 300).replace(/"/g, "'")}". Claude Code is working on it; there is no result yet.`, this.idFor(rec));
+      this.fx.append("thinking", `[sotto] Request sent to Claude Code: "${clip(reqText, 300).replace(/"/g, "'")}". Claude Code is working on it; there is no result yet.`, this.idFor(rec));
       if (!busy) this.timer(() => this.checkHeld(rec), HELD_MS);
     } else {
       const code = (res && res.code) || "error";
@@ -339,6 +364,15 @@ export class DelegationEngine {
       t.tasks.push(...notes);
       const said = notes.map((n) => clip(n.summary || `task ${n.status || "finished"}`, 160)).join("; ");
       this.fx.append("thinking", `${BG}Background task update: ${said}`, null);
+      return;
+    }
+    // A mirror (§6.18): the user's words, but not a request any record waits
+    // for. Its turn's result is routed as mirror_result.
+    if (prompt.startsWith(`${marker} ${MIRROR_TAG}`)) {
+      this.turnFor(pid, "mirror");
+      this.mirrorPrompts.push(prompt);
+      if (this.mirrorPrompts.length > 20) this.mirrorPrompts.shift();
+      if (!this.records.some((r) => r.status === "sent" && r.sent_while_busy)) this.fx.removePendingContext();
       return;
     }
     this.turnFor(pid, prompt.startsWith(marker) ? "voice" : "typed");
@@ -432,6 +466,7 @@ export class DelegationEngine {
       let source = "typed_result";
       const payload = { text };
       if (pid && !t) source = "other_result";
+      else if (t && t.origin === "mirror") source = "mirror_result";
       else if (t && t.origin === "task") {
         const o = this.taskOrigin(t);
         source = o.origin === "voice" ? "background_voice" : o.origin === "typed" ? "background_result" : "other_result";
@@ -559,6 +594,7 @@ export class DelegationEngine {
   }
 }
 
+const MIRRORED_NOTE = "[sotto] Those words already reached Claude Code a moment ago and it is answering them; the answer will arrive as an update. Do not claim it is done before then.";
 const ECHO_NOTE = "[sotto] Not a request: that was your own voice picked up by the microphone. Nothing was sent to Claude Code. Ignore it and do not mention it.";
 
 /**

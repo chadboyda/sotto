@@ -15,7 +15,9 @@ describe("manifests", () => {
     const m = JSON.parse(read(".claude-plugin/plugin.json"));
     assert.equal(m.name, "sotto");
     assert.ok(m.$schema);
-    assert.deepEqual(Object.keys(m.userConfig), ["voice", "port", "idle_seconds", "idle_minutes", "wake_sensitivity", "speaking_policy", "daily_cap_minutes", "window", "openai_api_key"]);
+    assert.deepEqual(Object.keys(m.userConfig), ["voice", "port", "idle_seconds", "idle_minutes", "wake_sensitivity", "speaking_policy", "daily_cap_minutes", "window", "openai_api_key", "mirror"]);
+    assert.equal(m.userConfig.mirror.default, "all");
+    assert.deepEqual(m.userConfig.mirror.options, ["all", "decisions", "off"]);
     // The key option is sensitive (Claude Code keeps it in secure storage) and optional.
     assert.equal(m.userConfig.openai_api_key.sensitive, true);
     assert.equal(m.userConfig.openai_api_key.default, undefined);

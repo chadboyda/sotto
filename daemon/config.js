@@ -25,6 +25,9 @@ export const POLICIES = Object.freeze(["quiet", "milestones", "walkthrough"]);
 
 export const WAKE_SENSITIVITIES = Object.freeze(["off", "low", "medium", "high"]);
 
+/** Transcript mirror (userConfig `mirror`, SPEC §6.18): which undelegated speech reaches Claude. */
+export const MIRROR_MODES = Object.freeze(["all", "decisions", "off"]);
+
 /** Voice-window choices (userConfig `window`, env SOTTO_BROWSER adds "none"); SPEC §6.16. */
 export const WINDOW_MODES = Object.freeze(["auto", "app", "chrome", "default"]);
 
@@ -39,6 +42,7 @@ export const DEFAULT_CONFIG = Object.freeze({
   daily_cap_minutes: 120,
   wake_sensitivity: "medium",
   window: "auto",
+  mirror: "all",
   open_browser: true,
 });
 
@@ -66,6 +70,7 @@ export function normalizeConfig(input, base = DEFAULT_CONFIG) {
     daily_cap_minutes: num(c.daily_cap_minutes, 0, 1440) ?? b.daily_cap_minutes,
     wake_sensitivity: WAKE_SENSITIVITIES.includes(c.wake_sensitivity) ? c.wake_sensitivity : b.wake_sensitivity,
     window: WINDOW_MODES.includes(c.window) ? c.window : b.window,
+    mirror: MIRROR_MODES.includes(c.mirror) ? c.mirror : b.mirror,
     open_browser: typeof c.open_browser === "boolean" ? c.open_browser : true,
   };
 }

@@ -114,6 +114,14 @@ The choice is saved in `prefs.json` in the data directory. It beats the `voice` 
 
 Only one session owns voice at a time. `/talk on` in another session moves voice there, and the voice tells you it switched projects. Voice turns itself off when the owning session exits.
 
+### Decisions reach Claude, even ones the voice answered
+
+The voice is a relay for your coding session, not its memory. It is told to hand Claude anything that decides, asks for, corrects or reports something, even in passing: "Sotto is a good name, let's use it", "let me know when that's merged", "that looks like a bug", your answer to a question Claude asked. It must not claim to have noted or scheduled anything itself; it says "I'll pass that to Claude" and does.
+
+As a safety net, whatever you said that the voice did **not** hand over still reaches Claude about 6 s after you stop talking, as one message marked `(said to the voice assistant, not delegated)`, queued behind anything Claude is doing. Claude treats it as information: it acts on decisions and requests in it, answers project questions briefly, and otherwise replies just "Noted." (which the voice keeps to itself). Filler ("okay, cool", "thanks"), requests about the voice itself ("slow down", "say that again") and echoes of the voice are never forwarded, and nothing is sent twice. The `mirror` option picks what is forwarded: `all` (default), `decisions` (only decisions, feedback and requests), or `off`.
+
+When Claude ends a turn with a question or a list of options, or asks one with AskUserQuestion, the voice is told Claude is waiting, so your next words count as the answer and go to Claude.
+
 ### Speaking policies
 
 | Policy | The voice speaks… |
@@ -179,6 +187,7 @@ Set these in `/config` (the sotto rows). An unset or invalid value uses the defa
 | `idle_minutes` | `5` | Legacy; used only when `idle_seconds` is not set. |
 | `speaking_policy` | `milestones` | Default narration level |
 | `daily_cap_minutes` | `120` | Voice minutes allowed per local day. You get a spoken warning at 80 %; at 100 % voice pauses. 0 = no cap. |
+| `mirror` | `all` | What you said to the voice that it did not hand to Claude still reaches Claude as background ([details](#decisions-reach-claude-even-ones-the-voice-answered)): `all`, `decisions`, or `off` |
 | `window` | `auto` | Where the voice window opens: `auto` (the Sotto app on macOS once built, unless your default input is a Bluetooth headset; else Chrome), `app`, `chrome`, or `default` (your default browser) |
 | `openai_api_key` | none | Optional, sensitive (asked for when you enable the plugin, not shown in `/config`). The last place the key is looked for; see [Install](#install). |
 
@@ -189,6 +198,7 @@ Environment overrides, for debugging and tests:
 | `SOTTO_BROWSER=auto\|app\|chrome\|default\|none` | How the voice window opens; overrides `window` (`none`: never) |
 | `SOTTO_NO_BROWSER=1` | Same as `SOTTO_BROWSER=none` |
 | `SOTTO_DEBUG=1` | Log full hook bodies and every non-audio Live event |
+| `SOTTO_MIRROR=all\|decisions\|off` | Overrides the `mirror` option |
 | `SOTTO_OPENAI_BASE` | Replace `https://api.openai.com/v1` (tests) |
 | `SOTTO_SIGN_IDENTITY` | Sign the desktop app with this identity instead of ad hoc |
 | `SOTTO_VOCAB=0` | Leave the vocabulary glossary out of the voice instructions and delegated prompts |
@@ -208,7 +218,7 @@ Environment overrides, for debugging and tests:
 
 - **Audio goes to OpenAI.** While a Live session is connected, your microphone audio streams to OpenAI's `gpt-live-1` over WebRTC, together with the context the voice needs: the project name and git branch, a glossary of skill and project names, recent conversation, and short summaries of Claude's replies and progress. Sessions are created with `store: false`. When voice wakes from sleep, the short clip you spoke before the session connected is sent to OpenAI's transcription API. OpenAI's API data policies apply.
 - **Nothing else leaves your machine.** The daemon listens on `127.0.0.1` only, the voice page makes no requests except to the daemon, and there is no telemetry. While voice sleeps, the wake detector runs locally in the page and sends nothing.
-- **What Claude sees:** your transcribed requests arrive in your Claude Code session as messages, so they are handled like anything you type, under Claude Code's own data policies.
+- **What Claude sees:** your transcribed requests arrive in your Claude Code session as messages, so they are handled like anything you type, under Claude Code's own data policies. With the `mirror` option on (the default), so does the rest of what you say to the voice, except filler and requests about the voice itself; set `mirror` to `off` to keep that between you and the voice.
 - Logs, state and the optional glossary stay in the plugin data directory. Secrets (the API key, session tokens) are never logged.
 
 ## Architecture
@@ -284,9 +294,10 @@ Design and contracts: [docs/SPEC.md](docs/SPEC.md) (binding spec), [docs/ARCHITE
 ```bash
 npm test               # unit tests (node:test, ~15 s, no network): scripts, daemon, web
 npm run validate       # claude plugin validate . --strict
-npm run e2e            # REAL end-to-end tests against gpt-live-1: smoke, sleep + wake, self-update, first-run key setup (about $0.10)
+npm run e2e            # REAL end-to-end tests against gpt-live-1: smoke, sleep + wake, self-update, first-run key setup, decisions (about $0.14)
 npm run e2e:restart    # just the self-update e2e (two short sessions, about $0.025); SOTTO_NODE=bun runs it under Bun
 npm run e2e:key        # first-run key setup: key card, wrong key, real key saved in a TEMPORARY Keychain item, connects (~15 billed s)
+npm run e2e:decisions  # just the decisions e2e: a spoken decision and a casual request must reach Claude (~40 s, about $0.035)
 npm run e2e:fixture    # regenerate test/fixtures/ask-files.wav with OpenAI TTS
 npm run build:app      # build the desktop app into ${CLAUDE_PLUGIN_DATA:-~/.sotto}/app (incremental)
 npm run test:app       # app build smoke + launch tests (temp daemon, mock mic); SOTTO_APP_LIVE=1 adds a real gpt-live-1 session

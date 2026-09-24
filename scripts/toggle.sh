@@ -144,6 +144,8 @@ in_list "$CFG_WAKE" off low medium high || CFG_WAKE=medium
 CFG_WINDOW="$CLAUDE_PLUGIN_OPTION_WINDOW"
 in_list "$CFG_WINDOW" auto app chrome default || CFG_WINDOW=auto
 CFG_CAP="$(num_or_default "$CLAUDE_PLUGIN_OPTION_DAILY_CAP_MINUTES" 0 1440 120)"
+CFG_MIRROR="$CLAUDE_PLUGIN_OPTION_MIRROR"
+in_list "$CFG_MIRROR" all decisions off || CFG_MIRROR=all
 # The port must be an integer: it is used in URLs and --port.
 PORT="$CLAUDE_PLUGIN_OPTION_PORT"
 if [[ "$PORT" =~ ^[0-9]+(\.0+)?$ ]]; then PORT=$((10#${PORT%%.*})); else PORT=""; fi
@@ -411,7 +413,7 @@ BODY+=",\"session\":{$SESSION}"
 IDLE_JSON=""
 [[ -n "$CFG_IDLE_S" ]] && IDLE_JSON+=",\"idle_seconds\":$CFG_IDLE_S"
 [[ -n "$CFG_IDLE_M" ]] && IDLE_JSON+=",\"idle_minutes\":$CFG_IDLE_M"
-BODY+=",\"config\":{\"voice\":\"$CFG_VOICE\"$IDLE_JSON,\"speaking_policy\":\"$CFG_POLICY\",\"daily_cap_minutes\":$CFG_CAP,\"wake_sensitivity\":\"$CFG_WAKE\",\"window\":\"$CFG_WINDOW\",\"open_browser\":true}}"
+BODY+=",\"config\":{\"voice\":\"$CFG_VOICE\"$IDLE_JSON,\"speaking_policy\":\"$CFG_POLICY\",\"daily_cap_minutes\":$CFG_CAP,\"wake_sensitivity\":\"$CFG_WAKE\",\"window\":\"$CFG_WINDOW\",\"mirror\":\"$CFG_MIRROR\",\"open_browser\":true}}"
 
 # post_control: POST the body; pass a one-line JSON answer through and exit.
 post_control() {
