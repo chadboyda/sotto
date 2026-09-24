@@ -66,7 +66,7 @@ export function parseTaskNotifications(prompt) {
   const out = [];
   if (typeof prompt !== "string" || !prompt.trimStart().startsWith("<task-notification>")) return out;
   for (const m of prompt.matchAll(TASK_NOTE)) {
-    out.push({ taskId: tag(m[1], "task-id"), toolUseId: tag(m[1], "tool-use-id"), status: tag(m[1], "status"), summary: tag(m[1], "summary") });
+    out.push({ taskId: tag(m[1], "task-id"), toolUseId: tag(m[1], "tool-use-id"), status: tag(m[1], "status"), summary: tag(m[1], "summary"), result: tag(m[1], "result") });
   }
   return out;
 }

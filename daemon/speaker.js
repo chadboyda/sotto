@@ -27,6 +27,8 @@
 // Anything already spoken (output speech observed after its append) is never
 // queued again: observed live, a replacement session re-spoke the last update.
 
+import { firstSentences } from "./speech.js";
+
 export const PRIORITY = Object.freeze({ low: 1, normal: 2, high: 3 });
 
 /** How long after the last output delta the assistant still counts as speaking. */
@@ -48,6 +50,71 @@ export const CARRY_MS = 30000;
 
 /** Content key for de-duplication: case and whitespace do not matter. */
 export const speechKey = (content) => String(content ?? "").toLowerCase().replace(/\s+/g, " ").trim();
+
+// ---- repeat detection ------------------------------------------------------------------
+// Observed live: an answer was held in this queue while the voice talked; the
+// voice meanwhile spoke it from the silent full reply ("The pills never made
+// it into the native app… it ships as 0.3.2"), then the released commentary
+// made it say it again ("Short version: the native app gets those same three
+// pills…"). Also a mirror reply that restated the voice answer spoken 10 s
+// before. Exact text keys cannot catch a paraphrase, so a commentary is also
+// compared, by content words, with what was said recently (our commentaries
+// and the voice's own output transcript).
+
+/** How many recent spoken items (commentaries and voice utterances) are kept. */
+export const RECENT_SPOKEN_N = 8;
+/** A commentary is compared with what was said this recently. */
+export const REPEAT_WINDOW_MS = 60000;
+/** Share of a commentary's lead words already said that makes it a repeat. */
+export const REPEAT_SIMILARITY = 0.55;
+/** Lower bar for what the voice said after the item was queued: it can only
+ *  have known that from the item's own silent context (measured: the voice's
+ *  paraphrase of a held answer covered 47% of its lead words; unrelated
+ *  replies on the same topic scored 18-20%). */
+export const REPEAT_SIMILARITY_SINCE = 0.4;
+/** Fewer content words than this: too short to judge (never a repeat). */
+export const REPEAT_MIN_WORDS = 6;
+// Spoken leads that carry no content ("Claude Code's answer: …").
+const LEADS = /^(?:claude code's answer|claude code, on what you just said|claude code finished|background work finished|update on your earlier request(?: "[^"]*")?|result for your earlier request(?: "[^"]*")?|still working|short version)\s*:\s*/i;
+const STOP = new Set(("a an the and or but so of to in on at by for with from as is are was were be been being it its it's this that that's these those there " +
+  "here i i'm i've i'll i'd me my you you're you'll you've you'd your we we'll we've we're our they their he she his her them us not no yes yeah ok okay just now right still also too " +
+  "very really will would can could should do does did done have has had got get gets getting going gone go about into over up out than then " +
+  "what which who how why when where all any some one more most much many like well sure agreed exactly already being built change changes " +
+  "claude code voice thing things bit quick short version update next say says said").split(" "));
+
+/** Content words of a text: lower case, no punctuation, no filler, plural/-ing folded. */
+export function contentWords(text) {
+  const out = new Set();
+  for (let w of String(text || "").toLowerCase().replace(/[’']/g, "'").split(/[^a-z0-9.']+/)) {
+    w = w.replace(/^[.']+|[.']+$/g, "");
+    if (!w || STOP.has(w) || (w.length < 3 && !/\d/.test(w))) continue;
+    w = w.replace(/'s$/, "").replace(/(?<=\w{3})(?:ing|ed|es|s)$/, "");
+    if (w && !STOP.has(w)) out.add(w);
+  }
+  return out;
+}
+
+/** The part of a commentary the voice actually says: its lead sentences, without the "Claude Code's answer:" frame. */
+export function spokenLead(content) {
+  return firstSentences(String(content || "").replace(LEADS, ""), 3).slice(0, 400);
+}
+
+/** Share of `text`'s content words (its spoken lead) found in `said` (a Set). */
+export function repeatScore(text, said) {
+  const w = contentWords(spokenLead(text));
+  if (w.size < REPEAT_MIN_WORDS) return 0;
+  let hit = 0;
+  for (const x of w) {
+    if (said.has(x)) hit++;
+    else if (/\d/.test(x)) return 0; // a number not said yet is news ("3 files", "version 0.3.2")
+  }
+  return hit / w.size;
+}
+
+// Informational sources that may be dropped as a repeat. Questions, approvals
+// and notices are never: saying those twice is a new event.
+const REPEATABLE = new Set(["voice_result", "typed_result", "other_result", "mirror_result", "background_voice", "background_result",
+  "progress_text", "completion", "agents_done", "idle", "tool_failure", "stale_result"]);
 
 // Sources whose commentary is an answer or something the user must act on.
 const HIGH = new Set(["voice_result", "background_voice", "question", "permission", "attention", "voice_notice"]);
@@ -88,12 +155,47 @@ export class SpeechQueue {
     this.lastSent = null; // {action, key, priority, urgent, at, heard}
     this.spoken = new Map(); // key → wall time its speech was observed
     this.resumedAt = -Infinity; // end of the last swap
+    this.recent = []; // [{kind: "commentary"|"voice", text, at, lastAt}] newest last
+  }
+
+  /** Remember something that was said (for repeat detection). */
+  remember(kind, text, now) {
+    this.recent.push({ kind, text: String(text || ""), at: now, lastAt: now });
+    while (this.recent.length > RECENT_SPOKEN_N) this.recent.shift();
+  }
+
+  /**
+   * Is this queued item a paraphrase of something already said? Compared with
+   * our recent commentaries and the voice's recent utterances. An answer the
+   * user asked for (voice_result) is compared with voice speech only after the
+   * answer arrived: before that the voice could not know it, and its "I'll ask
+   * Claude whether the tests pass" must not swallow "The tests pass."
+   */
+  isRepeat(item, now = this.clock.now()) {
+    const source = item.action.source;
+    if (!REPEATABLE.has(source) || item.urgent) return false;
+    const said = new Set(); // everything said in the window (voice speech before an answer arrived excluded)
+    const since = new Set(); // what the voice said after this item was queued
+    for (const r of this.recent) {
+      if (now - r.lastAt > REPEAT_WINDOW_MS) continue;
+      const after = r.kind === "voice" && r.lastAt >= item.at;
+      if (r.kind === "voice" && source === "voice_result" && !after) continue;
+      for (const w of contentWords(r.text)) { said.add(w); if (after) since.add(w); }
+    }
+    if (!said.size) return false;
+    return repeatScore(item.action.content, said) >= REPEAT_SIMILARITY || (since.size > 0 && repeatScore(item.action.content, since) >= REPEAT_SIMILARITY_SINCE);
   }
 
   /** Output transcript delta from the Live session (the assistant is talking). */
   onOutput(delta, startMs, endMs) {
     const now = this.clock.now();
-    if (!this.burst || now > this.speakingUntil) this.burst = Number.isFinite(startMs) ? { wall: now, startMs } : null;
+    const fresh = !this.burst || now > this.speakingUntil;
+    if (fresh) this.burst = Number.isFinite(startMs) ? { wall: now, startMs } : null;
+    if (typeof delta === "string" && delta) {
+      const last = this.recent[this.recent.length - 1];
+      if (!fresh && last && last.kind === "voice") { last.text += delta; last.lastAt = now; }
+      else this.remember("voice", delta, now);
+    }
     let until = now + SPEAK_HANGOVER_MS;
     // The transcript may run ahead of playback: end_ms on the session timeline,
     // measured from the burst's first delta, says when this audio ends.
@@ -208,6 +310,10 @@ export class SpeechQueue {
     }
     if (!this.items.length) return;
     this.items.sort((a, b) => b.priority - a.priority || (b.urgent - a.urgent) || a.seq - b.seq);
+    // Checked at release, not only at enqueue: while an item waits, the voice
+    // may already say the same thing from the silent context that came with it.
+    while (this.items.length && this.isRepeat(this.items[0], now)) this.dropRepeat(this.items.shift());
+    if (!this.items.length) return;
     const head = this.items[0];
     const speaking = this.isSpeaking(now);
     let go = !speaking;
@@ -220,9 +326,16 @@ export class SpeechQueue {
       this.prerollUntil = now + COMMENTARY_PREROLL_MS;
       this.tail = "";
       this.lastSent = { action: head.action, key: head.key, priority: head.priority, urgent: head.urgent, at: now, heard: false };
+      this.remember("commentary", head.action.content, now);
       this.send(head.action);
     }
     this.schedule();
+  }
+
+  /** A repeat is not spoken; it goes to the voice model as silent context. */
+  dropRepeat(it) {
+    this.log.info("speech.duplicate", { source: it.action.source || null, why: "similar" });
+    this.demote({ ...it.action, delegationId: null });
   }
 
   schedule() {

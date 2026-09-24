@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { route, Narrator, milestoneLabel, permissionLabel, resultParts, toolActivity, ToolLine, AgentTracker, AGENT_STALE_MS, agentsText, cardText, AGENT_DONE_MS } from "../../daemon/policy.js";
+import { route, Narrator, milestoneLabel, permissionLabel, resultParts, toolActivity, ToolLine, AgentTracker, AGENT_STALE_MS, agentsText, cardText, AGENT_DONE_MS, AGENT_SPEAK_COOLDOWN_MS, workLabel, reportSentence, finishedSentence } from "../../daemon/policy.js";
 import { createFakeClock } from "../helpers/fake-clock.js";
 
 const BG = "[Background reference; not user speech] ";
@@ -133,11 +133,17 @@ test("agentsText and AgentTracker: launches, first hooks and stops; stale entrie
   t.seen("a1");
   assert.equal(t.count(), 2, "a launched agent reporting in is not counted twice");
   t.seen("a1");
-  t.stopped("unknown"); // the second launch, stopped before any hook of its own
+  assert.equal(t.complete("internal"), false, "an id that is none of our agents (an internal agent) never counts");
+  assert.equal(t.count(), 2, "and does not count a launch down");
+  t.noteTasks([{ id: "a2", type: "subagent", status: "running" }, { id: "b1", type: "shell" }]);
+  assert.equal(t.isKnown("b1"), false, "shell tasks are not agents");
+  assert.equal(t.complete("a2"), true, "the second launch, finished before any hook of its own");
+  assert.equal(t.complete("a2"), false, "never counted twice");
   assert.equal(t.count(), 1);
   t.seen("w1"); // a workflow agent nobody launched through Agent
   assert.equal(t.count(), 2);
-  t.stopped("a1");
+  assert.equal(t.complete("a1"), true);
+  t.seen("a1"); // a late hook from a finished agent does not bring it back
   assert.equal(t.count(), 1);
   await clock.advance(AGENT_STALE_MS + 1);
   assert.equal(t.count(), 0);
@@ -233,32 +239,70 @@ test("progress_text hold: released by a MessageDisplay of another message", () =
   assert.equal(out[0].source, "progress_text");
 });
 
-test("background agent done: 'A background agent finished.' only when the parent does not speak for it", async () => {
-  // Parent idle and silent: spoken once (batched), its summary as context.
+test("background agent done: named and specific, only when the parent does not speak for it", async () => {
   let { clock, out, n } = narrator("milestones");
-  n.onAgentDone("The Explore agent: Found 12 endpoints.");
+  n.onAgentDone({ label: "fixing wake detection", result: "Normal speech wakes it now." });
+  await clock.advance(AGENT_DONE_MS);
+  assert.deepEqual(out.filter((a) => a.kind === "commentary").map((a) => a.content), ["Fixing wake detection is done. Normal speech wakes it now."]);
+  // Unnamed (not top-level) work is context only: never a bare count.
+  ({ clock, out, n } = narrator("milestones"));
+  n.onAgentDone({ detail: "The Explore agent: Found 12 endpoints." });
   n.onAgentDone("");
   await clock.advance(AGENT_DONE_MS);
-  assert.deepEqual(out.filter((a) => a.kind === "commentary").map((a) => a.content), []); // hotfix: bare counts are never spoken
+  assert.equal(out.filter((a) => a.kind === "commentary").length, 0);
   assert.ok(out.some((a) => a.kind === "thinking" && a.content.includes("Found 12 endpoints")));
   // The parent is mid-turn (it will summarize): context only.
   ({ clock, out, n } = narrator("milestones"));
   n.onTurnStart();
-  n.onAgentDone("x");
+  n.onAgentDone({ label: "x" });
   await clock.advance(AGENT_DONE_MS);
   assert.equal(out.filter((a) => a.kind === "commentary").length, 0);
-  // The parent's task-notification turn answers within the window: context only.
+  // The parent's task-notification turn answers within the window: its words win.
   ({ clock, out, n } = narrator("milestones"));
-  n.onAgentDone("x");
+  n.onAgentDone({ label: "counting files" });
   await clock.advance(2000);
   n.route("background_result", { text: "The agent counted 3 files." });
   await clock.advance(AGENT_DONE_MS);
   assert.deepEqual(out.filter((a) => a.kind === "commentary").map((a) => a.content), ["Background work finished: The agent counted 3 files."]);
   // Quiet: never spoken.
   ({ clock, out, n } = narrator("quiet"));
-  n.onAgentDone("x");
+  n.onAgentDone({ label: "x", result: "y" });
   await clock.advance(AGENT_DONE_MS);
   assert.equal(out.filter((a) => a.kind === "commentary").length, 0);
+});
+
+test("background agent done: one spoken line per minute; later ones wait and batch; nothing re-fires", async () => {
+  const { clock, out, n } = narrator("milestones");
+  const said = () => out.filter((a) => a.kind === "commentary").map((a) => a.content);
+  n.onAgentDone({ label: "fixing wake detection", result: "Normal speech wakes it now." });
+  await clock.advance(AGENT_DONE_MS);
+  assert.equal(said().length, 1);
+  await clock.advance(10000);
+  n.onAgentDone({ label: "drafting redesign concepts", result: "Three concepts are ready." });
+  await clock.advance(15000);
+  n.onAgentDone({ label: "porting the pills", result: "The app has the same pills now." });
+  await clock.advance(AGENT_DONE_MS);
+  assert.equal(said().length, 1, "inside the cooldown");
+  await clock.advance(AGENT_SPEAK_COOLDOWN_MS);
+  assert.deepEqual(said().slice(1), ["Two things finished. Drafting redesign concepts: three concepts are ready. Porting the pills: the app has the same pills now."]);
+  await clock.advance(10 * 60_000);
+  assert.equal(said().length, 2, "nothing fires on its own later");
+  for (const c of said()) assert.doesNotMatch(c, /^\w+ background agents? finished\.?$/);
+});
+
+test("finished-work phrasing: labels, report sentences and templates", () => {
+  assert.equal(workLabel("Fix wake detection"), "fixing wake detection");
+  assert.equal(workLabel("Write personas.js module"), "writing personas.js module");
+  assert.equal(workLabel("Run the e2e suite"), "running the e2e suite");
+  assert.equal(workLabel("Voice picker review"), "voice picker review");
+  assert.equal(workLabel("README audit"), "README audit");
+  assert.equal(reportSentence("## Summary\n\nDone.\n\nI fixed the detector in `/Users/me/x/wake.js`, normal speech wakes it now."), "It fixed the detector in wake.js, normal speech wakes it now.");
+  assert.equal(reportSentence('Agent "x" finished'), "");
+  const long = reportSentence("The build is green on every target we ship, the notarized zip is uploaded, the release notes are written and the tag is pushed to origin.");
+  assert.ok(long.split(/\s+/).length <= 26, long);
+  const one = [{ label: "fixing wake detection", result: "It works." }];
+  assert.deepEqual([0, 1, 2].map((v) => finishedSentence(one, v)), ["Fixing wake detection is done. It works.", "Finished fixing wake detection. It works.", "Done with fixing wake detection. It works."]);
+  assert.equal(finishedSentence([{ label: "a" }, { label: "b" }, { label: "c" }, { label: "d" }, { label: "e" }]), "Five things finished, including a, b, and 3 more.");
 });
 
 test("spoken progress is Claude's own words, never tool names", async () => {

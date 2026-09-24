@@ -159,14 +159,14 @@ export function route(source, policy, payload = {}, ctx = {}) {
       return [act("thinking", null, note)];
     }
     case "agents_done": {
-      const n = payload.count || 1;
-      const said = n === 1 ? "A background agent finished." : `${n} background agents finished.`;
-      const note = BG + said + (payload.details?.length ? ` ${payload.details.map((d) => clip(d, 300)).join(" ")}` : "");
-      // Hotfix: a bare count ("2 background agents finished") told the user
-      // nothing and repeated for nested/workflow agents, so it is never spoken;
-      // the voice keeps it as silent context. A content-bearing announcement
-      // (what finished, and the result) replaces this in fix/agent-finished-spam.
-      return [act("thinking", null, note)];
+      // Top-level work the parent launched, by name and outcome ("Fixing wake
+      // detection is done. Normal speech wakes it now."). Never a bare count:
+      // an item without a name is context only.
+      const items = (payload.items || []).filter((it) => it && it.label);
+      const notes = (payload.items || []).map((it) => [it.label ? `Finished ${it.label}.` : "Background work finished.", it.result || it.detail].filter(Boolean).join(" "));
+      const note = notes.length ? [act("thinking", null, BG + notes.join(" "))] : [];
+      if (payload.speak && p !== "quiet" && items.length) return [act("commentary", null, finishedSentence(items, payload.variant || 0)), ...note];
+      return note;
     }
     case "tool_milestone": {
       const labels = (payload.labels || []).filter(Boolean);
@@ -417,6 +417,123 @@ export function isBackgroundLaunch(toolName, input = {}) {
   return toolName === "Workflow";
 }
 
+// ---- finished background work, in plain words -------------------------------------
+// Phrasing rules (after the humanizer pass on these templates): say what
+// finished and what came of it, specific words first; plain "is done" /
+// "finished", no filler ("Great news!"), no count-only lines, no "task
+// complete"; rotate a few shapes so back-to-back updates do not sound canned.
+
+// Imperative verbs an Agent/Workflow/Bash description usually starts with.
+const DOUBLE = new Set(["run", "set", "get", "map", "plan", "ship", "scan", "split", "stop", "put", "cut", "dig", "log", "tag", "pin", "wrap", "trim", "swap", "drop", "chop", "prep"]);
+const VERBS = new Set(("fix add run write build review investigate research update implement refactor test draft design create make find check audit " +
+  "explore analyze analyse generate port rewrite debug trace read search summarize summarise verify migrate clean set get remove merge ship release " +
+  "probe scan map compare plan prototype polish rename move split wire extract rework redo tune measure benchmark profile document diagnose " +
+  "reproduce repro validate lint format install upgrade bump deploy publish prepare prep collect gather fetch download upload sync stop drop " +
+  "patch harden simplify replace convert translate reword explain inspect look study sketch mock outline compile package sign notarize record " +
+  "capture evaluate score rank sort classify tag label cut trim wrap swap pin log").split(" "));
+
+/** "fix" → "fixing", "write" → "writing", "run" → "running". */
+export function gerund(verb) {
+  const v = verb.toLowerCase();
+  if (v.endsWith("ie")) return v.slice(0, -2) + "ying";
+  if (v.endsWith("e") && !v.endsWith("ee") && v.length > 2) return v.slice(0, -1) + "ing";
+  if (DOUBLE.has(v)) return v + v[v.length - 1] + "ing";
+  return v + "ing";
+}
+
+/**
+ * A launch's description as a spoken name for the work, lower-case, fit to
+ * follow "Finished …": "Fix wake detection" → "fixing wake detection".
+ */
+export function workLabel(description) {
+  let t = clip(speakable(String(description || "").split("\n")[0]), 80).replace(/[.!?…:;,]+$/, "").trim();
+  if (!t) return "";
+  const m = /^([A-Za-z]+)\b(.*)$/.exec(t);
+  if (m && VERBS.has(m[1].toLowerCase())) return gerund(m[1]) + m[2];
+  // Keep acronyms and names ("CI", "README") as they are.
+  return /^[A-Z][a-z]/.test(t) ? t[0].toLowerCase() + t.slice(1) : t;
+}
+
+const FILLER_LEAD = /^(?:done|all done|summary|complete|completed|finished|ok|okay|great|perfect|success|report|results?)\b[^a-z]*$/i;
+const NOTE_ONLY = /^(?:agent|background command|workflow|task)\b.*\b(?:finished|completed|done|stopped)\b/i;
+
+/**
+ * One short spoken sentence from an agent's report: its first real sentence,
+ * sanitized (no markdown, paths or ids), the agent's "I" made "it", at most
+ * `maxWords` words.
+ */
+export function reportSentence(text, maxWords = 25) {
+  const ss = sentences(speakable(String(text || ""))).map((x) => x.trim()).filter(Boolean);
+  let first = ss.find((x) => !FILLER_LEAD.test(x) && x.split(/\s+/).length >= 3) || "";
+  if (!first || NOTE_ONLY.test(first)) return "";
+  first = first.replace(/\s*\((?:code|table) omitted\)\.?/g, "").trim()
+    .replace(/^I have\b/, "It has").replace(/^I've\b/, "It has").replace(/^I'm\b/, "It's").replace(/^I am\b/, "It is").replace(/^I\b/, "It");
+  const words = first.split(/\s+/);
+  if (words.length > maxWords) {
+    // Cut at the last clause break inside the budget when one leaves a real clause.
+    const head = words.slice(0, maxWords).join(" ");
+    const brk = Math.max(head.lastIndexOf(", "), head.lastIndexOf("; "), head.lastIndexOf(": "));
+    first = brk > 0 && head.slice(0, brk).split(/\s+/).length >= 6 ? head.slice(0, brk) + "." : head.replace(/[,;:]+$/, "") + "…";
+  }
+  if (!/[.!?…]$/.test(first)) first += ".";
+  return first;
+}
+
+const COUNT = ["", "One", "Two", "Three"];
+/** The spoken line for finished top-level work; `variant` rotates the shape. */
+export function finishedSentence(items, variant = 0) {
+  const its = items.filter((it) => it && it.label);
+  if (its.length === 1) {
+    const { label, result } = its[0];
+    const L = cap(label);
+    const lead = [`${L} is done.`, `Finished ${label}.`, `Done with ${label}.`][variant % 3];
+    return result ? `${lead} ${result}` : lead;
+  }
+  if (its.length <= 3) {
+    const low = (x) => (/^[A-Z][a-z]/.test(x) ? x[0].toLowerCase() + x.slice(1) : x);
+    const parts = its.map((it) => (it.result ? `${cap(it.label)}: ${low(reportSentence(it.result, 12) || it.result)}` : `${cap(it.label)} is done.`));
+    return `${COUNT[its.length]} things finished. ${parts.join(" ")}`;
+  }
+  return `${its.length > 9 ? its.length : ["", "", "", "", "Four", "Five", "Six", "Seven", "Eight", "Nine"][its.length]} things finished, including ${oxford(its.slice(0, 2).map((it) => it.label).concat(`${its.length - 2} more`), "and")}.`;
+}
+
+/**
+ * Top-level work the parent session launched (main-thread Agent/Task,
+ * Workflow, background Bash): its spoken name, and whether it finished.
+ * Nested agents (launched by a subagent, or inside a workflow) are never
+ * here, so they are never announced. An Agent launch is known by its
+ * tool_use_id; its agent_id comes from a background_tasks entry with the
+ * same description, or from the task-notification (<task-id>, <tool-use-id>).
+ */
+export class TopLevelWork {
+  constructor() { this.byTool = new Map(); }
+  launch(toolUseId, toolName, input = {}) {
+    const i = input && typeof input === "object" ? input : {};
+    let raw = "";
+    if (toolName === "Agent" || toolName === "Task") raw = i.description || String(i.prompt || "").split("\n")[0];
+    else if (toolName === "Workflow") raw = (i.meta && i.meta.description) || i.description || i.name || i.workflow || String(i.scriptPath || i.script_path || "").split("/").pop().replace(/\.[a-z]+$/i, "").replace(/[-_]+/g, " ");
+    else if (toolName === "Bash") raw = i.description || "";
+    const id = toolUseId || `anon-${this.byTool.size}`;
+    this.byTool.set(id, { toolUseId: id, kind: toolName, label: workLabel(raw), desc: String(i.description || "").trim().toLowerCase(), agentId: null, done: false });
+    while (this.byTool.size > 200) this.byTool.delete(this.byTool.keys().next().value);
+  }
+  /** Bind agent ids from a Stop/SubagentStop background_tasks array (by description). */
+  bindTasks(tasks) {
+    if (!Array.isArray(tasks)) return;
+    for (const t of tasks) {
+      if (!t || t.type !== "subagent" || typeof t.id !== "string" || this.byAgent(t.id)) continue;
+      const d = String(t.description || "").trim().toLowerCase();
+      if (!d) continue;
+      for (const r of this.byTool.values()) if (!r.agentId && (r.kind === "Agent" || r.kind === "Task") && r.desc === d) { r.agentId = t.id; break; }
+    }
+  }
+  bind(toolUseId, agentId) { const r = this.byTool.get(toolUseId); if (r && agentId && !r.agentId) r.agentId = agentId; return r || null; }
+  byAgent(id) { if (!id) return null; for (const r of this.byTool.values()) if (r.agentId === id) return r; return null; }
+  /** True the first time `r` finishes. */
+  finish(r) { if (!r || r.done) return false; r.done = true; return true; }
+  reset() { this.byTool.clear(); }
+}
+
 // ---- stateful narrator ----------------------------------------------------------
 export const MILESTONE_BATCH_MS = 3000;
 export const WALKTHROUGH_THROTTLE_MS = 15000;
@@ -435,7 +552,11 @@ export const QUESTION_DEDUPE_MS = 10 * 60_000;
 const ASKS = new Set(["AskUserQuestion", "ExitPlanMode"]);
 const FAILURE_LABEL = { Read: "reading a file", Grep: "searching the code", Glob: "searching the code" };
 /** A background agent's completion waits this long for the parent to speak for it. */
-export const AGENT_DONE_MS = 8000;
+export const AGENT_DONE_MS = 10000;
+/** "A background agent finished." is spoken at most once per this long. */
+export const AGENT_SPEAK_COOLDOWN_MS = 60000;
+/** A finished item waits at most this long for a busy parent before it is context only. */
+export const AGENT_WAIT_MAX_MS = 3 * 60_000;
 const RESULT_SOURCES = new Set(["voice_result", "typed_result", "other_result", "background_result", "background_voice", "mirror_result"]);
 
 export class Narrator {
@@ -466,7 +587,10 @@ export class Narrator {
     this.completions = []; // pending completion items {what, detail, level}
     this.agentDone = []; // pending background agent completions {detail, at}
     this.agentTimer = null;
+    this.agentSpokenAt = -Infinity; // last spoken "… is done"
+    this.agentVariant = 0; // rotates the spoken shape
     this.parentSaidAt = -Infinity; // last main-thread message or result (it speaks for its agents)
+    this.parentSpokeAt = -Infinity; // ... that the voice actually spoke
     this.completionTimer = null;
     this.turnStartedAt = null; // main-thread turn start (UserPromptSubmit), for long-running progress
     this.lastLongProgressAt = -Infinity;
@@ -506,6 +630,7 @@ export class Narrator {
     // A mirror turn (§6.18) nobody asked for out loud must not be followed by
     // "Claude Code is waiting for you" once Claude goes idle.
     if (RESULT_SOURCES.has(source) || source === "progress_text") this.parentSaidAt = now;
+    if ((RESULT_SOURCES.has(source) || source === "progress_text") && spoke) this.parentSpokeAt = now;
     if (RESULT_SOURCES.has(source)) { this.turnStartedAt = null; this.resultSpoken = spoke || source === "mirror_result"; this.idleSaid = false; }
     this.emit(actions);
     return actions;
@@ -654,10 +779,15 @@ export class Narrator {
    * is not mid-turn and says nothing about it within AGENT_DONE_MS (a
    * foreground agent's result is summarized by its parent turn; a background
    * one's by the task-notification turn that follows). Its summary goes to
-   * the voice model as silent context either way.
+   * the voice model as silent context either way. At most one spoken line
+   * per AGENT_SPEAK_COOLDOWN_MS; the caller passes only real completions
+   * (AgentTracker.complete()).
    */
-  onAgentDone(detail = "") {
-    this.agentDone.push({ detail: String(detail || ""), at: this.clock.now() });
+  onAgentDone(item = {}) {
+    const it = typeof item === "string" ? { detail: item } : item || {};
+    this.agentDone.push({ label: String(it.label || ""), result: String(it.result || ""), detail: String(it.detail || ""), at: this.clock.now() });
+    // One timer per batch, armed only by a real completion: completions within
+    // AGENT_DONE_MS are one sentence ("Two things finished. …").
     if (!this.agentTimer) this.agentTimer = this.clock.setTimeout(() => this.flushAgents(), AGENT_DONE_MS);
   }
 
@@ -665,10 +795,25 @@ export class Narrator {
     if (this.agentTimer) this.clock.clearTimeout(this.agentTimer);
     this.agentTimer = null;
     if (!this.agentDone.length) return;
+    const now = this.clock.now();
+    const first = this.agentDone[0].at;
+    // Claude's own words win: skipped when a spoken result or progress line
+    // from the parent followed the completion.
+    const covered = this.parentSpokeAt >= first;
+    // Mid-turn, the parent is likely to speak for its work when the turn ends:
+    // wait for that (one timer per wait, bounded by AGENT_WAIT_MAX_MS).
+    const busy = this.turnStartedAt !== null || this.held !== null || this.msgs.size > 0;
+    // Global cooldown: within a minute of a spoken update, the next one waits for its end.
+    const cooling = this.agentSpokenAt + AGENT_SPEAK_COOLDOWN_MS - now;
+    const named = this.agentDone.some((x) => x.label) && this.policy() !== "quiet";
+    if (!covered && named && now - first < AGENT_WAIT_MAX_MS && (busy || cooling > 0)) {
+      this.agentTimer = this.clock.setTimeout(() => this.flushAgents(), Math.max(cooling, AGENT_DONE_MS));
+      return;
+    }
     const items = this.agentDone;
     this.agentDone = [];
-    const covered = this.turnStartedAt !== null || this.held !== null || this.msgs.size > 0 || this.parentSaidAt >= items[0].at;
-    this.route("agents_done", { count: items.length, details: items.map((it) => it.detail).filter(Boolean), speak: !covered });
+    const actions = this.route("agents_done", { items, speak: !covered && !busy, variant: this.agentVariant });
+    if (actions.some((a) => a.kind === "commentary")) { this.agentSpokenAt = now; this.agentVariant++; }
   }
 
   /** PostToolUseFailure (main thread): context always, spoken only in walkthrough. */
@@ -784,27 +929,55 @@ class BoundedSet extends Set {
 
 /**
  * Background agents at work, for the card's "3 background agents working"
- * chip. There is no SubagentStart hook here, so an agent counts from its
- * launch (a main-thread Agent/Task call) or from its first own hook (agent_id,
- * which also covers workflow agents) until its SubagentStop. Entries silent
- * for AGENT_STALE_MS are dropped, so a lost SubagentStop cannot pin the count.
+ * chip, and the one place that decides whether an agent really finished.
+ * There is no SubagentStart hook here, so an agent counts from its launch (a
+ * main-thread Agent/Task call) or from its first own hook (agent_id, which
+ * also covers workflow agents) until it completes. Entries silent for
+ * AGENT_STALE_MS are dropped, so a lost SubagentStop cannot pin the count.
+ *
+ * Completion is by id and once per id (complete()). Observed live on CLI
+ * 2.1.281: while a background agent runs, Claude Code fires a SubagentStop
+ * about every 30 s for an internal agent that writes its progress line
+ * ("Reading app.js voice picker code."). Its agent_type is the session's own
+ * agent name (e.g. "claude" under `--agent claude`), not empty, and its
+ * agent_id is none of the session's agents: not in background_tasks, never
+ * seen in a hook. Counting those spoke "A background agent finished." every
+ * 8 s to 23 s. Only an id we know as an agent counts: one that sent its own
+ * hooks, or one listed as a subagent in a background_tasks array.
  */
 export const AGENT_STALE_MS = 15 * 60_000;
 export class AgentTracker {
   constructor({ clock }) { this.clock = clock; this.reset(); }
-  reset() { this.agents = new Map(); this.pending = []; }
+  reset() { this.agents = new Map(); this.pending = []; this.known = new BoundedSet(500); this.done = new BoundedSet(500); }
   /** A main-thread Agent/Task launch whose agent has not reported yet. */
   launched() { this.pending.push(this.clock.now()); }
   /** A hook from agent `id`. */
   seen(id) {
-    if (!id) return;
+    if (!id || this.done.has(id)) return;
+    this.known.add(id);
     if (!this.agents.has(id) && this.pending.length) this.pending.shift();
     this.agents.set(id, this.clock.now());
   }
-  /** SubagentStop for agent `id`. */
-  stopped(id) {
-    if (id && this.agents.has(id)) this.agents.delete(id);
-    else if (this.pending.length) this.pending.shift();
+  /** background_tasks from a Stop/SubagentStop payload: remember its subagent ids. */
+  noteTasks(tasks) {
+    if (!Array.isArray(tasks)) return;
+    for (const t of tasks) if (t && typeof t.id === "string" && t.id && t.type === "subagent") this.known.add(t.id);
+  }
+  /** Is `id` one of this session's agents (as opposed to an internal one)? */
+  isKnown(id) { return !!id && (this.known.has(id) || this.agents.has(id)); }
+  /** Has `id` already been counted as finished? */
+  isDone(id) { return !!id && this.done.has(id); }
+  /**
+   * Agent `id` finished (SubagentStop, TaskCompleted or a task-notification
+   * naming it). True the first time for a known agent; false for an unknown
+   * id (an internal agent) or one already counted.
+   */
+  complete(id) {
+    if (!this.isKnown(id) || this.done.has(id)) return false;
+    this.done.add(id);
+    if (this.agents.has(id)) this.agents.delete(id);
+    else if (this.pending.length) this.pending.shift(); // launched, finished before any hook of its own
+    return true;
   }
   count() {
     const now = this.clock.now();
