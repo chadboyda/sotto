@@ -124,11 +124,15 @@
   --shadow-key: 0 0 0 1px rgba(0, 0, 0, 0.1), 0 1px 0 rgba(0, 0, 0, 0.12);
   --scrim: rgba(0, 0, 0, 0.18);
   --drawer-bg: rgba(255, 255, 255, 0.86);
+  --mute-bg: var(--surface-1);
 }
 
-/* ---------- tokens: dark ---------- */
+/* ---------- tokens: dark ----------
+   Settings > Appearance sets data-theme on <html> (before first paint, index.html):
+   "light" or "dark" wins over the OS; without it (System) the OS decides, live.
+   The two dark blocks must stay identical (test/web/theme.test.js checks). */
 @media (prefers-color-scheme: dark) {
-  :root {
+  :root:not([data-theme="light"]) {
     color-scheme: dark;
     --bg: #0B0D10;
     --surface-1: #14171C;
@@ -176,7 +180,58 @@
     --shadow-key: 0 0 0 1px rgba(255, 255, 255, 0.12), 0 1px 0 rgba(0, 0, 0, 0.6);
     --scrim: rgba(0, 0, 0, 0.5);
     --drawer-bg: rgba(20, 23, 28, 0.86);
+    --mute-bg: var(--surface-2);
   }
+}
+:root[data-theme="dark"] {
+    color-scheme: dark;
+    --bg: #0B0D10;
+    --surface-1: #14171C;
+    --surface-2: #1C2027;
+    --surface-sunken: #07080A;
+    --control-bg: #1E2229;
+    --fill: rgba(255, 255, 255, 0.06);
+    --fill-hover: rgba(255, 255, 255, 0.1);
+    --line: #252A32;
+    --edge: #626C7B;
+    --fg: #ECEFF4;
+    --fg-2: #AAB2BF;
+    --fg-3: #8B94A3;
+    --tick-rest: #333A45;
+    --live: #8BD96B;
+    --live-tint: #16241A;
+    --work: #7FA8FF;
+    --work-tint: #141E33;
+    --attn: #F0B43C;
+    --attn-tint: #211B10;
+    --attn-edge: #B8871F;
+    --attn-icon: #F0B43C;
+    --err: #FF7A6B;
+    --err-tint: #2E1614;
+    --mute: #B9A2FF;
+    --mute-tint: #1F1A33;
+    --voice: #ECEFF4;
+    --voice-rest: #4A5361;
+    --bloom-you: rgba(139, 217, 107, 0.3);
+    --bloom-voice: rgba(236, 239, 244, 0.2);
+    --bloom-mute: rgba(185, 162, 255, 0.26);
+    --bloom-attn: rgba(240, 180, 60, 0.26);
+    --dial-bezel-alpha: 0.45;
+    --dial-rest-alpha: 0.9;
+    --on-signal: #0B0D10;
+    --focus: #7FA8FF;
+    --selection: #2A3C66;
+    /* Dark: one white ring; depth shadows vanish on a dark page. */
+    --shadow-border: 0 0 0 1px rgba(255, 255, 255, 0.08);
+    --shadow-border-hover: 0 0 0 1px rgba(255, 255, 255, 0.13);
+    --shadow-control: inset 0 1px 0 rgba(255, 255, 255, 0.05), 0 0 0 1px rgba(255, 255, 255, 0.1), 0 1px 2px rgba(0, 0, 0, 0.5);
+    --shadow-raised: 0 0 0 1px rgba(255, 255, 255, 0.09), 0 8px 24px -8px rgba(0, 0, 0, 0.7);
+    --shadow-drawer: 0 0 0 1px rgba(255, 255, 255, 0.08), 0 -12px 32px -8px rgba(0, 0, 0, 0.7);
+    --shadow-mute: inset 0 1px 0 rgba(255, 255, 255, 0.06), 0 1px 0 rgba(0, 0, 0, 0.6), 0 8px 20px rgba(0, 0, 0, 0.45);
+    --shadow-key: 0 0 0 1px rgba(255, 255, 255, 0.12), 0 1px 0 rgba(0, 0, 0, 0.6);
+    --scrim: rgba(0, 0, 0, 0.5);
+    --drawer-bg: rgba(20, 23, 28, 0.86);
+    --mute-bg: var(--surface-2);
 }
 
 /* ---------- base ---------- */
@@ -249,8 +304,8 @@ kbd {
 /* ---------- header ----------
    Two groups on the 4/8 grid. Left: the status glyph, the state word (15/600, in the
    state's ink) and under it a quieter line (the detail, e.g. "Still billing", then the
-   project). Right: the usage readout as one quiet capsule, figures in --fg and units
-   in --fg-2, tabular so the width holds while it updates; then the gear (44 px hit). */
+   project). Right: the usage pills (Session, Today, Cost), fixed-width tabular figures
+   so nothing moves while they tick; then the gear (44 px hit). */
 .top {
   display: flex;
   align-items: center;
@@ -275,26 +330,43 @@ html.host-app .top { padding-top: calc(var(--space-2) + var(--host-inset-top, 28
 .status-detail:not([hidden]) + .project:not([hidden])::before { content: "·"; margin-right: var(--space-1); color: var(--fg-3); }
 /* A very long project name is capped; it is the first thing to go when room is short. */
 .project { flex: 0 1 auto; min-width: 0; max-width: 24ch; overflow: hidden; text-overflow: ellipsis; }
-/* The usage readout: a display, not a button. A quiet capsule on the window, no
-   inset well (it read as a disabled field). */
-.usage {
-  display: inline-flex;
-  align-items: center;
-  height: 24px;
-  padding: 0 var(--space-2) 0 10px;
-  border-radius: 12px;
-  background: var(--fill);
-  font-size: var(--text-meta);
-  line-height: 16px;
-  letter-spacing: 0.005em;
-  white-space: pre;
-  color: var(--fg-2);
+/* The usage readout: three pills (Session, Today, Cost), displays rather than buttons.
+   Each is a small label over a tabular figure in a box of fixed width, so a ticking
+   clock never moves anything: m:ss and mm:ss both fit 5ch (four digits and a colon),
+   h:mm:ss and hh:mm:ss fit 7ch, and the box widens once, at the hour (data-wide,
+   lib.usagePills). The cost reserves "$00.00" (6ch; "<$0.01" fits too) and widens
+   at $100. Figures sit right-aligned so the seconds digit stays put; the labels
+   align with them. Raised like a card: --surface-1 with the shadow ring, no border. */
+.usage { display: flex; align-items: center; gap: var(--space-1); }
+.usage[hidden], .pill[hidden] { display: none; }
+.pill {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  justify-content: center;
+  height: var(--control);
+  padding: 0 var(--space-2);
+  border-radius: var(--radius-md);
+  background: var(--surface-1);
+  box-shadow: var(--shadow-border);
+  white-space: nowrap;
 }
-.usage-fig { color: var(--fg); font-weight: 600; }
-.usage-sep { color: var(--fg-3); }
-.usage-item[hidden] { display: none; }
+.pill-label { font-size: 11px; line-height: 12px; letter-spacing: 0.01em; color: var(--fg-2); }
+.pill-value {
+  display: block;
+  width: 5ch;
+  font-size: var(--text-small);
+  line-height: 16px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+  color: var(--fg);
+}
+.pill-value[data-wide] { width: 7ch; }
+.pill-cost .pill-value { width: 6ch; }
+.pill-cost .pill-value[data-wide] { width: 7ch; }
 /* The gear's 44 px box has 12 px of air around the icon; pull it in so the visible
-   gap to the capsule is 16 and the icon's right edge sits on the 16 px gutter less
+   gap to the pills is 16 and the icon's right edge sits on the 16 px gutter less
    its 4 px ring of air (the same inset the banner's close button has). */
 .gear { margin-left: calc(var(--space-1) * -1); }
 
@@ -452,7 +524,7 @@ html[data-motion="on"] .banner[data-enter="true"] > .icon-btn { animation-delay:
   min-height: 56px;
   border-radius: 50%;
   border: 2px solid var(--edge);
-  background: var(--surface-1);
+  background: var(--mute-bg);
   color: var(--fg);
   box-shadow: var(--shadow-mute);
   display: grid;
@@ -462,7 +534,6 @@ html[data-motion="on"] .banner[data-enter="true"] > .icon-btn { animation-delay:
   transition-duration: var(--dur-base);
   transition-timing-function: var(--ease-out);
 }
-@media (prefers-color-scheme: dark) { .mute { background: var(--surface-2); } }
 .mute:active:not(:disabled) { scale: 0.96; }
 .mute:disabled { cursor: default; border-style: dashed; color: var(--fg-3); }
 /* The glyphs are stacked and crossfade: the leaving one shrinks to 0.25 and blurs

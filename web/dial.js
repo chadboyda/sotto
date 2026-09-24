@@ -606,6 +606,10 @@ export function createDial(canvas, opts = {}) {
   const ro = typeof ResizeObserver === "function" ? new ResizeObserver(() => resize()) : null;
   ro?.observe(box);
   window.matchMedia?.("(prefers-color-scheme: dark)")?.addEventListener?.("change", () => readColors());
+  // Settings > Appearance flips <html data-theme> without an OS change.
+  if (typeof MutationObserver === "function") {
+    new MutationObserver(() => readColors()).observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme"] });
+  }
   const motion = window.matchMedia?.("(prefers-reduced-motion: reduce)");
   if (motion && opts.reducedMotion === undefined) reduced = motion.matches;
   motion?.addEventListener?.("change", (e) => {

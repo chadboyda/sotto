@@ -9,6 +9,7 @@ import * as lib from "./lib.js";
 import * as wakeLib from "./wake.js";
 import * as echoLib from "./echo.js";
 import { createDial } from "./dial.js";
+import * as header from "./header.js";
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -22,6 +23,9 @@ const MUTE_ACK_MS = 3_000;
 const BANNER_MS = 8_000;
 const BANNER_LEAVE_MS = 160; // styles.css .banner[data-leaving] runs 150 ms
 const KEY_INPUT = "clv.inputDeviceId";
+// Settings > Appearance. index.html's inline head script reads the same key before
+// first paint, so it must stay "clv.theme" and hold only "light" or "dark".
+const KEY_THEME = "clv.theme";
 const KEY_OUTPUT = "clv.outputDeviceId";
 /** Post the wake latency report at the first model output, or after this long. */
 const WAKE_TIMING_MAX_MS = 20_000;
@@ -37,6 +41,10 @@ const el = {
   statusDetail: $("status-detail"),
   project: $("project"),
   usage: $("usage"),
+  usageSession: $("usage-session"),
+  usageToday: $("usage-today"),
+  usageCost: $("usage-cost"),
+  theme: $("theme"),
   banners: $("banners"),
   dialCanvas: $("dial-canvas"),
   muteBtn: $("mute-btn"),
@@ -729,7 +737,9 @@ async function switchMic(savedId) {
     echo.setMic(stream);
     noteInput(stream, pick);
     fillDeviceSelects(devices);
-    hearing.start(performance.now());
+    // A different mic (chosen, followed, or replacing a lost one): not heard on it yet.
+    hearing.reset();
+    hearing.start(performance.now(), micKey());
     dismissBannerKey("cant_hear");
     post("mic_ok", { input_label: track.label || "", output_label: selectedText(el.outputSelect), aec: String(track.getSettings?.().echoCancellation ?? "") });
     render();
@@ -917,12 +927,25 @@ const meter = {
 meter.tick = meter.tick.bind(meter);
 
 // ---------------------------------------------------------------------------
-// "Can't hear you" (§7.5): the mic is silent after going live, or it hears
-// voice-level sound for a long stretch while no input transcript arrives. The
-// page shows a banner naming the mic with a one-click switcher, logs it, and
-// the daemon has the voice say it once (POST cant_hear).
+// "Can't hear you" (§7.5): only before the user's first words on this mic since
+// connecting or switching mics (lib.createHearingMonitor): the mic is silent, or it
+// hears voice-level sound while no input transcript arrives. The page shows a banner
+// naming the mic with a one-click switcher, logs it, and the daemon has the voice say
+// it once (POST cant_hear). A mic that goes dead later (exact zeros, a lost device)
+// is the silent-mic banner below, never a spoken line.
 // ---------------------------------------------------------------------------
 const hearing = lib.createHearingMonitor();
+/** The current mic's identity for the hearing monitor's "heard on this device". */
+function micKey() {
+  const track = S.mic?.getAudioTracks()[0];
+  let id = "";
+  try {
+    id = track?.getSettings?.().deviceId || "";
+  } catch {
+    /* ignore */
+  }
+  return id || track?.label || S.inputLabel || null;
+}
 
 function cantHear(f) {
   const name = S.inputLabel || S.mic?.getAudioTracks()[0]?.label || "the current microphone";
@@ -1941,7 +1964,11 @@ function handleDataChannel(data) {
       S.pausedReason = null;
       S.connectStage = null;
       setPhase("live");
-      hearing.start(performance.now());
+      // A transparent reconnect, or a wake onto the same mic, keeps "heard": the user
+      // who went quiet mid-conversation is never told they can't be heard. A new
+      // connect (start, resume) starts over.
+      if (S.connectReason !== "reconnect" && S.connectReason !== "wake") hearing.reset();
+      hearing.start(performance.now(), micKey());
       announce("Connected. Listening.");
       // A new session starts unmuted server-side. Keep the user's mute across a
       // transparent reconnect; a start or resume begins unmuted (they chose to talk).
@@ -1953,7 +1980,7 @@ function handleDataChannel(data) {
     case "session.output_transcript.delta":
       if (ev.type === "session.output_transcript.delta") wake.onFirstOutput();
       else if (String(ev.delta ?? "").trim()) {
-        hearing.heard(performance.now());
+        hearing.heard();
         dismissBannerKey("cant_hear");
       }
       S.captions = lib.reduceCaptions(S.captions, {
@@ -2165,68 +2192,38 @@ function render() {
   if (hadFocus && !focusable(prevFocus) && prevFocus !== el.overlayTitle && prevFocus !== el.stageWord) restoreFocus(v);
 }
 
-/**
- * Header items by priority (status word > money > session > today > detail > project):
- * when the row is short of room, whole items hide instead of being cut to "claude…"
- * and "$0.…". The money is never truncated.
- */
+/** Header items by priority (header.fitHeader): the money always stays. */
 function fitHeader() {
-  const top = el.top;
-  const text = el.statusLabel.parentElement;
-  const items = [el.usage.querySelector(".usage-today"), el.usage.querySelector(".usage-session")].filter(Boolean);
-  el.project.hidden = !el.project.textContent;
-  el.statusDetail.hidden = !el.statusDetail.textContent;
-  for (const it of items) it.hidden = false;
-  // Too tight: the row overflows, the word or the detail is clipped, or the project
-  // has ellipsized to a stub (under ~6 characters) that no longer names anything.
-  const over = () =>
-    top.scrollWidth > top.clientWidth ||
-    text.scrollWidth > text.clientWidth + 0.5 ||
-    (!el.project.hidden && el.project.scrollWidth > el.project.clientWidth + 0.5 && el.project.clientWidth < 56);
-  if (!over()) return;
-  el.project.hidden = true;
-  if (!over()) return;
-  el.statusDetail.hidden = true;
-  for (const it of items) {
-    if (!over()) return;
-    it.hidden = true;
-  }
+  header.fitHeader({ top: el.top, statusText: el.statusLabel.parentElement, project: el.project, statusDetail: el.statusDetail, pills: [el.usageToday, el.usageSession] });
 }
 
 /**
- * The header's timers as clocks (SPEC-DEVIATIONS "timers"): "Session 14:02 ·
- * Today 31:40 · $1.56", ticking every second, tabular so the width holds. Today's
- * figure is the billed reading (lib.stableUsage) advanced by wall time while live
- * (lib.tickingToday); the cost is the reading's, so the cents don't tick.
+ * The header's timers as clocks (SPEC-DEVIATIONS "timers", "header pills"): three
+ * fixed-width pills, Session / Today / Cost, ticking every second. Only the figures'
+ * text changes; a pill's width changes once, at the hour (lib.usagePills `wide`),
+ * so the header never shifts while it ticks. Today's figure is the billed reading
+ * (lib.stableUsage) advanced by wall time while live (lib.tickingToday); the cost is
+ * the reading's, so the cents don't tick. Returns true when a pill's size or
+ * presence changed (the caller re-runs fitHeader only then).
  */
 let usageShown = null;
 let todayShown = null;
-let usageText = "";
 function renderUsage() {
   if (!S.status) {
     el.usage.hidden = true;
-    usageText = "";
     return false;
   }
   const now = Date.now();
   usageShown = lib.stableUsage(usageShown, lib.todaySeconds(S.status, S.dcUsage, S.liveSessionId), now);
   const live = S.phase === "live" && !!S.startedAt;
   todayShown = lib.tickingToday(usageShown, now, { live, shown: todayShown });
-  const session = live ? lib.formatClock((now - S.startedAt) / 1000) : "";
-  const today = lib.formatClock(todayShown);
-  const cost = lib.formatCost(usageShown.seconds);
-  const text = `${session}|${today}|${cost}`;
+  const p = lib.usagePills({ sessionSeconds: live ? (now - S.startedAt) / 1000 : null, todaySeconds: todayShown, costSeconds: usageShown.seconds });
+  let changed = el.usage.hidden;
   el.usage.hidden = false;
-  if (text === usageText) return false;
-  usageText = text;
-  const span = (cls, t) => Object.assign(document.createElement("span"), { className: cls, textContent: t });
-  const item = (cls, label, fig) => {
-    const it = span(`usage-item ${cls}`, "");
-    it.append(span("usage-unit", `${label} `), span("usage-fig", fig), span("usage-sep", " · "));
-    return it;
-  };
-  el.usage.replaceChildren(...(session ? [item("usage-session", "Session", session)] : []), item("usage-today", "Today", today), span("usage-fig usage-cost", cost));
-  return true;
+  changed = header.setPill(el.usageSession, p.session) || changed;
+  changed = header.setPill(el.usageToday, p.today) || changed;
+  changed = header.setPill(el.usageCost, p.cost) || changed;
+  return changed;
 }
 
 function renderHeader(v = S.view || computeView()) {
@@ -2399,6 +2396,7 @@ function syncTicker() {
       if (S.busy) renderClaude();
       // A held usage reading (lib.stableUsage) catches up within ~10 s even when no new
       // status or data-channel usage arrives.
+      // Ticking figures sit in fixed boxes; only a size change (the hour) re-fits.
       if (renderUsage()) fitHeader();
       renderClaudeTime();
     }, 1000);
@@ -2767,6 +2765,39 @@ el.policy.addEventListener("click", (e) => {
 el.policy.addEventListener("keydown", (e) => {
   if (!["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown"].includes(e.key)) return;
   const buttons = [...el.policy.querySelectorAll("button[data-policy]")];
+  const i = buttons.indexOf(document.activeElement);
+  if (i < 0) return;
+  e.preventDefault();
+  const next = buttons[(i + (e.key === "ArrowLeft" || e.key === "ArrowUp" ? -1 : 1) + buttons.length) % buttons.length];
+  next.focus();
+  next.click();
+});
+
+// Settings > Appearance: System (default) / Light / Dark. The choice lives in this
+// window's storage (clv.theme, read before first paint by index.html), so it
+// survives reloads and reconnects. System follows the OS live through CSS alone.
+let themeChoice = lib.normalizeTheme(store.get(KEY_THEME));
+function setTheme(choice) {
+  themeChoice = lib.normalizeTheme(choice);
+  store.set(KEY_THEME, themeChoice === "system" ? null : themeChoice);
+  const attr = lib.themeAttr(themeChoice);
+  if (attr) document.documentElement.setAttribute("data-theme", attr);
+  else document.documentElement.removeAttribute("data-theme");
+  for (const b of el.theme.querySelectorAll("button[data-theme-choice]")) {
+    const on = b.dataset.themeChoice === themeChoice;
+    b.setAttribute("aria-checked", String(on));
+    b.tabIndex = on ? 0 : -1;
+  }
+}
+setTheme(themeChoice);
+el.theme.addEventListener("click", (e) => {
+  const b = e.target.closest("button[data-theme-choice]");
+  if (!b) return;
+  setTheme(b.dataset.themeChoice);
+});
+el.theme.addEventListener("keydown", (e) => {
+  if (!["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown"].includes(e.key)) return;
+  const buttons = [...el.theme.querySelectorAll("button[data-theme-choice]")];
   const i = buttons.indexOf(document.activeElement);
   if (i < 0) return;
   e.preventDefault();

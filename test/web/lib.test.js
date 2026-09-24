@@ -209,6 +209,123 @@ test("hearing monitor: sound at the mic but no transcript for 40 s", () => {
   assert.equal(f2, null);
 });
 
+// SPEC-DEVIATIONS "can't hear you, only before the first words": fake time (ms) throughout.
+const talk = (h, from, to, { heardEvery = 4000 } = {}) => {
+  let f = null;
+  for (let t = from; t < to; t += 50) {
+    if ((t - from) % heardEvery === 0) h.heard(t);
+    f ||= h.sample({ rms: 0.04, now: t });
+  }
+  return f;
+};
+
+test("hearing monitor: a conversation, then 5 minutes of silence, never warns", () => {
+  const h = lib.createHearingMonitor();
+  h.start(0, "mic-a");
+  assert.equal(talk(h, 0, 30_000), null);
+  assert.ok(h.hasHeard);
+  let fired = null;
+  // Dead quiet, then room noise and typing at voice level with no transcript.
+  for (let t = 30_000; t < 330_000; t += 50) fired ||= h.sample({ rms: t < 180_000 ? 0.0004 : (Math.floor(t / 1000) % 2 ? 0.03 : 0.002), now: t });
+  assert.equal(fired, null);
+  // A transparent reconnect, or a wake onto the same mic, keeps "heard".
+  h.stop();
+  h.start(330_000, "mic-a");
+  for (let t = 330_000; t < 400_000; t += 50) fired ||= h.sample({ rms: 0.0004, now: t });
+  assert.equal(fired, null);
+  // Unmuting after a long mute does not re-arm it either.
+  for (let t = 400_000; t < 430_000; t += 50) fired ||= h.sample({ rms: 0, muted: true, now: t });
+  for (let t = 430_000; t < 480_000; t += 50) fired ||= h.sample({ rms: 0.0004, now: t });
+  assert.equal(fired, null);
+});
+
+test("hearing monitor: just connected with a silent mic warns at 20 s", () => {
+  const h = lib.createHearingMonitor();
+  h.reset();
+  h.start(0, "mic-a");
+  let fired = null;
+  let t = 0;
+  for (; t <= 25_000 && !fired; t += 50) fired = h.sample({ rms: 0.0005, now: t });
+  assert.equal(fired?.kind, "silent");
+  assert.ok(t >= 20_000 && t <= 20_100, String(t));
+});
+
+test("hearing monitor: a mic change followed by silence warns; so does a new connect", () => {
+  const h = lib.createHearingMonitor();
+  h.start(0, "mic-a");
+  talk(h, 0, 20_000);
+  // switchMic: reset() then start() on the new device.
+  h.reset();
+  h.start(20_000, "mic-b");
+  assert.equal(h.hasHeard, false);
+  let fired = null;
+  for (let t = 20_000; t <= 41_000 && !fired; t += 50) fired = h.sample({ rms: 0.0005, now: t });
+  assert.equal(fired?.kind, "silent");
+  // A wake onto a different device (no reset) is not heard there either.
+  const g = lib.createHearingMonitor();
+  g.start(0, "mic-a");
+  talk(g, 0, 10_000);
+  g.stop();
+  g.start(60_000, "mic-b");
+  let f2 = null;
+  for (let t = 60_000; t <= 81_000 && !f2; t += 50) f2 = g.sample({ rms: 0.0005, now: t });
+  assert.equal(f2?.kind, "silent");
+  // A new connect (start/resume) on the same mic starts over too.
+  const k = lib.createHearingMonitor();
+  k.start(0, "mic-a");
+  talk(k, 0, 10_000);
+  k.stop();
+  k.reset();
+  k.start(60_000, "mic-a");
+  let f3 = null;
+  for (let t = 60_000; t <= 81_000 && !f3; t += 50) f3 = k.sample({ rms: 0.0005, now: t });
+  assert.equal(f3?.kind, "silent");
+});
+
+test("zeros mid-conversation: the silent-mic banner fires, the spoken can't-hear does not", () => {
+  const h = lib.createHearingMonitor();
+  const z = lib.createDigitalSilenceDetector();
+  h.start(0, "mic-a");
+  z.start(0);
+  let zero = null;
+  for (let t = 0; t < 30_000; t += 50) zero ||= z.sample({ rms: 0.04, now: t });
+  talk(h, 0, 30_000);
+  let fired = null;
+  let t = 30_000;
+  for (; t < 90_000 && !zero; t += 50) {
+    fired ||= h.sample({ rms: 0, now: t });
+    zero = z.sample({ rms: 0, now: t });
+  }
+  assert.ok(zero && zero.ms >= 6000, "the digital-silence banner");
+  assert.ok(t - 30_000 <= 6_100, String(t));
+  assert.equal(fired, null, "no spoken can't-hear line once heard");
+});
+
+test("usagePills: fixed magnitudes; one widening at the hour, cost at $100", () => {
+  const p = (s) => lib.usagePills({ sessionSeconds: s, todaySeconds: s, costSeconds: 0 });
+  for (const [s, text, wide] of [[9, "0:09", false], [10, "0:10", false], [599, "9:59", false], [600, "10:00", false], [3599, "59:59", false], [3600, "1:00:00", true], [36_000, "10:00:00", true]]) {
+    assert.deepEqual(p(s).session, { text, wide }, String(s));
+    assert.deepEqual(p(s).today, { text, wide }, String(s));
+  }
+  assert.equal(lib.usagePills({ todaySeconds: 5 }).session, null, "no Session pill off-live");
+  assert.deepEqual(lib.usagePills({ costSeconds: 60 }).cost, { text: "$0.05", wide: false });
+  assert.deepEqual(lib.usagePills({ costSeconds: 1 }).cost, { text: "<$0.01", wide: false });
+  assert.deepEqual(lib.usagePills({ costSeconds: 1199 * 60 }).cost, { text: "$59.95", wide: false });
+  assert.deepEqual(lib.usagePills({ costSeconds: 2000 * 60 }).cost, { text: "$100.00", wide: true });
+});
+
+test("theme: System by default; Light and Dark set data-theme, System removes it", () => {
+  for (const v of [undefined, null, "", "auto", "blue", 3]) assert.equal(lib.normalizeTheme(v), "system");
+  assert.equal(lib.normalizeTheme(" Dark "), "dark");
+  assert.equal(lib.themeAttr("system"), null);
+  assert.equal(lib.themeAttr("light"), "light");
+  assert.equal(lib.themeAttr("dark"), "dark");
+  assert.equal(lib.resolveTheme("system", true), "dark");
+  assert.equal(lib.resolveTheme("system", false), "light");
+  assert.equal(lib.resolveTheme("light", true), "light");
+  assert.equal(lib.resolveTheme("dark", false), "dark");
+});
+
 test("pickOutputDevice keeps an existing saved speaker, else system default", () => {
   const d = devs(["default", "Default - AirPods", "audiooutput"], ["air", "AirPods", "audiooutput"], ["mic", "Mic"]);
   assert.equal(lib.pickOutputDevice(d, "air"), "air");
