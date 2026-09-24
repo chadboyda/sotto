@@ -22,6 +22,7 @@ export const RELAY_MARK = "Claude said: ";
 
 /** The relay rule every spoken result carries. */
 export const RELAY_RULES = "Tell the user the gist in your own words, speaking to them as \"you\", conversationally, in one to three short sentences, in your persona. " +
+  "Lead with the actual answer or outcome (the name, number or result itself), not just that Claude found or did something. " +
   "Don't read lists, labels, file paths or formatting aloud; mention details only if they matter or the user asks. " +
   "Stop when the news ends: no closing line about the user not needing to do anything.";
 const ONE_LINE = "Mention it in one short sentence, in your own words, in your persona; skip paths, ids and formatting, and add no closing line about the user not needing to do anything.";
