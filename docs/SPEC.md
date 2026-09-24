@@ -165,10 +165,11 @@ The orchestrator owns README.md, .gitignore and docs/.
 | `D/logs/crash.log` | daemon | humans | 0600 | Uncaught exceptions with stacks. |
 | `D/logs/toggle.log` | toggle.sh | humans | 0600 | One line per toggle failure (timestamp, action, reason). |
 | `D/chrome/` | Chrome | Chrome | 0700 | Dedicated `--user-data-dir` for the app window. |
-| `D/app/Sotto.app` | build-app.sh | daemon (`open -a`) | 0700 dir | The desktop app bundle (§6.16), built from `app/`. Never committed. |
-| `D/app/build.json` | build-app.sh | daemon | 0644 | `{"hash":"<sources sha256>","ok":true\|false,"at":…,"error":…}`: the last build. A failed build of the same sources is not retried. |
-| `D/app/build.lock` | build-app.sh | daemon | 0644 | Pid of a running build; present only while it runs. |
-| `D/logs/app-build.log` | build-app.sh (daemon-started builds) | humans | 0600 | swiftc/codesign output of background builds. |
+| `D/app/Sotto.app` | appfetch.js (release download) or build-app.sh | daemon (`open -a`) | 0700 dir | The desktop app bundle (§6.16): the signed release of this version, or built from `app/`. Never committed. |
+| `D/app/build.json` | build-app.sh, appfetch.js | daemon | 0644 | `{"hash":"<sources sha256>","ok":true\|false,"at":…,"error":…,"source":"build"\|"release"}`: the bundle in place. A failed build of the same sources is not retried. |
+| `D/app/download.json` | appfetch.js | daemon | 0644 | `{"version","hash","ok","reason","permanent","at"}`: the last release download attempt (§6.16 "Release download"). |
+| `D/app/build.lock` | build-app.sh, appfetch.js | daemon | 0644 | Pid of a running build or download; present only while it runs. |
+| `D/logs/app-build.log` | build-app.sh, appfetch.js (daemon-started) | humans | 0600 | Download, swiftc and codesign output of background installs. |
 
 Stale files: if `D/daemon.pid` names a dead process, or `/healthz` does not answer, toggle.sh treats the daemon as down. A stale `active` file is harmless: hooks try a background POST to a dead port and fail silently. The next daemon start MUST delete any leftover `active` and `pending-context` before it listens.
 
@@ -226,7 +227,9 @@ The settings drawer shows `Key ending in <hint>` with its source, **Change** (wh
 |---|---|---|
 | `SOTTO_OPENAI_BASE` | daemon | Replaces `https://api.openai.com/v1` |
 | `SOTTO_BROWSER` | daemon | `auto`, `app`, `chrome`, `default` (`open URL`) or `none` (never open a window). Overrides userConfig `window` (§6.16). `SOTTO_NO_BROWSER=1` is `none` and wins. |
-| `SOTTO_SIGN_IDENTITY` | build-app.sh | Code-signing identity for the app (default `-`, ad hoc) |
+| `SOTTO_SIGN_IDENTITY` | build-app.sh | Code-signing identity for the app (default `-`, ad hoc). A real identity also gets the hardened runtime, a timestamp and `app/Sotto.entitlements`. |
+| `SOTTO_APP_DOWNLOAD` | daemon | `0`: never download the signed release; build locally (§6.16 "Release download") |
+| `SOTTO_RELEASE_BASE` | daemon → appfetch.js | Replaces `https://github.com/chadboyda/sotto/releases/download` (tests) |
 | `SOTTO_APP_TEST`, `SOTTO_APP_DEBUG_LOG` | daemon → app | Tests only: the daemon passes them to the app with `open --env`; the app then runs in test mode (hidden, mock mic, own defaults) and writes a JSONL debug log (§6.16). |
 | `SOTTO_APP_MIC`, `SOTTO_APP_MIC_FIXTURE`, `SOTTO_APP_MIC_FIXTURE_LEAD_MS`, `SOTTO_APP_ECHO_SIM_DB` | daemon → app | Tests only, forwarded like `SOTTO_APP_TEST`: the app's capture mode, the native-mic fixture and the echo simulation (§6.16 "Native mic"). |
 | `SOTTO_MIRROR` | daemon | `all`, `decisions` or `off`: overrides userConfig `mirror` (§6.18) |
@@ -255,7 +258,7 @@ The user can change the voice without `/config`: `/talk voice <name>` (§5.7), t
   "$schema": "https://json.schemastore.org/claude-code-plugin-manifest.json",
   "name": "sotto",
   "displayName": "Sotto",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Full-duplex voice conversation with your running Claude Code session, powered by OpenAI gpt-live-1. Toggle with /talk.",
   "author": { "name": "Chad Boyda" },
   "repository": "https://github.com/chadboyda/sotto",
@@ -493,7 +496,7 @@ Claude Code adds a plugin's `bin/` to the Bash tool's `PATH` (plugins-reference.
 ```json
 {
   "name": "sotto",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "type": "module",
   "engines": { "node": ">=22.6" },
@@ -552,7 +555,7 @@ No `dependencies` and no `devDependencies`. Everything is ESM. Test files match 
 
 **`GET /healthz`** → 200:
 ```json
-{"ok":true,"name":"sotto","version":"0.1.0","pid":123,"port":47821,"data_dir":"<D>","plugin_root":"<ROOT>","state":"off","api_key":true}
+{"ok":true,"name":"sotto","version": "0.2.0","pid":123,"port":47821,"data_dir":"<D>","plugin_root":"<ROOT>","state":"off","api_key":true}
 ```
 `api_key` says whether the daemon has a key from any source (§4.3).
 
@@ -624,7 +627,7 @@ Messages are in §9.2.
 
 **`GET /api/bootstrap`** → 200:
 ```json
-{"page_token":"<hex>","version":"0.1.0","build":"<16 hex>","port":47821,"status":<PageStatus>}
+{"page_token":"<hex>","version": "0.2.0","build":"<16 hex>","port":47821,"status":<PageStatus>}
 ```
 `build` is a hash of `web/` as this daemon loaded it; a page that sees it change across a daemon restart reloads itself (§6.17).
 `PageStatus` is defined in §6.12. Cross-origin pages cannot read this response because there are no CORS headers, and the Host check blocks DNS rebinding.
@@ -1081,7 +1084,7 @@ A native macOS menu-bar app, **Sotto**, that shows the same voice page (`http://
 | `auto` | on macOS with a `ready` app: measure the audio route (`Sotto --audio-route`, about 0.4 s, in the background), then the app, **unless the system default input is a Bluetooth device** and Chrome exists (see "Audio" below) **and** the app cannot avoid it with its native mic (reason `native_mic` when it can: route `native_mic` true, `output.headphones` true and `builtin_input` true); else Chrome, else default |
 
 - App build state (`appBuildState`): `ready` (bundle built from the current sources hash), `stale`, `missing`, `failed` (a failed build of these exact sources; not retried), `building` (`build.lock` names a live pid), `nosource`.
-- `missing` or `stale` (for `app` and `auto`): start `scripts/build-app.sh --out D/app --quiet` **detached** (stdio to `logs/app-build.log`), and open Chrome this time. `/control` never waits for swiftc (about 10 to 20 s).
+- `missing` or `stale` (for `app` and `auto`): install the app **detached** (stdio to `logs/app-build.log`) and open Chrome this time: the release download below when it applies, which runs the local build itself if it fails, else `scripts/build-app.sh --out D/app --quiet`. `failed` (a local build that is not retried): the download only (`--no-build`), when it applies. `/control` never waits for a download or swiftc (about 10 to 20 s).
 - Sources hash: sha256 over `"<path>\n<sha256 hex>\n"` for every file of `app/**` plus `scripts/build-app.sh`, sorted by path. `appSourceHash()` and `build-app.sh --print-hash` compute the same value (unit-tested).
 - **Launch:** `open -g -a "D/app/Sotto.app" "sotto://open?port=<port>&k=<launch code>&data=<D>"`. `-g` keeps focus in the terminal; `-a <path>` targets this build whatever else LaunchServices knows under the scheme. The launch code is the same one-time code as the Chrome `#k=` fragment (§6.4).
 - **Fallbacks, then Chrome for the rest of this daemon's life:** `open` exits non-zero; or no page connects to `/api/events` within 15 s while the daemon still wants a window.
@@ -1118,7 +1121,11 @@ A native macOS menu-bar app, **Sotto**, that shows the same voice page (`http://
 - **Route changes** (default input, default output, device list; debounced 0.4 s): the app calls `window.__sottoMicRoute()`. A native capture whose plan moves to another device moves under the same track; a capture whose mode changes (speakers ↔ headphones) ends (`stop()` plus an `ended` event), and the page re-opens the mic as for an unplugged device. Known limit: while `sleeping` with no peer connection, an ended mic stops voice wake until the next connect.
 - Test mode: never a real microphone natively. `SOTTO_APP_MIC=native|webkit|auto` (env beats the preference), `SOTTO_APP_MIC_FIXTURE=<16-bit mono WAV>` (played in real time after `SOTTO_APP_MIC_FIXTURE_LEAD_MS`, default 1500; without a file, a quiet 440 Hz tone), `SOTTO_APP_ECHO_SIM_DB=<gain>` (mic.js mixes the remote voice back in 40 ms later: speakers without AEC). `daemon/window.js` forwards these to a test-mode launch. The test-mode page is muted (`_setPageMuted:` audio), so tests never play the model's voice out loud.
 
-**Build** (`scripts/build-app.sh [--out DIR] [--force] [--check] [--quiet] [--print-hash]`): skips when `build.json` has the current hash; one build at a time (`build.lock`); checks `xcode-select -p` before `xcrun --find swiftc` (the `/usr/bin` shims would pop up the install dialog); `swiftc -O` of `app/Sources/*.swift` for the host architecture, macOS 13+; copies Info.plist and Resources; signs **ad hoc with an explicit designated requirement** `identifier "com.chadboyda.sotto"` so a rebuild keeps the requirement the microphone permission (TCC) was granted to (`SOTTO_SIGN_IDENTITY` signs with a real identity instead); swaps the bundle in by rename.
+**Release download** (`daemon/appfetch.js`, `installPlan()` in window.js; SPEC-DEVIATIONS "Signed app release"): users need no Xcode. `node daemon/appfetch.js --out D/app --plugin-root <root> --hash <sources hash> [--base URL] [--no-build]` (same runtime as the daemon) downloads `https://github.com/chadboyda/sotto/releases/download/v<plugin.json version>/Sotto.zip` and `Sotto.zip.sha256` (redirects followed, 64 MB cap, 180 s timeout) while holding `build.lock`, and installs it only when all of these hold: the zip's sha256 equals the published one; the zip holds exactly `Sotto.app`; its `Contents/Resources/sotto-source.json` hash equals the plugin's sources hash (a release built from other sources, such as an edited `app/`, is never used); `codesign --verify --deep --strict` against `anchor apple generic and identifier "com.chadboyda.sotto" and certificate 1[field.1.2.840.113635.100.6.2.6] exists and certificate leaf[field.1.2.840.113635.100.6.1.13] exists and certificate leaf[subject.OU] = "6M6D2W72ZB"`; and `spctl -a -vv -t exec` accepts it with `source=Notarized Developer ID` and origin team `(6M6D2W72ZB)`. The bundle is swapped in by rename and `build.json` written with `"source":"release"`, so the chooser sees `ready`. Otherwise nothing is installed, the lock is released and `build-app.sh` runs (unless `--no-build`). Each attempt is recorded in `D/app/download.json`: one try per version and sources hash; `sources_mismatch` is final; other failures (404 before the release exists, network, signature) are retried after 24 h. `SOTTO_APP_DOWNLOAD=0` turns it off. The first Developer ID app replaces an ad hoc build's designated requirement, so macOS asks for the microphone once more.
+
+**Release** (`scripts/release-app.sh <version> [--upload]`, maintainer only): checks that `<version>` equals package.json, plugin.json and Info.plist and that the app sources are committed; `build-app.sh --force --universal` (arm64 + x86_64) with `SOTTO_SIGN_IDENTITY` = the Developer ID Application identity of team 6M6D2W72ZB (hardened runtime, secure timestamp, entitlements `com.apple.security.device.audio-input` only); checks architectures, team, runtime flag, timestamp and entitlements; `xcrun notarytool submit --keychain-profile sotto --wait`; `xcrun stapler staple` + `validate`; `codesign --verify --deep --strict`; `spctl -a -vv` must report `Notarized Developer ID`; `ditto -c -k --keepParent` into `dist/Sotto.zip`, `shasum -a 256` into `dist/Sotto.zip.sha256`, and `dist/release.json` (version, sources hash, sha256, notarization id, commit). `--upload` then runs `gh release create v<version> --verify-tag` with the two assets; nothing is published without it.
+
+**Build** (`scripts/build-app.sh [--out DIR] [--force] [--check] [--quiet] [--print-hash] [--universal]`): skips when `build.json` has the current hash; one build at a time (`build.lock`); checks `xcode-select -p` before `xcrun --find swiftc` (the `/usr/bin` shims would pop up the install dialog); `swiftc -O` of `app/Sources/*.swift` for the host architecture (`--universal`: arm64 and x86_64, joined with `lipo`), macOS 13+; copies Info.plist and Resources and writes `Contents/Resources/sotto-source.json` (`{"hash","version"}`); signs **ad hoc with an explicit designated requirement** `identifier "com.chadboyda.sotto"` so a rebuild keeps the requirement the microphone permission (TCC) was granted to (`SOTTO_SIGN_IDENTITY` signs with a real identity instead, adding `--options runtime --timestamp --entitlements app/Sotto.entitlements`); swaps the bundle in by rename.
 
 **Test mode** (`--test` or `SOTTO_APP_TEST=1`): panel hidden (transparent), no hotkeys, WebKit's mock microphone (no TCC prompt), separate defaults suite `com.chadboyda.sotto.test`, non-persistent web storage. `SOTTO_APP_DEBUG_LOG=<file>` (or `--debug-log`) writes JSONL: `launch`, `open`, `load_start`/`load_finish` (URL without fragment), `media_permission`, `bridge` (state only), `icon`, `close_window`, `probe`, `mic_pref`, `mic_route`, `native_mic_start`/`native_mic_stop`/`native_mic_error`, `native_mic_stats` (`transportMs`, `transportP95Ms` app → page, worklet `queueMs`, `underruns`, `drops`, `trims`, `echoDb` with the echo simulation). The native-mic settings are in "Native mic" above.
 
@@ -1585,7 +1592,7 @@ Unit tests: `test/daemon/update.test.js` (fingerprint, settle, quiet polling, fa
 Fake mic: 8 s lead, "Sotto is a clever name. I think we should go with that one.", 13 s, "Oh, and let me know when the auto restart is ready.", silence (TTS fixtures `decide-name.wav`, `ask-later.wav`). The test plays Claude through the real hook.sh (UserPromptSubmit on delivery, then Stop "Got it." / "Noted." for a mirror). Checks: each utterance reaches the inbox within 12 s of its last word, exactly once, delegated (`next`) or mirrored (`later`, tagged, `clv-mirror-`); reports which; WARN on a self-made promise in the voice's replies; hook.sh gives a mirror the voice context; a mirror turn's "Noted." is silent. About 40 billed seconds.
 
 ### 11.5 Desktop app (§6.16)
-- `npm test`: `test/daemon/window.test.js` (the chooser: precedence, every mode × build state × platform, the Bluetooth-input rule, background build without blocking, `open` failure and page watchdog fallbacks, close backstop; the sources hash equals `build-app.sh --print-hash`) and `test/scripts/app-static.test.js` (`bash -n`, Info.plist keys, and bridge.js run in a stub page: state only, no caption text or token, host API).
+- `npm test`: `test/daemon/appfetch.test.js` (release download against a local HTTP server standing in for GitHub, with a redirect: install and `ready` state, tampered zip rejected by sha256, a failed signature check leaves the old bundle, other sources refused for good, 404, extra zip entries, bad sha file, size cap, the real `codesign` rejecting an ad hoc bundle, the CLI's fallback to the local build with the lock released, `--no-build`) and `test/daemon/window.test.js` (the chooser: precedence, every mode × build state × platform, the Bluetooth-input rule, background build or release download without blocking, the download plan (`SOTTO_APP_DOWNLOAD=0`, a recent failure, a failed local build), `open` failure and page watchdog fallbacks, close backstop; the sources hash equals `build-app.sh --print-hash`) and `test/scripts/app-static.test.js` (`bash -n`, Info.plist keys, and bridge.js run in a stub page: state only, no caption text or token, host API).
 - `npm run test:app` (macOS with developer tools; not in `npm test` because the first build takes 10 to 20 s): build smoke test (Info.plist keys, signature and designated requirement, no-op rebuild), `--audio-route`, a direct launch against an in-process temp daemon on a spare port (page load with the launch code, SSE status, mic permission, mock-mic `getUserMedia` with `echoCancellation`, an `RTCPeerConnection` offer with Opus and a data channel, mic while hidden), and a LaunchServices launch (URL delivered before launch finishes, a second `open` reuses the process, `close_window` quits it).
 - `npm run test:app` also covers the native mic: `--audio-route` fields, `--mic-plan-eval` (headphones → native on the built-in mic, speakers → webkit, explicit choices, missing devices, preferences) and a launch with `SOTTO_APP_MIC=native` and the fixture (the fixture reaches the page's analyser, WebRTC offer, no WebKit capture requested, every native capture stopped, app → page transport p95 under 60 ms). `test/scripts/app-static.test.js` runs mic.js in a stub page (device list, permission, webkit mapping, native track, route move and mode flip, missing device).
 - `SOTTO_APP_LIVE=1 npm run test:app` adds `test/app/live.test.mjs`: the daemon opens the app through the real chooser, WebKit's WebRTC reaches a real `gpt-live-1` session, and `/control off` closes the panel and quits the app: once with WebKit's mock mic and once with the native mic fed the TTS fixture (gpt-live-1 must transcribe "files"; the worklet queue must stay under 45 ms). About 30 billed seconds. `SOTTO_APP_ECHO=1` (`SOTTO_APP_ECHO_DB`, default -10) adds the echo measurement: native mic plus the model's voice mixed back in, a long spoken answer, and a report of how much was spoken and what the model heard as the user (about 40 billed seconds).

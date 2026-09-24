@@ -7,8 +7,9 @@ import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import {
-  appBuildState, appPaths, appSourceHash, chooseWindow, createWindow, resolveWant, APP_PAGE_TIMEOUT_MS,
+  appBuildState, appPaths, appSourceHash, chooseWindow, createWindow, installPlan, resolveWant, APP_PAGE_TIMEOUT_MS,
 } from "../../daemon/window.js";
+import { RETRY_MS } from "../../daemon/appfetch.js";
 import { CHROME_APP } from "../../daemon/chrome.js";
 import { createFakeClock } from "../helpers/fake-clock.js";
 
@@ -144,8 +145,15 @@ describe("app build state and sources hash", () => {
 });
 
 /** createWindow with fakes: records spawns, answers --audio-route and ps. */
-function harness({ env = {}, built = true, route = { input: { bluetooth: false }, output: { bluetooth: true } }, running = false, platform = "darwin", chrome = true } = {}) {
+function harness({ env = {}, built = true, release = false, route = { input: { bluetooth: false }, output: { bluetooth: true } }, running = false, platform = "darwin", chrome = true } = {}) {
   const root = fakePlugin();
+  if (release) {
+    // A versioned plugin with the fetcher: the release download applies.
+    fs.mkdirSync(path.join(root, ".claude-plugin"), { recursive: true });
+    fs.writeFileSync(path.join(root, ".claude-plugin/plugin.json"), JSON.stringify({ name: "sotto", version: "1.2.3" }));
+    fs.mkdirSync(path.join(root, "daemon"), { recursive: true });
+    fs.writeFileSync(path.join(root, "daemon/appfetch.js"), "");
+  }
   const data = tmp();
   const p = built ? stamp(root, data) : appPaths(data, root);
   const clock = createFakeClock();
@@ -272,6 +280,50 @@ describe("createWindow", () => {
     assert.deepEqual(h.spawned[0], ["/bin/bash", path.join(h.root, "scripts/build-app.sh"), "--out", h.p.dir, "--quiet"]);
     assert.deepEqual(h.browserCalls, ["chrome"]);
     assert.ok(fs.existsSync(h.p.buildLog), "build output goes to logs/app-build.log");
+  });
+
+  test("first /talk with a release to try: the detached download (which builds on failure), Chrome now", () => {
+    const h = harness({ built: false, release: true });
+    assert.equal(h.w.open().mode, "chrome");
+    assert.deepEqual(h.spawned[0], [process.execPath, path.join(h.root, "daemon/appfetch.js"), "--out", h.p.dir, "--plugin-root", h.root, "--hash", appSourceHash(h.root)]);
+    assert.deepEqual(h.browserCalls, ["chrome"]);
+    // SOTTO_APP_DOWNLOAD=0 skips it; SOTTO_RELEASE_BASE is passed through.
+    const off = harness({ built: false, release: true, env: { SOTTO_APP_DOWNLOAD: "0" } });
+    off.w.open();
+    assert.equal(off.spawned[0][0], "/bin/bash");
+    const based = harness({ built: false, release: true, env: { SOTTO_RELEASE_BASE: "http://127.0.0.1:9/r" } });
+    based.w.open();
+    assert.deepEqual(based.spawned[0].slice(-2), ["--base", "http://127.0.0.1:9/r"]);
+  });
+
+  test("a recent failed download of this version goes straight to the local build", () => {
+    const h = harness({ built: false, release: true });
+    fs.mkdirSync(h.p.dir, { recursive: true });
+    fs.writeFileSync(path.join(h.p.dir, "download.json"), JSON.stringify({ version: "1.2.3", hash: appSourceHash(h.root), ok: false, at: new Date().toISOString() }));
+    h.w.open();
+    assert.equal(h.spawned[0][0], "/bin/bash");
+  });
+
+  test("a failed local build (never retried) still gets one download try, without a build", () => {
+    const h = harness({ built: false, release: true });
+    stamp(h.root, h.data, { ok: false, exe: false });
+    h.w.open();
+    assert.equal(h.spawned.length, 1);
+    assert.equal(h.spawned[0].at(-1), "--no-build");
+    fs.writeFileSync(path.join(h.p.dir, "download.json"), JSON.stringify({ version: "1.2.3", hash: appSourceHash(h.root), ok: false, at: new Date().toISOString() }));
+    h.w.open();
+    assert.equal(h.spawned.length, 1, "no second try within a day, and no build");
+  });
+
+  test("installPlan", () => {
+    const base = { version: "1.0.0", hash: "h", now: 1e12 };
+    assert.equal(installPlan({ ...base }), "download");
+    assert.equal(installPlan({ ...base, env: { SOTTO_APP_DOWNLOAD: "0" } }), "build");
+    assert.equal(installPlan({ ...base, version: null }), "build");
+    assert.equal(installPlan({ ...base, allowBuild: false, version: null }), null);
+    const failed = { version: "1.0.0", hash: "h", ok: false, at: new Date(1e12 - 1000).toISOString() };
+    assert.equal(installPlan({ ...base, stamp: failed }), "build");
+    assert.equal(installPlan({ ...base, stamp: failed, now: 1e12 + RETRY_MS }), "download");
   });
 
   test("a build already running is not started twice", () => {

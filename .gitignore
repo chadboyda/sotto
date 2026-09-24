@@ -11,3 +11,6 @@ private/
 docs/experiments/*/hooklog.txt
 docs/experiments/*/monlog.txt
 docs/experiments/*/*.jsonl
+
+# Release build output (scripts/release-app.sh)
+dist/

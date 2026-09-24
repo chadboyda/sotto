@@ -8,6 +8,7 @@ import { createHash } from "node:crypto";
 import { spawn as spawnCb, execFile as execFileCb } from "node:child_process";
 import { CHROME_APP, createChrome } from "./chrome.js";
 import { WINDOW_MODES } from "./config.js";
+import { RELEASE_BASE, pluginVersion, readDownloadStamp, shouldDownload } from "./appfetch.js";
 
 export const APP_BUNDLE = "Sotto.app";
 export const APP_EXE = "Sotto";
@@ -30,6 +31,7 @@ export function appPaths(dataDir, pluginRoot) {
     lock: path.join(dir, "build.lock"),
     buildLog: path.join(dataDir, "logs", "app-build.log"),
     script: pluginRoot ? path.join(pluginRoot, "scripts", "build-app.sh") : null,
+    fetcher: pluginRoot ? path.join(pluginRoot, "daemon", "appfetch.js") : null,
   };
 }
 
@@ -91,6 +93,21 @@ export function appBuildState({ pluginRoot, dataDir, fsImpl = fs, kill = process
     if (stamp.ok === false) return { state: "failed", hash: h, error: String(stamp.error || "build failed") };
   }
   return { state: exe ? "stale" : "missing", hash: h };
+}
+
+/**
+ * How to get an app bundle (SPEC §6.16 "Release download"), pure:
+ *   "download"  the signed release of this version (daemon/appfetch.js; on
+ *               failure it runs the local build itself unless `allowBuild` is false)
+ *   "build"     scripts/build-app.sh directly
+ *   null        nothing to do
+ * `allowBuild` is false for a `failed` local build (never retried): only a
+ * download can still produce the app then.
+ */
+export function installPlan({ allowBuild = true, env = {}, version, hash, stamp, now = Date.now() }) {
+  const enabled = env.SOTTO_APP_DOWNLOAD !== "0";
+  if (enabled && shouldDownload({ stamp, version, hash, now })) return "download";
+  return allowBuild ? "build" : null;
 }
 
 /** Requested mode: SOTTO_NO_BROWSER=1 > SOTTO_BROWSER > userConfig `window` > auto. */
@@ -185,6 +202,30 @@ export function createWindow({
     return !!child;
   }
 
+  /** Download the release (then build), or just build; detached either way. */
+  function startInstall({ allowBuild = true, hash } = {}) {
+    const plan = installPlan({
+      allowBuild, env, version: pluginVersion(pluginRoot, fsImpl), hash,
+      stamp: readDownloadStamp(p.dir, fsImpl), now: timers.now ? timers.now() : Date.now(),
+    });
+    if (plan === "build") return startBuild();
+    if (plan !== "download" || !p.fetcher || !exists(p.fetcher)) return false;
+    let fd = "ignore";
+    try {
+      fsImpl.mkdirSync(path.dirname(p.buildLog), { recursive: true, mode: 0o700 });
+      fd = fsImpl.openSync(p.buildLog, "a", 0o600);
+    } catch { /* log to nowhere */ }
+    const args = [p.fetcher, "--out", p.dir, "--plugin-root", pluginRoot, "--hash", hash];
+    const base = String(env.SOTTO_RELEASE_BASE || "").trim();
+    if (base && base !== RELEASE_BASE) args.push("--base", base);
+    if (!allowBuild) args.push("--no-build");
+    // Same runtime as the daemon (Node, or Bun as its fallback).
+    const child = detached(process.execPath, args, { stdio: ["ignore", fd, fd] });
+    if (typeof fd === "number") { try { fsImpl.closeSync(fd); } catch { /* ignore */ } }
+    log?.info("app.download_start", { pid: child?.pid ?? null, build_fallback: allowBuild });
+    return !!child;
+  }
+
   function fallback(reason) {
     appBroken = true;
     log?.warn("app.fallback", { reason });
@@ -241,7 +282,8 @@ export function createWindow({
       const chromeExists = exists(CHROME_APP);
       const c = chooseWindow({ want, platform, app, chromeExists, route: freshRoute(), appBroken });
       log?.info("window.choose", { want, mode: c.mode, reason: c.reason, app: app?.state ?? null });
-      if (c.build) startBuild();
+      if (c.build) startInstall({ hash: app.hash });
+      else if (app?.state === "failed") startInstall({ allowBuild: false, hash: app.hash });
       if (c.mode === "none") return { mode: "none" };
       if (c.mode !== "app") return browser.open(c.mode);
       if (!c.needRoute) { launchApp(); return { mode: "app" }; }

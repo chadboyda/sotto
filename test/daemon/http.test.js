@@ -44,7 +44,7 @@ test("healthz shape and no-store", async (t) => {
   assert.equal(r.status, 200);
   assert.equal(r.headers["cache-control"], "no-store");
   assert.equal(r.headers["access-control-allow-origin"], undefined);
-  assert.deepEqual(r.json, { ok: true, name: "sotto", version: "0.1.0", pid: process.pid, port: h.port, data_dir: h.dataDir, plugin_root: h.pluginRoot, state: "off", api_key: true });
+  assert.deepEqual(r.json, { ok: true, name: "sotto", version: "0.2.0", pid: process.pid, port: h.port, data_dir: h.dataDir, plugin_root: h.pluginRoot, state: "off", api_key: true });
 });
 
 test("421 on a bad Host header", async (t) => {
@@ -167,7 +167,7 @@ test("bootstrap returns the page token; SSE requires it and sends status first",
   const h = await server(t);
   const b = (await h.req({ path: "/api/bootstrap", headers: { "X-Sotto-Boot": h.d.pageSecret } })).json;
   assert.equal(b.page_token, h.d.pageToken);
-  assert.equal(b.version, "0.1.0");
+  assert.equal(b.version, "0.2.0");
   assert.match(b.build, /^[0-9a-f]{16}$/, "web/ build hash (the page reloads when it changes, §6.17)");
   assert.equal(b.port, h.port);
   assert.equal(b.status.state, "off");

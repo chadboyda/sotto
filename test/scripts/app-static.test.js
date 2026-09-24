@@ -16,6 +16,36 @@ test("build-app.sh parses under /bin/bash and is executable", () => {
   assert.ok(fs.statSync(f).mode & 0o111);
 });
 
+test("release-app.sh parses, is executable, and only uploads behind --upload", () => {
+  const f = path.join(ROOT, "scripts/release-app.sh");
+  assert.equal(spawnSync("/bin/bash", ["-n", f]).status, 0);
+  assert.ok(fs.statSync(f).mode & 0o111);
+  const src = fs.readFileSync(f, "utf8");
+  const create = src.lastIndexOf("gh release create");
+  assert.ok(create > 0 && src.lastIndexOf("if [[ $UPLOAD -eq 1 ]]", create) > 0, "gh release create sits behind --upload");
+  assert.match(src, /notarytool submit .*--wait/);
+  assert.match(src, /stapler staple/);
+  // Refuses a version that does not match the manifests, before building anything.
+  const r = spawnSync("/bin/bash", [f, "99.99.99"], { encoding: "utf8" });
+  assert.notEqual(r.status, 0);
+  assert.match(r.stderr, /version/);
+});
+
+test("entitlements: the microphone and nothing else", { skip: process.platform !== "darwin" }, () => {
+  const r = spawnSync("plutil", ["-convert", "json", "-o", "-", path.join(ROOT, "app/Sotto.entitlements")], { encoding: "utf8" });
+  assert.equal(r.status, 0, r.stderr);
+  assert.deepEqual(JSON.parse(r.stdout), { "com.apple.security.device.audio-input": true });
+});
+
+test("one version everywhere: package.json, plugin.json, Info.plist, daemon VERSION", { skip: process.platform !== "darwin" }, async () => {
+  const pkg = JSON.parse(fs.readFileSync(path.join(ROOT, "package.json"), "utf8")).version;
+  assert.equal(JSON.parse(fs.readFileSync(path.join(ROOT, ".claude-plugin/plugin.json"), "utf8")).version, pkg);
+  const plist = spawnSync("plutil", ["-extract", "CFBundleShortVersionString", "raw", "-o", "-", path.join(ROOT, "app/Info.plist")], { encoding: "utf8" }).stdout.trim();
+  assert.equal(plist, pkg);
+  const { VERSION } = await import("../../daemon/config.js");
+  assert.equal(VERSION, pkg);
+});
+
 test("Info.plist has the keys the app relies on", { skip: process.platform !== "darwin" }, () => {
   const r = spawnSync("plutil", ["-convert", "json", "-o", "-", path.join(ROOT, "app/Info.plist")], { encoding: "utf8" });
   assert.equal(r.status, 0, r.stderr);

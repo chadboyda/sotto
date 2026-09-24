@@ -1,6 +1,6 @@
 {
   "name": "sotto",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "type": "module",
   "engines": { "node": ">=22.6" },
@@ -15,6 +15,7 @@
     "e2e:decisions": "node test/e2e/decisions.mjs",
     "test:app": "node --test test/app/*.test.mjs",
     "build:app": "bash scripts/build-app.sh",
+    "release:app": "bash scripts/release-app.sh",
     "e2e:fixture": "node test/e2e/make-fixture.mjs",
     "validate": "claude plugin validate . --strict",
     "hooks:install": "git config core.hooksPath .githooks"

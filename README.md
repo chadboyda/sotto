@@ -21,7 +21,7 @@ you (speaking) ──▶ gpt-live-1 ──delegates──▶ your Claude Code se
 - **macOS** (tested on macOS 26, Apple silicon). The daemon and page are portable, but the hooks, window handling and desktop app are only tested on macOS.
 - **Claude Code 2.1.281 or later** (it needs cross-session messaging and the `MessageDisplay` and `UserPromptExpansion` hooks).
 - **Node.js 22.6 or later** on `PATH`. There are no npm dependencies. If your `node` is older (or missing), [Bun](https://bun.sh) 1.1 or later works too: `/talk` uses it automatically, and tells you how to install one if neither is there.
-- **A voice window:** Google Chrome, or Xcode / the Command Line Tools (`xcode-select --install`) so the plugin can build the native **Sotto** desktop app. Chrome is recommended either way as the fallback: its echo cancellation lets you use laptop speakers without the voice hearing itself. With neither, the page opens in your default browser.
+- **A voice window:** the native **Sotto** desktop app (downloaded signed and notarized on first use; no Xcode needed), or Google Chrome. Chrome is recommended either way as the fallback: its echo cancellation lets you use laptop speakers without the voice hearing itself. With neither, the page opens in your default browser.
 - **An OpenAI API key with access to `gpt-live-1`.** Voice is billed by OpenAI to that key (see [Cost](#cost)).
 
 ## Install
@@ -95,7 +95,7 @@ In the voice window: **M** (or Space) mutes and unmutes, **Space** resumes after
 
 On macOS the voice window is a small native app, **Sotto**: a menu-bar icon plus a floating panel that shows the same voice page as the Chrome window. It stays on top on every Space without taking focus from your terminal.
 
-- **First `/talk`:** the plugin builds the app in the background (about 10 to 20 s, needs Xcode or the Command Line Tools) and uses Chrome this time. From the next `/talk` on, the app opens. It lives in the plugin data directory (`app/Sotto.app`) and rebuilds itself when the plugin's `app/` sources change. Build output: `logs/app-build.log`.
+- **First `/talk`:** the plugin downloads the app for its version from the [GitHub releases](https://github.com/chadboyda/sotto/releases) in the background (about 350 KB, universal, signed with a Developer ID and notarized by Apple) and uses Chrome this time. It installs the download only after checking its sha256, that it was built from this plugin's `app/` sources, its code signature (team 6M6D2W72ZB) and Gatekeeper's notarization check. If any of that fails, or you edited `app/`, it builds the app locally instead (about 10 to 20 s, needs Xcode or the Command Line Tools: `xcode-select --install`). From the next `/talk` on, the app opens. It lives in the plugin data directory (`app/Sotto.app`) and is replaced when the plugin's `app/` sources change. Output: `logs/app-build.log`. `SOTTO_APP_DOWNLOAD=0` always builds locally.
 - **First app launch:** macOS asks "Sotto would like to access the microphone". Click **Allow** once. If you clicked Don't Allow, turn it on in System Settings → Privacy & Security → Microphone → Sotto.
 - **Menu-bar icon:** shows off, connecting, paused, sleeping, listening, you speaking, Sotto speaking, Claude working, muted, or a warning. Its menu has Show/Hide Panel, Compact Panel (a small pill with a mute button), Mute, Voice Off, Open Logs, and Quit.
 - **Hotkeys, anywhere:** **⌥⌘M** mute or unmute, **⌥⌘T** show or hide the panel. To change them: `defaults write com.chadboyda.sotto HotkeyMute "ctrl+opt+m"` (or `HotkeyShow`), then relaunch the app. Use `ctrl`, `opt`, `shift`, `cmd` plus a letter, digit, `space` or `f1`-`f12`.
@@ -203,6 +203,7 @@ Environment overrides, for debugging and tests:
 | `SOTTO_MIRROR=all\|decisions\|off` | Overrides the `mirror` option |
 | `SOTTO_OPENAI_BASE` | Replace `https://api.openai.com/v1` (tests) |
 | `SOTTO_SIGN_IDENTITY` | Sign the desktop app with this identity instead of ad hoc |
+| `SOTTO_APP_DOWNLOAD` | `0`: never download the signed desktop app; build it locally |
 | `SOTTO_VOCAB=0` | Leave the vocabulary glossary out of the voice instructions and delegated prompts |
 | `SOTTO_WAKE_TRANSCRIBE_MODEL` | Model for the wake clip (default `gpt-transcribe`, fallback `gpt-4o-mini-transcribe`) |
 | `SOTTO_KEYCHAIN=0` | Do not use the macOS Keychain for the API key |
@@ -304,7 +305,10 @@ npm run e2e:fixture    # regenerate test/fixtures/ask-files.wav with OpenAI TTS
 npm run build:app      # build the desktop app into ${CLAUDE_PLUGIN_DATA:-~/.sotto}/app (incremental)
 npm run test:app       # app build smoke + launch tests (temp daemon, mock mic); SOTTO_APP_LIVE=1 adds a real gpt-live-1 session
 npm run hooks:install  # use .githooks/pre-commit (tests + validate + secret scan)
+npm run release:app -- 0.2.0 [--upload]  # maintainers: universal Developer ID build, notarize, staple, zip + sha256 into dist/
 ```
+
+**Releasing the desktop app** (maintainers): bump the version in `package.json`, `.claude-plugin/plugin.json`, `app/Info.plist` and `daemon/config.js` together (a unit test checks they agree), commit, then run `npm run release:app -- <version>`. It needs the Developer ID Application certificate in the login keychain and a notarytool profile named `sotto` (`xcrun notarytool store-credentials sotto --apple-id ... --team-id 6M6D2W72ZB`). It submits the build to Apple and waits (a minute or so), staples the ticket, and leaves `dist/Sotto.zip`, `dist/Sotto.zip.sha256` and `dist/release.json`. Push the tag `v<version>`, then rerun with `--upload` (or `gh release create v<version> dist/Sotto.zip dist/Sotto.zip.sha256`). The release must be built from the tagged commit: the plugin only installs a release whose `app/` sources hash equals its own.
 
 `npm run e2e` runs the real product with a stand-in for Claude:
 
