@@ -92,6 +92,7 @@ function hookEnv() {
     CLAUDE_CODE_MESSAGING_TOKEN: INBOX_TOKEN,
     CLAUDE_PROJECT_DIR: REPO,
     SOTTO_NO_BROWSER: "1", // the test drives its own headless Chrome
+    SOTTO_UPDATE: "0", // an edit to this checkout mid-run must not restart the test daemon
     SOTTO_KEYCHAIN_SERVICE: SERVICE,
   });
 }

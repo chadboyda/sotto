@@ -233,7 +233,11 @@ KEYFILE="$D/daemon.key"
 H="$(healthz)"
 if [[ -n "$H" ]]; then
   if [[ "$H" != *'"name":"sotto"'* ]]; then
-    fail port_in_use "sotto: ERROR port $PORT is used by another program. Choose another port in /config (sotto)."
+    # Name the program when it says who it is (e.g. an older voice daemon
+    # that also answers /healthz), so the user knows what to stop.
+    re_nm='"name":"([A-Za-z0-9._-]{1,40})"'
+    WHO=""; [[ "$H" =~ $re_nm ]] && WHO=" (${BASH_REMATCH[1]})"
+    fail port_in_use "sotto: ERROR port $PORT is used by another program$WHO. Choose another port in /config (sotto), or stop that program."
   fi
   re_dd='"data_dir":"((\\.|[^"\\])*)"'
   re_pr='"plugin_root":"((\\.|[^"\\])*)"'

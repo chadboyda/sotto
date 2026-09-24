@@ -71,6 +71,8 @@ const RESTART_WAIT_WORDS = {
   recent_speech: "the conversation",
   speech_queued: "the conversation",
   wake_queue: "a message is waiting to be spoken",
+  key_check: "the API key check",
+  voice_sample: "a voice sample",
 };
 
 export function newCounters() {
@@ -1611,7 +1613,8 @@ export class Voice {
    * Quiet means: an owner is bound; sleeping or paused, or live with nobody
    * speaking for `quietMs` (both sides, the page's voice activity and our own
    * appends count); no voice request with Claude, Claude not mid-turn, nothing
-   * queued to be spoken. Never mid-speech, never mid-delegation.
+   * queued to be spoken, no key check or voice sample in flight. Never
+   * mid-speech, never mid-delegation.
    */
   restartBlocker(quietMs) {
     if (this.restarting) return "restarting";
@@ -1622,6 +1625,10 @@ export class Voice {
     if (this.delegation.claudeBusy) return "claude_busy";
     if (this.wakeQueue.length || this.timers.notifyWatch) return "wake_queue";
     if (this.speech.size > 0) return "speech_queued";
+    // The page is waiting on these answers; a swap would drop the request
+    // (and a voice sample's billed seconds would never be booked).
+    if (this.keySaving) return "key_check";
+    if (this.previews.inflight.size > 0) return "voice_sample";
     if (st === "live") {
       const now = this.clock.now();
       if (this.speech.isSpeaking(now)) return "speaking";
@@ -1703,6 +1710,8 @@ export class Voice {
       pause_reason: this.pauseReason || null,
       window_app: !!this.chrome?.appLaunched,
       awaiting: this.awaiting ? { ...this.awaiting } : null,
+      // The page shows the key card: a paused first run (no key yet) keeps it.
+      key_setup: !!this.keySetup,
     };
   }
 
@@ -1734,6 +1743,8 @@ export class Voice {
     this.pauseReason = snap.pause_reason || null;
     // Claude is still waiting for the user's answer (§6.10.3): the next session's seed says so.
     this.awaiting = snap.awaiting && typeof snap.awaiting.text === "string" ? { text: clip(snap.awaiting.text, 300), at: Number(snap.awaiting.at) || 0, via: snap.awaiting.via === "ask" ? "ask" : "stop" } : null;
+    // Key setup card (§4.3): still wanted only while there is no key.
+    this.keySetup = !!snap.key_setup && !this.getApiKey();
     if (snap.window_app) this.chrome?.adoptApp?.();
     try { writeActive(this.paths, { socket: this.owner.socket, port: this.port, key: this.daemonKey, nonce: this.nonce }); } catch (e) { this.log.error("active.write_error", { message: e.message }); }
     this.vocabularyFor(this.owner);

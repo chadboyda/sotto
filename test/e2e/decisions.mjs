@@ -86,6 +86,7 @@ function hookEnv() {
     CLAUDE_PLUGIN_OPTION_DAILY_CAP_MINUTES: "10", CLAUDE_PLUGIN_OPTION_IDLE_SECONDS: "0",
     CLAUDE_CODE_MESSAGING_SOCKET: SOCK, CLAUDE_CODE_MESSAGING_TOKEN: INBOX_TOKEN, CLAUDE_PROJECT_DIR: REPO,
     SOTTO_NO_BROWSER: "1",
+    SOTTO_UPDATE: "0", // an edit to this checkout mid-run must not restart the test daemon
     // Never read the user's real Keychain item (the key comes from .env or the env).
     SOTTO_KEYCHAIN_SERVICE: `sotto-e2e-dec-${process.pid}`,
   });

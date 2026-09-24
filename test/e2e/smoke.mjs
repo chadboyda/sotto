@@ -91,6 +91,8 @@ function hookEnv() {
     CLAUDE_CODE_MESSAGING_TOKEN: INBOX_TOKEN,
     CLAUDE_PROJECT_DIR: REPO,
     SOTTO_NO_BROWSER: "1", // the test drives its own headless Chrome
+    SOTTO_KEYCHAIN_SERVICE: `sotto-e2e-smoke-${process.pid}`, // never the user's real Keychain item
+    SOTTO_UPDATE: "0", // an edit to this checkout mid-run must not restart the test daemon
   });
 }
 
@@ -324,8 +326,11 @@ async function main() {
   const prev = await fetch(`${BASE}/api/voice-preview?voice=sage`, { headers: { "X-Sotto-Page": boot.page_token } });
   const prevMs = Date.now() - tPrev;
   const prevWav = Buffer.from(await prev.arrayBuffer());
-  const prevAudioMs = prevWav.length > 44 ? Math.round(((prevWav.length - 44) / 48000) * 1000) : 0;
-  check("voice preview: first request records a WAV", prev.status === 200 && prev.headers.get("content-type") === "audio/wav" && prevWav.toString("ascii", 0, 4) === "RIFF" && prevAudioMs > 800 && prevAudioMs < 6000, `${prev.status}, ${prevAudioMs} ms of audio in ${prevMs} ms`);
+  const prevIsWav = prevWav.toString("ascii", 0, 4) === "RIFF";
+  const prevAudioMs = prevIsWav && prevWav.length > 44 ? Math.round(((prevWav.length - 44) / 48000) * 1000) : 0;
+  // On failure, say why (the error code, and what the daemon logged per attempt).
+  const prevWhy = prevIsWav ? "" : ` ${prevWav.toString("utf8").slice(0, 160)} ${JSON.stringify(readLog().filter((e) => /^preview\.(failed|retry|nudge|error)$/.test(e.ev)).map((e) => [e.ev, e.code || null, e.ms ?? null]))}`;
+  check("voice preview: first request records a WAV", prev.status === 200 && prev.headers.get("content-type") === "audio/wav" && prevIsWav && prevAudioMs > 800 && prevAudioMs < 6000, `${prev.status}, ${prevAudioMs} ms of audio in ${prevMs} ms${prevWhy}`);
   timings.voice_preview_first_ms = prevMs;
   const tPrev2 = Date.now();
   const prev2 = await fetch(`${BASE}/api/voice-preview?voice=sage`, { headers: { "X-Sotto-Page": boot.page_token } });

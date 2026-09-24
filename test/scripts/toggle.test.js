@@ -419,7 +419,15 @@ describe("toggle.sh with something else on the port", () => {
     const { env } = await setup({ CLAUDE_PLUGIN_OPTION_PORT: String(foreign.port) });
     cleanups.push(() => foreign.close());
     const out = parseOut(await run(TOGGLE, { env, input: stdinFor("on") }));
-    assert.equal(out.stopReason, `sotto: ERROR port ${foreign.port} is used by another program. Choose another port in /config (sotto).`);
+    assert.equal(out.stopReason, `sotto: ERROR port ${foreign.port} is used by another program. Choose another port in /config (sotto), or stop that program.`);
+  });
+
+  test("another program that names itself in /healthz is named in the error", async () => {
+    const foreign = await startFakeDaemon({ handler: () => ({ status: 200, body: JSON.stringify({ ok: true, name: "old-voice", port: 1 }) }) });
+    const { env } = await setup({ CLAUDE_PLUGIN_OPTION_PORT: String(foreign.port) });
+    cleanups.push(() => foreign.close());
+    const out = parseOut(await run(TOGGLE, { env, input: stdinFor("status") }));
+    assert.equal(out.stopReason, `sotto: ERROR port ${foreign.port} is used by another program (old-voice). Choose another port in /config (sotto), or stop that program.`);
   });
 
   test("daemon answering non-JSON to /control -> did-not-answer error", async () => {

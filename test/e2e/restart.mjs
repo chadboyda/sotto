@@ -91,6 +91,7 @@ function hookEnv() {
     // The copy has no .env; the daemon inherits the key from its environment.
     OPENAI_API_KEY: apiKey,
     SOTTO_NO_BROWSER: "1",
+    SOTTO_KEYCHAIN_SERVICE: `sotto-e2e-restart-${process.pid}`, // never the user's real Keychain item
     SOTTO_VOCAB: "0",
     SOTTO_UPDATE_CHECK_MS: "1000",
     SOTTO_UPDATE_SETTLE_MS: "500",

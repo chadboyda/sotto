@@ -242,3 +242,44 @@ test("auto: while sleeping, the restart happens as soon as the change has settle
   assert.equal(restarts[0].state, "sleeping");
   assert.ok(h.clock.now() - t0 <= CHECK_MS + SETTLE_MS);
 });
+
+test("restartBlocker: a key check or a voice sample in flight holds the restart (the page waits on it)", async (t) => {
+  const h = await makeHarness();
+  t.after(() => h.cleanup());
+  const ws = await h.goLive();
+  const p = h.voice.pause("pause");
+  h.closeReply(ws);
+  await p;
+  assert.equal(h.voice.restartBlocker(QUIET_MS), null);
+  h.voice.keySaving = true;
+  assert.equal(h.voice.restartBlocker(QUIET_MS), "key_check");
+  h.voice.keySaving = false;
+  let done;
+  h.voice.previews.inflight.set("sage", new Promise((r) => { done = r; }));
+  assert.equal(h.voice.restartBlocker(QUIET_MS), "voice_sample");
+  h.voice.previews.inflight.delete("sage");
+  done();
+  assert.equal(h.voice.restartBlocker(QUIET_MS), null);
+});
+
+test("a first run waiting for its key keeps the key card across a restart", async (t) => {
+  const a = await makeHarness({ env: {} });
+  t.after(() => a.cleanup());
+  const on = a.voice.control({ action: "on", session: SESSION(), config: { open_browser: true } });
+  assert.match(on.message, /no OpenAI API key yet/);
+  assert.equal(a.voice.state, "paused");
+  assert.equal(a.voice.keySetup, true);
+  const snap = a.voice.snapshot(await a.voice.prepareRestart("update"));
+  assert.equal(snap.key_setup, true);
+  const b = await makeHarness({ env: {}, dataDir: a.dataDir, daemonKey: a.d.daemonKey, pageToken: a.d.pageToken });
+  t.after(() => b.cleanup());
+  assert.equal(b.voice.restore(JSON.parse(JSON.stringify(snap))), true);
+  assert.equal(b.voice.state, "paused");
+  assert.equal(b.voice.pageStatus().key.setup, true, "the page still shows the key card");
+
+  // With a key by now (e.g. exported, or saved from a terminal), no card.
+  const c = await makeHarness({ dataDir: a.dataDir, daemonKey: a.d.daemonKey, pageToken: a.d.pageToken });
+  t.after(() => c.cleanup());
+  c.voice.restore(JSON.parse(JSON.stringify(snap)));
+  assert.equal(c.voice.pageStatus().key.setup, false);
+});
