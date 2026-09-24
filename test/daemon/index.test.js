@@ -14,8 +14,10 @@ after(() => { for (const d of homes) fs.rmSync(d, { recursive: true, force: true
 const envNoKey = () => {
   const home = tmpDir("clv-home-");
   homes.push(home);
-  const e = { ...process.env, HOME: home, SOTTO_BROWSER: "none" };
+  // A Keychain service nobody uses, so a key the user saved never leaks in.
+  const e = { ...process.env, HOME: home, SOTTO_BROWSER: "none", SOTTO_KEYCHAIN_SERVICE: `sotto-test-none-${process.pid}` };
   delete e.OPENAI_API_KEY;
+  delete e.CLAUDE_PLUGIN_OPTION_OPENAI_API_KEY;
   return e;
 };
 
@@ -65,7 +67,7 @@ test("start: pid/key files, stale cleanup, healthz, single instance, SIGTERM cle
   });
   const cj = await ctl.json();
   assert.equal(cj.continue, false);
-  assert.match(cj.stopReason, /OPENAI_API_KEY was not found/);
+  assert.match(cj.stopReason, process.platform === "darwin" ? /no OpenAI API key yet\. Run \/talk key to add it\./ : /OPENAI_API_KEY was not found/);
   assert.ok(fs.existsSync(path.join(D, "active")));
   child.kill("SIGTERM");
   const code = await new Promise((r) => child.once("exit", (c) => r(c)));
@@ -95,7 +97,7 @@ test("createDaemon().listen() records the bound port in D/daemon.port (0600)", a
   const { createDaemon } = await import("../../daemon/index.js");
   const D = tmpDir("clv-d-");
   const port = await freePort();
-  const d = createDaemon({ dataDir: D, port, pluginRoot: makePluginRoot(), env: { SOTTO_BROWSER: "none" }, daemonKey: "k".repeat(64) });
+  const d = createDaemon({ dataDir: D, port, pluginRoot: makePluginRoot(), env: { SOTTO_BROWSER: "none", SOTTO_KEYCHAIN: "0" }, daemonKey: "k".repeat(64) });
   try {
     assert.ok(!fs.existsSync(path.join(D, "daemon.port")), "not written before listening");
     assert.equal(await d.listen(), port);

@@ -44,7 +44,7 @@ test("healthz shape and no-store", async (t) => {
   assert.equal(r.status, 200);
   assert.equal(r.headers["cache-control"], "no-store");
   assert.equal(r.headers["access-control-allow-origin"], undefined);
-  assert.deepEqual(r.json, { ok: true, name: "sotto", version: "0.1.0", pid: process.pid, port: h.port, data_dir: h.dataDir, plugin_root: h.pluginRoot, state: "off" });
+  assert.deepEqual(r.json, { ok: true, name: "sotto", version: "0.1.0", pid: process.pid, port: h.port, data_dir: h.dataDir, plugin_root: h.pluginRoot, state: "off", api_key: true });
 });
 
 test("421 on a bad Host header", async (t) => {
@@ -105,7 +105,7 @@ test("/status is the full Status object", async (t) => {
   const h = await server(t);
   await h.req({ method: "POST", path: "/control", body: { action: "on", session: SESSION(), config: {} }, headers: h.key });
   const s = (await h.req({ path: "/status", headers: h.key })).json;
-  assert.deepEqual(Object.keys(s), ["state", "owner", "live", "today", "config", "claude", "page", "delegations", "counters", "last_error", "wake"]);
+  assert.deepEqual(Object.keys(s), ["state", "owner", "live", "today", "config", "claude", "page", "delegations", "counters", "last_error", "wake", "api_key"]);
   assert.deepEqual(Object.keys(s.counters), ["delegations", "inbox_sent", "inbox_failed", "thinking_sent", "commentary_sent", "instructions_sent", "appends_acked", "appends_failed", "hooks", "sessions_created"]);
   assert.equal(s.live, null);
   assert.equal(s.owner.project, "proj-a");

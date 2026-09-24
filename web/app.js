@@ -59,6 +59,16 @@ const el = {
   wakeSelect: $("wake-select"),
   promptPointer: $("prompt-pointer"),
   keyField: $("key-field"),
+  keyInput: $("api-key-input"),
+  keySave: $("api-key-save"),
+  keyError: $("api-key-error"),
+  keySummary: $("key-summary"),
+  keyChangeBtn: $("key-change-btn"),
+  keyRemoveBtn: $("key-remove-btn"),
+  keyEdit: $("key-edit"),
+  keyEditInput: $("key-edit-input"),
+  keyEditSave: $("key-edit-save"),
+  keyHelp: $("key-help"),
   claude: $("claude"),
   claudeTitle: $("claude-title"),
   claudeTime: $("claude-time"),
@@ -448,6 +458,7 @@ function applyStatus(st) {
     renderVoices();
   }
   if (st.state === "paused" && st.last_error?.code === "daily_cap") S.pausedReason = "daily_cap";
+  renderKeySettings();
   if (st.state === "off" && S.pc) {
     // Voice was turned off; the daemon has closed (or is closing) the session.
     teardown();
@@ -1446,6 +1457,7 @@ function computeView() {
     micFailure: S.micFailure,
     errorText: S.errorText,
     errorCode: S.errorCode,
+    key: S.status?.key || null,
     pausedReason: S.pausedReason,
     idleMinutes: S.status?.idle_minutes,
     idleSeconds: S.status?.idle_seconds,
@@ -1654,7 +1666,14 @@ function renderStage(v = computeView()) {
   el.overlayNote.hidden = !c.note;
   el.overlayNote.textContent = c.note || "";
   el.promptPointer.hidden = !c.arrow;
+  const keyShown = !el.keyField.hidden;
   el.keyField.hidden = !c.keyInput;
+  if (!c.keyInput) {
+    el.keyError.hidden = true;
+  } else if (!keyShown && !el.settings.open) {
+    // The key card just appeared: the input is the only thing to do here.
+    requestAnimationFrame(() => el.keyInput.focus());
+  }
   el.overlayBtn.hidden = !c.button;
   el.overlayBtn.textContent = c.button || "";
   el.overlayBtn.dataset.action = c.action || "";
@@ -2020,6 +2039,148 @@ el.moreBtn.addEventListener("click", () => {
   renderClaude();
 });
 
+// ---------------------------------------------------------------------------
+// OpenAI API key (SPEC §4.3). The key goes to the daemon once (POST /api/key,
+// page-token auth), which checks it with OpenAI and keeps it in the macOS
+// Keychain. The page never gets it back: only its last four characters.
+// ---------------------------------------------------------------------------
+let keyBusy = false;
+let keyEditing = false;
+let keyHelpError = "";
+let removeArmed = null;
+
+/** Send the key typed into `input`; `report(text)` shows an error ("" clears). Returns true when saved. */
+async function submitKey(input, button, report) {
+  const key = input.value.trim();
+  if (!key) {
+    report("Paste your OpenAI API key first.");
+    input.focus();
+    return false;
+  }
+  if (keyBusy) return false;
+  keyBusy = true;
+  const label = button.textContent;
+  input.disabled = true;
+  button.disabled = true;
+  button.textContent = "Checking…";
+  report("");
+  let res = null;
+  try {
+    res = await fetchJson("/api/key", { method: "POST", headers: pageHeaders(), body: JSON.stringify({ key }) });
+  } catch {
+    res = null;
+  }
+  keyBusy = false;
+  input.disabled = false;
+  button.disabled = false;
+  button.textContent = label;
+  if (!res || !res.ok) {
+    report(res?.body?.error?.message || "Could not reach the sotto daemon.");
+    input.focus();
+    input.select();
+    return false;
+  }
+  input.value = "";
+  if (S.errorCode === "no_api_key" || S.errorCode === "openai_auth") {
+    S.errorCode = null;
+    S.errorText = null;
+    if (S.phase === "error") S.phase = "idle";
+  }
+  if (res.body?.key && S.status) S.status = { ...S.status, key: { ...res.body.key, setup: false } };
+  const msg = res.body?.message || "Key saved.";
+  showBanner("info", msg, "key_saved");
+  announce(msg);
+  render();
+  renderKeySettings();
+  return true;
+}
+
+function renderKeySettings() {
+  const k = lib.keySettingsView(S.status?.key || null);
+  el.keySummary.textContent = k.text;
+  el.keyChangeBtn.textContent = k.changeLabel;
+  el.keyChangeBtn.hidden = !k.change || keyEditing;
+  el.keyRemoveBtn.hidden = !k.remove || keyEditing;
+  if (!k.remove && removeArmed) disarmRemove();
+  el.keyEdit.hidden = !keyEditing;
+  el.keyHelp.textContent = keyHelpError || k.help;
+  el.keyHelp.dataset.tone = keyHelpError ? "err" : "";
+  el.keyHelp.hidden = !el.keyHelp.textContent;
+}
+
+function reportKeyHelp(text) {
+  keyHelpError = text;
+  renderKeySettings();
+}
+
+function stopKeyEdit() {
+  keyEditing = false;
+  keyHelpError = "";
+  el.keyEditInput.value = "";
+  renderKeySettings();
+}
+
+function disarmRemove() {
+  clearTimeout(removeArmed);
+  removeArmed = null;
+  el.keyRemoveBtn.textContent = "Remove";
+}
+
+el.keyField.addEventListener("submit", (e) => {
+  e.preventDefault();
+  submitKey(el.keyInput, el.keySave, (text) => {
+    el.keyError.textContent = text;
+    el.keyError.hidden = !text;
+  });
+});
+
+el.keyChangeBtn.addEventListener("click", () => {
+  keyEditing = true;
+  keyHelpError = "";
+  renderKeySettings();
+  el.keyEditInput.focus();
+});
+
+el.keyEdit.addEventListener("submit", async (e) => {
+  e.preventDefault();
+  if (await submitKey(el.keyEditInput, el.keyEditSave, reportKeyHelp)) stopKeyEdit();
+});
+
+// Esc inside the key input cancels the edit, not the whole drawer.
+el.keyEditInput.addEventListener("keydown", (e) => {
+  if (e.key !== "Escape" || keyBusy) return;
+  e.preventDefault();
+  e.stopPropagation();
+  stopKeyEdit();
+  el.keyChangeBtn.focus();
+});
+
+el.keyRemoveBtn.addEventListener("click", async () => {
+  // Two clicks: the first arms it for 4 s ("Confirm remove").
+  if (!removeArmed) {
+    el.keyRemoveBtn.textContent = "Confirm remove";
+    removeArmed = setTimeout(disarmRemove, 4000);
+    return;
+  }
+  disarmRemove();
+  el.keyRemoveBtn.disabled = true;
+  let res = null;
+  try {
+    res = await fetchJson("/api/key/remove", { method: "POST", headers: pageHeaders(), body: "{}" });
+  } catch {
+    res = null;
+  }
+  el.keyRemoveBtn.disabled = false;
+  if (!res || !res.ok) {
+    reportKeyHelp(res?.body?.error?.message || "Could not reach the sotto daemon.");
+    return;
+  }
+  if (res.body?.key && S.status) S.status = { ...S.status, key: { ...S.status.key, ...res.body.key } };
+  keyHelpError = "";
+  showBanner("info", res.body?.message || "Key removed.", "key_removed");
+  renderKeySettings();
+});
+
 // Settings drawer: a modal <dialog> gives Esc-to-close and focus return for free.
 el.settingsBtn.addEventListener("click", () => {
   if (el.settings.open) return;
@@ -2027,6 +2188,10 @@ el.settingsBtn.addEventListener("click", () => {
   if (!S.voices && S.token) loadVoices();
 });
 el.settingsClose.addEventListener("click", () => el.settings.close());
+el.settings.addEventListener("close", () => {
+  if (!keyBusy) stopKeyEdit();
+  disarmRemove();
+});
 el.settings.addEventListener("click", (e) => {
   // A click on the backdrop (the dialog box itself, outside its content) closes it.
   if (e.target !== el.settings) return;
@@ -2128,6 +2293,7 @@ listDevices().then((d) => {
   applySink();
 });
 render();
+renderKeySettings();
 renderCaptions();
 // The caption panel's height comes from the layout, not its content, so refitting on
 // resize cannot loop.

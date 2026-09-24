@@ -7,7 +7,8 @@ import path from "node:path";
 import { randomBytes } from "node:crypto";
 import { execFileSync } from "node:child_process";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { resolveApiKey, VERSION } from "./config.js";
+import { VERSION } from "./config.js";
+import { KeyStore } from "./apikey.js";
 import { dataPaths } from "./paths.js";
 import { writePid, writeKey, writePort, writeAtomic, removeQuiet } from "./statefiles.js";
 import { createLogger } from "./log.js";
@@ -62,6 +63,7 @@ export function createDaemon({
   dataDir, port, pluginRoot, env = process.env, clock = realClock, fetchImpl = globalThis.fetch,
   WebSocketImpl = DefaultWS, inbox = inboxModule, chrome, log, daemonKey, pageToken, pageSecret, onExit, owner, execFile,
   onRestart,
+  keychain, userConfigKey = env.CLAUDE_PLUGIN_OPTION_OPENAI_API_KEY, keys,
 }) {
   const paths = dataPaths(dataDir);
   fs.mkdirSync(paths.logs, { recursive: true, mode: 0o700 });
@@ -84,6 +86,8 @@ export function createDaemon({
     launchCodes.delete(code); // single use
     return exp > clock.now();
   };
+  // OpenAI API key sources (SPEC §4.3): env > .env > Keychain > userConfig.
+  const keyStore = keys || new KeyStore({ env, pluginRoot, dataDir, keychain, userConfigKey });
   let voice;
   const sse = new SseHub({ clock, onChange: () => voice && voice.changed() });
   // Desktop app, Chrome --app window, or default browser (SPEC §6.16).
@@ -92,13 +96,13 @@ export function createDaemon({
     getPreference: () => voice?.config?.window,
     pageConnected: () => sse.count > 0,
     wantsWindow: () => !!voice && voice.config.open_browser !== false && sse.count === 0
-      && (voice.state === "waiting_page" || voice.state === "reconnecting"),
+      && (voice.state === "waiting_page" || voice.state === "reconnecting" || voice.keySetup),
   });
   // Self-update (§6.17): only when the caller can swap processes (main()).
   let updater = null;
   voice = new Voice({
     paths, port, pluginRoot, daemonKey: key, env, clock, fetchImpl, WebSocketImpl, inbox, chrome: chromeApi, log: logger,
-    getApiKey: () => resolveApiKey({ env, pluginRoot, dataDir }), sse, onExit: (r) => onExit?.(r), owner, execFile,
+    getApiKey: () => keyStore.key(), keys: keyStore, sse, onExit: (r) => onExit?.(r), owner, execFile,
     requestRestart: onRestart ? () => (updater && updater.enabled ? updater.requestManual() : "disabled") : null,
   });
   if (onRestart) {
@@ -128,7 +132,7 @@ export function createDaemon({
   });
 
   return {
-    server, voice, sse, paths, daemonKey: key, pageToken: token, pageSecret: secret, issueLaunchCode, log: logger, stopListening, updater,
+    server, voice, sse, paths, keys: keyStore, daemonKey: key, pageToken: token, pageSecret: secret, issueLaunchCode, log: logger, stopListening, updater,
     listen() {
       return new Promise((resolve, reject) => {
         server.once("error", reject);
@@ -246,8 +250,14 @@ async function main() {
 
   let exiting = false;
   const entry = fileURLToPath(import.meta.url);
+  // The userConfig key (toggle.sh passes it in the environment at spawn) is
+  // kept in memory and removed from process.env, so the children the daemon
+  // starts (the window, git, security) do not inherit it.
+  // A successor (self-update, §6.17) gets it in the handover instead.
+  const userConfigKey = handover ? handover.user_config_key || undefined : process.env.CLAUDE_PLUGIN_OPTION_OPENAI_API_KEY;
+  delete process.env.CLAUDE_PLUGIN_OPTION_OPENAI_API_KEY;
   const d = createDaemon({
-    dataDir: args.dataDir, port: args.port, pluginRoot: args.pluginRoot, daemonKey, log,
+    dataDir: args.dataDir, port: args.port, pluginRoot: args.pluginRoot, daemonKey, log, userConfigKey,
     pageToken: handover ? handover.page_token : undefined,
     onExit: (reason) => finish(reason),
     onRestart: ({ reason, from, to, quietMs }) => performRestart({
@@ -309,8 +319,15 @@ async function main() {
     log.info("update.started", { reason: handover.reason, from: handover.from, to: handover.to, parent_pid: handover.parent_pid, web_changed: !!handover.web_changed });
     return;
   }
-  // Nobody claimed us (toggle.sh posts /control right after spawning): exit eventually.
-  setTimeout(() => { if (d.voice.state === "off" && !d.voice.owner && !exiting) finish("unclaimed"); }, 60_000).unref();
+  // Nobody claimed us (toggle.sh posts /control right after spawning): exit
+  // eventually. A voice window that is open (key setup from /talk key) keeps
+  // it alive; it is checked again every minute until that window closes.
+  const unclaimed = () => {
+    if (exiting || d.voice.state !== "off" || d.voice.owner) return;
+    if (d.sse.count > 0) setTimeout(unclaimed, 60_000).unref();
+    else finish("unclaimed");
+  };
+  setTimeout(unclaimed, 60_000).unref();
 }
 
 const isMain = process.argv[1] && pathToFileURL(fs.realpathSync(process.argv[1])).href === pathToFileURL(fs.realpathSync(fileURLToPath(import.meta.url))).href;

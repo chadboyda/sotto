@@ -23,4 +23,5 @@ let app = NSApplication.shared
 let delegate = AppDelegate(options: Options.parse(CommandLine.arguments))
 app.delegate = delegate
 app.setActivationPolicy(.accessory) // menu-bar app: no Dock icon, never steals focus
+EditMenu.install() // Cmd+V etc. in the page (the API key field)
 app.run()

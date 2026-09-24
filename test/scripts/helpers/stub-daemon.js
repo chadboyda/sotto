@@ -25,7 +25,9 @@ const key = randomBytes(32).toString("hex");
 writeFileSync(join(dataDir, "daemon.pid"), `${process.pid}\n`, { mode: 0o600 });
 writeFileSync(join(dataDir, "daemon.key"), `${key}\n`, { mode: 0o600 });
 // Record how we were launched so tests can check argv and the parent pid.
-writeFileSync(join(dataDir, "stub-argv.json"), JSON.stringify({ argv: args, ppid: process.ppid, cwd: process.cwd() }));
+// userConfigKey: the sensitive userConfig key toggle.sh hands over in the env.
+const userConfigKey = process.env.CLAUDE_PLUGIN_OPTION_OPENAI_API_KEY || "";
+writeFileSync(join(dataDir, "stub-argv.json"), JSON.stringify({ argv: args, ppid: process.ppid, cwd: process.cwd(), userConfigKey }));
 writeFileSync(join(dataDir, "daemon.port"), `${port}\n`, { mode: 0o600 });
 
 const bye = () => {
@@ -43,7 +45,7 @@ const server = createServer((req, res) => {
     const url = new URL(req.url, "http://x");
     if (req.method === "GET" && url.pathname === "/healthz") {
       res.writeHead(200, { "Content-Type": "application/json" });
-      res.end(JSON.stringify({ ok: true, name: "sotto", version: "0.1.0", pid: process.pid, port, data_dir: dataDir, plugin_root: pluginRoot, state: "off" }));
+      res.end(JSON.stringify({ ok: true, name: "sotto", version: "0.1.0", pid: process.pid, port, data_dir: dataDir, plugin_root: pluginRoot, state: "off", api_key: !!userConfigKey || existsSync(join(dataDir, "stub-has-key")) }));
       return;
     }
     if (req.method === "POST" && url.pathname === "/control") {

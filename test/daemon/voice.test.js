@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
 import { makeHarness, SESSION } from "../helpers/daemon-harness.js";
+import { createFakeKeychain } from "../helpers/fake-keychain.js";
 
 const appends = (ws, kind) => ws.sent.filter((e) => e.type === `session.${kind}.append`);
 
@@ -304,15 +305,27 @@ test("control: off, already off, status, toggle, policy, shutdown", async (t) =>
   assert.deepEqual(h.exits, ["shutdown"]);
 });
 
-test("on without a key: bound but paused, with the no-key message", async (t) => {
+test("on without a key: bound, paused, and the window opens at key setup", async (t) => {
   const h = await makeHarness({ env: {} });
   t.after(() => h.cleanup());
   const r = h.on();
-  assert.equal(r.message, `sotto: ERROR OPENAI_API_KEY was not found. Add it to ${h.pluginRoot}/.env or export it before starting Claude Code.`);
+  assert.equal(r.message, "sotto: voice ON (proj-a), but there is no OpenAI API key yet. Opening the voice window so you can add it; it is saved in your macOS Keychain.");
   assert.equal(h.voice.state, "paused");
   assert.ok(h.voice.owner);
-  assert.equal(h.chrome.opened, 0);
+  assert.equal(h.chrome.opened, 1);
+  assert.equal(h.voice.pageStatus().key.setup, true);
+  assert.equal(h.voice.pageStatus().last_error.code, "no_api_key");
   assert.equal(h.voice.control({ action: "off" }).message.startsWith("sotto: voice OFF."), true);
+  assert.equal(h.voice.keySetup, false);
+});
+
+test("on without a key and without a Keychain: the terminal says how to add one", async (t) => {
+  const h = await makeHarness({ env: {}, keychain: createFakeKeychain({ available: false }) });
+  t.after(() => h.cleanup());
+  const r = h.on();
+  assert.equal(r.message, "sotto: ERROR OPENAI_API_KEY was not found. Run /talk key to add it, or export it before starting Claude Code.");
+  assert.equal(h.voice.state, "paused");
+  assert.equal(h.chrome.opened, 0);
 });
 
 test("on without a socket is an error", async (t) => {

@@ -45,6 +45,10 @@
       "type": "string", "title": "Voice window", "default": "auto",
       "options": ["auto", "app", "chrome", "default"],
       "description": "Where the voice page opens: auto (the Sotto desktop app on macOS, else Chrome), app, chrome, or default (your default browser)."
+    },
+    "openai_api_key": {
+      "type": "string", "title": "OpenAI API key (optional)", "sensitive": true,
+      "description": "Optional. Leave empty to add the key in the voice window on first use (it is saved in your macOS Keychain). Needs access to gpt-live-1. An OPENAI_API_KEY environment variable, a .env file or the Keychain key takes precedence."
     }
   }
 }

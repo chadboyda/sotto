@@ -8,6 +8,7 @@ import { createDaemon } from "../../daemon/index.js";
 import { createMemoryLogger } from "../../daemon/log.js";
 import { createFakeClock } from "./fake-clock.js";
 import { createFakeWSClass } from "./fake-ws.js";
+import { createFakeKeychain } from "./fake-keychain.js";
 
 export function tmpDir(prefix = "clv-") {
   return fs.mkdtempSync(path.join(os.tmpdir(), prefix));
@@ -41,7 +42,7 @@ export const SESSION = (socket = "/tmp/clv-owner-a.sock", extra = {}) => ({
  *   d (createDaemon result), voice, clock, WS, fetchCalls, inboxSends, chrome,
  *   sse (captured broadcasts), exits, log, setFetch(fn), ownerAlive flag.
  */
-export async function makeHarness({ env = { OPENAI_API_KEY: "sk-test-key" }, clock, port, realClock = false, onRestart, dataDir, pageToken, daemonKey } = {}) {
+export async function makeHarness({ env = { OPENAI_API_KEY: "sk-test-key" }, clock, port, realClock = false, onRestart, dataDir, pageToken, daemonKey, keychain = createFakeKeychain(), userConfigKey } = {}) {
   const h = {
     clock: realClock ? undefined : clock || createFakeClock(),
     WS: createFakeWSClass(),
@@ -56,6 +57,7 @@ export async function makeHarness({ env = { OPENAI_API_KEY: "sk-test-key" }, clo
     pluginRoot: makePluginRoot(),
     port: port || (await freePort()),
     liveCounter: 0,
+    keychain,
   };
   h.fetchImpl = async (url, init) => {
     h.fetchCalls.push({ url, init, body: JSON.parse(init.body) });
@@ -74,7 +76,7 @@ export async function makeHarness({ env = { OPENAI_API_KEY: "sk-test-key" }, clo
     statSync: () => ({ isSocket: () => h.ownerAlive }),
   };
   const opts = {
-    dataDir: h.dataDir, port: h.port, pluginRoot: h.pluginRoot, env,
+    dataDir: h.dataDir, port: h.port, pluginRoot: h.pluginRoot, env, keychain, userConfigKey,
     fetchImpl: (...a) => h.fetchImpl(...a), WebSocketImpl: h.WS,
     inbox: { send: async (m) => { h.inboxSends.push(m); return h.inboxResult; } },
     chrome: h.chrome, log: h.log, onExit: (r) => h.exits.push(r), owner: probe,

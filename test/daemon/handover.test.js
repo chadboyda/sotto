@@ -61,7 +61,7 @@ async function plugin(t) {
   const srv = net.createServer((c) => c.destroy());
   await new Promise((r) => srv.listen(sock, r));
   const port = await freePort();
-  const env = { PATH: process.env.PATH, HOME: root, SOTTO_NO_BROWSER: "1", SOTTO_VOCAB: "0" };
+  const env = { PATH: process.env.PATH, HOME: root, SOTTO_NO_BROWSER: "1", SOTTO_VOCAB: "0", SOTTO_KEYCHAIN: "0" };
   const ctx = { root, D, sock, port, env, base: `http://127.0.0.1:${port}` };
   ctx.pid = () => { try { return Number(fs.readFileSync(path.join(D, "daemon.pid"), "utf8").trim()); } catch { return null; } };
   ctx.key = () => fs.readFileSync(path.join(D, "daemon.key"), "utf8").trim();
@@ -115,6 +115,36 @@ test("/control restart: a successor takes the same port, key, owner and marker; 
   const raw = fs.readFileSync(path.join(c.D, "logs", "daemon.log"), "utf8");
   assert.ok(!raw.includes("tok-secret-1") && !raw.includes(key1), "no inbox token or key in the log");
   assert.ok(!fs.readdirSync(c.D).some((f) => /handover/.test(f)), "the handover never touches disk");
+});
+
+test("the userConfig API key crosses the handover in memory (SPEC §4.3)", async (t) => {
+  const c = await plugin(t);
+  const uc = "sk-test-" + "H".repeat(24) + "hand";
+  c.env.CLAUDE_PLUGIN_OPTION_OPENAI_API_KEY = uc;
+  const child = spawn(process.execPath, [path.join(c.root, "daemon/index.js"), "--port", String(c.port), "--data-dir", c.D, "--plugin-root", c.root],
+    { cwd: c.root, env: c.env, detached: true, stdio: "ignore" });
+  child.unref();
+  const h0 = await until(() => c.health(), 5000);
+  assert.equal(h0.api_key, true);
+  // A bound owner that is quiet: the key is there, so voice waits for its page.
+  const on = await c.control({ action: "on", session: { socket: c.sock, token: "tok-secret-2", cwd: c.root, session_id: "s2" }, config: { open_browser: false } });
+  assert.equal(on.state, "waiting_page");
+  // Pause it like the page would (a restart waits for paused, sleeping or quiet live).
+  const secret = fs.readFileSync(path.join(c.D, "page.secret"), "utf8").trim();
+  const boot = await (await fetch(`${c.base}/api/bootstrap`, { headers: { "X-Sotto-Boot": secret } })).json();
+  await fetch(`${c.base}/api/page`, { method: "POST", headers: { "Content-Type": "application/json", "X-Sotto-Page": boot.page_token }, body: '{"type":"pause"}' });
+  assert.ok(await until(async () => (await c.health()).state === "paused", 3000), "paused");
+  const pid1 = c.pid();
+  await c.control({ action: "restart" });
+  const h = await until(async () => { const x = await c.health(); return x.pid !== pid1 ? x : null; }, 8000);
+  assert.ok(h, "a new process answers");
+  assert.equal(h.api_key, true, "the successor still has the userConfig key");
+  const st = await (await fetch(`${c.base}/status`, { headers: { "X-Sotto-Key": c.key() } })).json();
+  assert.equal(st.api_key.source, "user_config");
+  const ps = (await import("node:child_process")).execFileSync("ps", ["-E", "-o", "command=", "-p", String(h.pid)], { encoding: "utf8" });
+  assert.ok(!ps.includes(uc), "not in the successor's argv or environment");
+  const raw = fs.readFileSync(path.join(c.D, "logs", "daemon.log"), "utf8");
+  assert.ok(!raw.includes(uc), "not in the log");
 });
 
 test("broken new code: the preflight fails and the running daemon carries on", async (t) => {

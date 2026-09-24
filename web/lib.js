@@ -779,6 +779,76 @@ export function claudeView(s) {
   return { kind: "idle", title: "Claude is idle", request };
 }
 
+/**
+ * The API key card (SPEC §4.3), or null. Shown while the daemon asks for key
+ * setup (`status.key.setup`: first run without a key, or /talk key), after a
+ * session create failed for want of a key, or when OpenAI rejected a key the
+ * page can replace. `s.key` is PageStatus.key: {present, source, file, hint,
+ * label, can_change, can_remove, keychain, setup}; it never holds the key.
+ */
+export function keyCardView(s) {
+  const phase = s?.phase || "boot";
+  if (phase === "live" || phase === "connecting" || phase === "boot" || phase === "replaced" || phase === "closed" || phase === "lost") return null;
+  const st = s?.state || "off";
+  const key = s?.key || null;
+  const lastCode = s?.lastError?.code || null;
+  const missing = s?.errorCode === "no_api_key" || (lastCode === "no_api_key" && st !== "off");
+  const rejected = !!key?.can_change && (s?.errorCode === "openai_auth" || (lastCode === "openai_auth" && st !== "off"));
+  if (!key?.setup && !missing && !rejected) return null;
+  const where = key?.source === "dotenv" && key.file ? key.file : key?.label;
+  if (key?.present && !key.can_change && !rejected && !missing) {
+    return {
+      title: "Your OpenAI API key is set outside Sotto",
+      body: `The key in use (ending in ${key.hint || "????"}) comes from ${where}. Change it there, then run /talk on again.`,
+      keyInput: false,
+    };
+  }
+  if (key && key.keychain === false) {
+    return {
+      title: "Add your OpenAI API key to start",
+      body: "Export OPENAI_API_KEY before starting Claude Code, or add it to the plugin's .env file, then run /talk on again.",
+      keyInput: false,
+    };
+  }
+  const intro = "Sotto talks through OpenAI's gpt-live-1 voice model, billed to your OpenAI account at about $0.05 a minute. Paste a key from platform.openai.com/api-keys.";
+  const keep = "Sotto checks it with OpenAI, then keeps it in your macOS Keychain. It is never shown again.";
+  if (rejected) {
+    return {
+      title: "OpenAI rejected your API key",
+      body: `The key ending in ${key.hint || "????"} no longer works. Paste a new one. ${keep}`,
+      keyInput: true,
+    };
+  }
+  if (key?.present) {
+    return {
+      title: "Replace your OpenAI API key",
+      body: `Sotto uses the key ending in ${key.hint || "????"}, from ${where}. Paste a new one to replace it. ${keep}`,
+      keyInput: true,
+    };
+  }
+  return { title: "Add your OpenAI API key to start", body: `${intro} ${keep}`, keyInput: true };
+}
+
+/**
+ * The settings drawer's API key row: {text, help, change, remove, changeLabel}.
+ * `key` is PageStatus.key (or null before the first status).
+ */
+export function keySettingsView(key) {
+  if (!key) return { text: "Checking…", help: "", change: false, remove: false, changeLabel: "Change" };
+  const where = key.source === "dotenv" && key.file ? key.file : key.label;
+  if (!key.present) {
+    return {
+      text: "No key yet",
+      help: key.keychain ? "Add one to start talking. It is checked with OpenAI and kept in your macOS Keychain." : "Export OPENAI_API_KEY before starting Claude Code, or add it to the plugin's .env file.",
+      change: !!key.can_change, remove: false, changeLabel: "Add key",
+    };
+  }
+  const help = key.source === "keychain" ? "Saved in your macOS Keychain."
+    : key.can_change ? `From ${where}. A key saved here replaces it.`
+    : `From ${where}. Change it there.`;
+  return { text: `Key ending in ${key.hint || "????"}`, help, change: !!key.can_change, remove: !!key.can_remove, changeLabel: "Change" };
+}
+
 const STAGE_WORDS = {
   starting: ["Starting", "Looking for sotto…"],
   connecting: ["Connecting", "Connecting to the voice service…"],
@@ -863,20 +933,8 @@ export function pageView(s) {
     out.dialHint = v.arrow ? "prompt" : "attn";
     return out;
   }
-  const needsKey = s?.errorCode === "no_api_key" || (lastCode === "no_api_key" && phase !== "live" && phase !== "connecting" && st !== "off");
-  if (needsKey) {
-    return card(
-      {
-        kind: "apikey",
-        title: "Add your OpenAI API key to start",
-        body: "Sotto talks through OpenAI's voice model. Setting the key here is coming soon; for now add OPENAI_API_KEY to the plugin's .env file and run /talk on again.",
-        keyInput: true,
-        tone: "attn",
-      },
-      "off",
-      { key: "attention", label: "Key needed" },
-    );
-  }
+  const kc = keyCardView(s);
+  if (kc) return card({ kind: "apikey", tone: "attn", ...kc }, "off", { key: "attention", label: "Key needed" });
   if (phase === "error") {
     if (s?.micFailure) {
       const v = micFailureView(s.micFailure, host);

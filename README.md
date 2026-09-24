@@ -31,12 +31,26 @@ you (speaking) ──▶ gpt-live-1 ──delegates──▶ your Claude Code se
 ```bash
 claude plugin marketplace add chadboyda/sotto
 claude plugin install sotto@sotto
-mkdir -p ~/.sotto && printf 'OPENAI_API_KEY=%s\n' 'sk-...' > ~/.sotto/.env && chmod 600 ~/.sotto/.env
 ```
 
-Then start (or `/reload-plugins` in) a Claude Code session and run `/talk`.
+Then start (or `/reload-plugins` in) a Claude Code session and run `/talk`. That's it: on the first run there is no key yet, so the voice window opens at **Add your OpenAI API key to start**.
 
-The daemon looks for `OPENAI_API_KEY` in this order: its environment (inherited from Claude Code), `<plugin dir>/.env`, `<plugin data dir>/.env`, `~/.sotto/.env`. The key never leaves the daemon except in requests to OpenAI: it is not logged, not sent to the page, and not written anywhere.
+1. Create a key at [platform.openai.com/api-keys](https://platform.openai.com/api-keys). Its project must be allowed to use `gpt-live-1` (a project with "All" model access is; a restricted project needs `gpt-live-1` enabled), and the account needs billing set up.
+2. Paste it into the window and press **Save**. Sotto checks it with OpenAI first (it must be accepted and list `gpt-live-1`) and tells you plainly if it isn't: a wrong or revoked key, a project without `gpt-live-1`, or no network.
+3. A good key is saved in your **macOS Keychain** (login keychain, item "Sotto OpenAI API key": service `sotto`, account `openai-api-key`) and voice connects right away.
+
+The window never shows the key again, only "Key ending in abcd". To change or remove it, open the window's settings (the gear) → **OpenAI API key** → **Change** or **Remove**; this works in Chrome and in the desktop app. `/talk key` tells you which key is in use and where it comes from. Never paste a key into the Claude Code prompt: `/talk key sk-...` does not read it (it opens the window instead), and whatever you type there stays in your prompt history.
+
+**Other ways to provide the key.** The daemon uses the first key it finds, in this order:
+
+| Where | How |
+|---|---|
+| 1. The environment | `export OPENAI_API_KEY=sk-...` before starting Claude Code |
+| 2. A `.env` file | `OPENAI_API_KEY=sk-...` in `<plugin dir>/.env`, `<plugin data dir>/.env` or `~/.sotto/.env` (`chmod 600` it) |
+| 3. The macOS Keychain | what the voice window saves; or from a terminal: `security add-generic-password -U -s sotto -a openai-api-key -w` (it prompts for the key, so it stays out of your shell history) |
+| 4. The plugin settings | the optional `openai_api_key` field Claude Code asks for when you enable the plugin; Claude Code keeps it in its own secure storage. It reaches a voice daemon when one starts. |
+
+The key only ever goes from the daemon to OpenAI: it is never logged, never sent to the voice page (only its last four characters), never put on a command line, and Sotto never writes it to a file.
 
 ### From a clone (for development)
 
@@ -62,6 +76,7 @@ The symlink loads the plugin in place as `sotto@skills-dir`, so edits to the rep
 | `/talk quiet` / `milestones` / `walkthrough` | Change how much the voice narrates (see below) |
 | `/talk voice` | List the 22 voices, with the current one marked |
 | `/talk voice <name>` | Change the voice, for example `/talk voice cedar`. If voice is live, it switches right away (see below). The choice is saved and survives restarts. |
+| `/talk key` | Which OpenAI API key is in use (its last four characters) and where it comes from; with no key, opens the window to add one |
 
 `/sotto:talk …` is the same command with its full name.
 
@@ -165,6 +180,7 @@ Set these in `/config` (the sotto rows). An unset or invalid value uses the defa
 | `speaking_policy` | `milestones` | Default narration level |
 | `daily_cap_minutes` | `120` | Voice minutes allowed per local day. You get a spoken warning at 80 %; at 100 % voice pauses. 0 = no cap. |
 | `window` | `auto` | Where the voice window opens: `auto` (the Sotto app on macOS once built, unless your default input is a Bluetooth headset; else Chrome), `app`, `chrome`, or `default` (your default browser) |
+| `openai_api_key` | none | Optional, sensitive (asked for when you enable the plugin, not shown in `/config`). The last place the key is looked for; see [Install](#install). |
 
 Environment overrides, for debugging and tests:
 
@@ -177,6 +193,8 @@ Environment overrides, for debugging and tests:
 | `SOTTO_SIGN_IDENTITY` | Sign the desktop app with this identity instead of ad hoc |
 | `SOTTO_VOCAB=0` | Leave the vocabulary glossary out of the voice instructions and delegated prompts |
 | `SOTTO_WAKE_TRANSCRIBE_MODEL` | Model for the wake clip (default `gpt-transcribe`, fallback `gpt-4o-mini-transcribe`) |
+| `SOTTO_KEYCHAIN=0` | Do not use the macOS Keychain for the API key |
+| `SOTTO_KEYCHAIN_SERVICE` | Keychain service name for the key (default `sotto`; tests use a temporary one) |
 
 ## Cost
 
@@ -245,7 +263,9 @@ Design and contracts: [docs/SPEC.md](docs/SPEC.md) (binding spec), [docs/ARCHITE
 |---|---|
 | The voice says "That request hasn't reached Claude Code…" and nothing happens in the terminal | The inbox message is being **held**. The daemon authenticates with the owner session's own messaging token, so Claude Code treats voice messages as the session's own ("own-child"). That delivers them even in `bypassPermissions` sessions: verified with CLI 2.1.281, including a daemon started by another session. An explicit `crossSessionInbound` value (`hold` or `refuse`) overrides the own-child rule, though. Fix: approve the held message in the terminal, or set `"crossSessionInbound": "accept"` (in `/config` → "Messages from your other sessions", or in settings.json). For `claude -p` workers, pass it with `--settings`. |
 | `/talk` just makes Claude reply "needs the sotto plugin hooks" | The hooks aren't loaded. Check `/hooks`, run `/reload-plugins`, and check that the symlink points at the repo. |
-| `ERROR OPENAI_API_KEY was not found` | Put the key in `<repo>/.env`, or export it before starting Claude Code. |
+| "no OpenAI API key yet" / the window asks for a key | Paste a key there (see [Install](#install)), or run `/talk key` to reopen that window. Without the macOS Keychain (`ERROR OPENAI_API_KEY was not found`), export `OPENAI_API_KEY` or put it in `<plugin dir>/.env`. |
+| Saving the key fails | The message says why: "OpenAI rejected this key" (mistyped, revoked, or from another org), "its project cannot use gpt-live-1" (enable the model for the key's project, or use another key), "Could not reach OpenAI" (network), or a Keychain error (unlock the login keychain). |
+| A new key in the plugin settings is ignored | Keys from the environment, a `.env` file or the Keychain come first (`/talk key` shows which one is used). A daemon picks up the plugin-settings key when it starts; one that has no key at all is restarted by `/talk on`. |
 | `ERROR port 47821 is used by another program` | Choose another `port` in `/config`. |
 | `ERROR node on PATH is vXX; sotto needs Node 22 or newer` | The daemon runs whatever `node` is first on `PATH` (it starts from the plugin directory, so a project's `.node-version` does not apply), or Bun 1.1+ when that Node is too old. Install Node 22 (`brew install node`, `nvm install 22`) or Bun (bun.sh), change your default Node, or set `SOTTO_NODE` to a Node 22 (or Bun) binary before starting Claude Code. |
 | `ERROR the voice daemon did not start` | Run `node --version` (it must be 22.6 or later), then read `logs/daemon.log` and `logs/crash.log`. |
@@ -254,7 +274,7 @@ Design and contracts: [docs/SPEC.md](docs/SPEC.md) (binding spec), [docs/ARCHITE
 | The desktop app never opens (always Chrome) | `/talk status` shows the state; the daemon log has a `window.choose` line with the reason (`app_missing` while it builds, `app_failed` with the error in `app/build.json` and `logs/app-build.log`, `bluetooth_input` with a Bluetooth default input the app cannot avoid; `native_mic` means the app was chosen because it records the built-in mic itself). Run `bash scripts/build-app.sh` in the plugin directory to build it by hand. |
 | The Sotto panel is gone but the icon is still there | Press ⌥⌘T or use Show Panel in the icon's menu; the panel hides rather than closes. |
 | The voice hears itself or cuts out | Use Chrome (not the default-browser fallback). With AirPods, keep the built-in mic selected; the picker does this by default, so AirPods stay in high-quality output mode. |
-| OpenAI 401 / 429 in status | The key is invalid or lacks `gpt-live-1` access, or you hit the rate limit. The page shows the OpenAI message. |
+| OpenAI 401 / 429 in status | The key is invalid or lacks `gpt-live-1` access, or you hit the rate limit. If the key came from the voice window or the plugin settings, the window asks for a new one; a key from the environment or a `.env` file has to be changed there. |
 | Voice paused on its own | "Sleeping" is the idle sleep (`idle_seconds`): just talk, or press Space. "Paused" is the daily cap, a manual pause, or idle sleep with wake off. Press Space in the window, or run `/talk on`. |
 | Voice wakes on its own (TV, music) | Lower the Wake picker to Low, or press M while sleeping. Repeated false wakes back off automatically (up to 2 minutes). |
 | Something stuck | Run `/talk off`. As a last resort, `kill $(cat ~/.claude/plugins/data/sotto-skills-dir/daemon.pid)`; the next `/talk on` starts a fresh daemon. |
@@ -264,8 +284,9 @@ Design and contracts: [docs/SPEC.md](docs/SPEC.md) (binding spec), [docs/ARCHITE
 ```bash
 npm test               # unit tests (node:test, ~15 s, no network): scripts, daemon, web
 npm run validate       # claude plugin validate . --strict
-npm run e2e            # REAL end-to-end tests against gpt-live-1: smoke, sleep + wake, self-update (about $0.08)
+npm run e2e            # REAL end-to-end tests against gpt-live-1: smoke, sleep + wake, self-update, first-run key setup (about $0.10)
 npm run e2e:restart    # just the self-update e2e (two short sessions, about $0.025); SOTTO_NODE=bun runs it under Bun
+npm run e2e:key        # first-run key setup: key card, wrong key, real key saved in a TEMPORARY Keychain item, connects (~15 billed s)
 npm run e2e:fixture    # regenerate test/fixtures/ask-files.wav with OpenAI TTS
 npm run build:app      # build the desktop app into ${CLAUDE_PLUGIN_DATA:-~/.sotto}/app (incremental)
 npm run test:app       # app build smoke + launch tests (temp daemon, mock mic); SOTTO_APP_LIVE=1 adds a real gpt-live-1 session

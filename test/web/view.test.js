@@ -183,14 +183,55 @@ test("pageView: mic failures and the generic error", () => {
   assert.equal(e.card.body, "The voice session did not start.");
 });
 
-test("pageView: API key needed is a clean placeholder state", () => {
+test("pageView: API key needed shows the key input", () => {
   const k = lib.pageView({ phase: "error", state: "paused", errorCode: "no_api_key" });
   assert.equal(k.card.kind, "apikey");
   assert.equal(k.card.title, "Add your OpenAI API key to start");
   assert.equal(k.card.keyInput, true);
   assert.equal(k.card.button, null);
+  assert.equal(k.header.label, "Key needed");
   const k2 = lib.pageView({ phase: "idle", state: "paused", lastError: { code: "no_api_key" } });
   assert.equal(k2.card.kind, "apikey");
+});
+
+const KEY = (o = {}) => ({ present: false, source: null, file: null, hint: null, label: null, can_change: true, can_remove: false, keychain: true, setup: false, ...o });
+
+test("keyCardView: setup, replace, rejected, outside sources, no Keychain", () => {
+  // /talk key with voice off: the setup card shows even in state off.
+  const setup = lib.pageView({ phase: "idle", state: "off", key: KEY({ setup: true }) });
+  assert.equal(setup.card.kind, "apikey");
+  assert.equal(setup.card.keyInput, true);
+  assert.match(setup.card.body, /macOS Keychain/);
+  // Never while live or connecting.
+  assert.equal(lib.keyCardView({ phase: "live", state: "live", key: KEY({ setup: true }) }), null);
+  assert.equal(lib.keyCardView({ phase: "idle", state: "paused", key: KEY() }), null);
+  const replace = lib.keyCardView({ phase: "idle", state: "off", key: KEY({ setup: true, present: true, source: "keychain", hint: "wxyz", label: "the macOS Keychain", can_remove: true }) });
+  assert.equal(replace.title, "Replace your OpenAI API key");
+  assert.match(replace.body, /ending in wxyz/);
+  const rejected = lib.keyCardView({ phase: "error", state: "paused", errorCode: "openai_auth", key: KEY({ present: true, source: "keychain", hint: "wxyz" }) });
+  assert.equal(rejected.title, "OpenAI rejected your API key");
+  assert.equal(rejected.keyInput, true);
+  // A rejected key from .env cannot be replaced here: the plain error card shows.
+  assert.equal(lib.keyCardView({ phase: "error", state: "paused", errorCode: "openai_auth", key: KEY({ present: true, source: "dotenv", can_change: false }) }), null);
+  const outside = lib.keyCardView({ phase: "idle", state: "off", key: KEY({ setup: true, present: true, source: "dotenv", file: "/p/.env", hint: "abcd", can_change: false }) });
+  assert.equal(outside.keyInput, false);
+  assert.match(outside.body, /\/p\/\.env/);
+  const noKc = lib.keyCardView({ phase: "idle", state: "paused", lastError: { code: "no_api_key" }, key: KEY({ keychain: false, can_change: false }) });
+  assert.equal(noKc.keyInput, false);
+  assert.match(noKc.body, /OPENAI_API_KEY/);
+});
+
+test("keySettingsView: the drawer row never needs the key", () => {
+  assert.equal(lib.keySettingsView(null).text, "Checking…");
+  const none = lib.keySettingsView(KEY());
+  assert.deepEqual([none.text, none.change, none.remove, none.changeLabel], ["No key yet", true, false, "Add key"]);
+  const kc = lib.keySettingsView(KEY({ present: true, source: "keychain", hint: "wxyz", label: "the macOS Keychain", can_remove: true }));
+  assert.deepEqual([kc.text, kc.change, kc.remove], ["Key ending in wxyz", true, true]);
+  const env = lib.keySettingsView(KEY({ present: true, source: "env", hint: "abcd", label: "the OPENAI_API_KEY environment variable", can_change: false }));
+  assert.deepEqual([env.change, env.remove], [false, false]);
+  assert.match(env.help, /Change it there/);
+  const uc = lib.keySettingsView(KEY({ present: true, source: "user_config", hint: "abcd", label: "the plugin settings" }));
+  assert.match(uc.help, /replaces it/);
 });
 
 test("pageView: paused keeps the SPEC strings; daily cap has no Resume", () => {

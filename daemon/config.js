@@ -95,11 +95,13 @@ export function parseDotEnv(text) {
 }
 
 /**
- * Resolve OPENAI_API_KEY per SPEC §4.3. Returns the key or null.
+ * The environment and .env tiers of the key resolution (SPEC §4.3; the
+ * Keychain and userConfig tiers are in apikey.js KeyStore). Returns
+ * {key, source: "env"|"dotenv", file} or null.
  * The key is never logged; callers must keep it in memory only.
  */
-export function resolveApiKey({ env = process.env, pluginRoot, dataDir, home = env.HOME, readFile = fs.readFileSync } = {}) {
-  if (env.OPENAI_API_KEY && env.OPENAI_API_KEY.trim()) return env.OPENAI_API_KEY.trim();
+export function resolveApiKeyInfo({ env = process.env, pluginRoot, dataDir, home = env.HOME, readFile = fs.readFileSync } = {}) {
+  if (env.OPENAI_API_KEY && env.OPENAI_API_KEY.trim()) return { key: env.OPENAI_API_KEY.trim(), source: "env", file: null };
   const candidates = [];
   if (pluginRoot) candidates.push(path.join(pluginRoot, ".env"));
   if (dataDir) candidates.push(path.join(dataDir, ".env"));
@@ -107,10 +109,15 @@ export function resolveApiKey({ env = process.env, pluginRoot, dataDir, home = e
   for (const file of candidates) {
     try {
       const v = parseDotEnv(readFile(file, "utf8")).OPENAI_API_KEY;
-      if (v && v.trim()) return v.trim();
+      if (v && v.trim()) return { key: v.trim(), source: "dotenv", file };
     } catch { /* missing or unreadable: try the next one */ }
   }
   return null;
+}
+
+/** The key from the environment or a .env file, or null (tests and e2e use this). */
+export function resolveApiKey(opts = {}) {
+  return resolveApiKeyInfo(opts)?.key ?? null;
 }
 
 export function openaiBase(env = process.env) {

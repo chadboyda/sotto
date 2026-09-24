@@ -19,6 +19,7 @@ import { truncate } from "./log.js";
 import { usageToday } from "./format.js";
 import { WakeGovernor, WAKE_SOURCES, sleepDecision, idleSecondsOf } from "./wake.js";
 import { decodeWavB64, wavDurationMs, transcribeWithFallback, wakeInstruction } from "./transcribe.js";
+import { normalizeKeyInput, validateKey, keyWhere } from "./apikey.js";
 
 // Idle/sleep is checked this often while live. Short, because the idle
 // timeout is now tens of seconds, not minutes (§6.15).
@@ -51,7 +52,8 @@ const VOCAB_REUSE_MS = 5 * 60_000;
 
 export const MSG = {
   noSocket: "sotto: ERROR this session has no inbox socket (CLAUDE_CODE_MESSAGING_SOCKET is unset), so voice cannot reach it.",
-  usage: "sotto: usage: /talk [on|off|status|restart|quiet|milestones|walkthrough|voice [name]]",
+  usage: "sotto: usage: /talk [on|off|status|restart|quiet|milestones|walkthrough|voice [name]|key]",
+  noKeyNoWindow: "sotto: ERROR OPENAI_API_KEY was not found. Run /talk key to add it, or export it before starting Claude Code.",
 };
 
 /** Why a restart waits, in words for /talk restart (SPEC §9.2). */
@@ -89,6 +91,7 @@ export class Voice {
    * @param {object} o.chrome      createChrome() API
    * @param {object} o.log
    * @param {() => string|null} o.getApiKey
+   * @param {object} [o.keys]      apikey.js KeyStore (sources, Keychain save/remove)
    * @param {object} o.sse         SseHub
    * @param {(reason:string) => void} o.onExit
    * @param {object} [o.owner]     liveness probe overrides {kill, statSync}
@@ -98,7 +101,7 @@ export class Voice {
     Object.assign(this, {
       paths: o.paths, port: o.port, pluginRoot: o.pluginRoot, daemonKey: o.daemonKey, env: o.env || {},
       clock: o.clock, fetchImpl: o.fetchImpl, WebSocketImpl: o.WebSocketImpl, inbox: o.inbox, chrome: o.chrome,
-      log: o.log, getApiKey: o.getApiKey, sse: o.sse, onExit: o.onExit || (() => {}),
+      log: o.log, getApiKey: o.getApiKey, keys: o.keys || null, sse: o.sse, onExit: o.onExit || (() => {}),
       probe: o.owner || {}, execFile: o.execFile, requestRestart: o.requestRestart || null,
     });
     this.debug = this.env.SOTTO_DEBUG === "1";
@@ -111,6 +114,10 @@ export class Voice {
     this.sideband = null;
     this.counters = newCounters();
     this.lastError = null;
+    // Key setup (SPEC §4.3): the page shows the "add your API key" card while
+    // this is set (first run without a key, or /talk key).
+    this.keySetup = false;
+    this.keySaving = false;
     this.pendingResult = null;
     this.backlog = [];
     this.usage = readUsage(this.paths);
@@ -218,6 +225,7 @@ export class Voice {
       counters: { ...this.counters },
       last_error: this.lastError ? { ...this.lastError } : null,
       wake: { ...this.governor.status(this.config.wake_sensitivity), queued: this.wakeQueue.length },
+      api_key: { source: this.keyInfo().source },
     };
   }
 
@@ -234,11 +242,21 @@ export class Voice {
       today: { seconds: Math.round(this.todaySeconds() * 10) / 10, cap_minutes: this.config.daily_cap_minutes },
       claude: { busy: this.delegation.claudeBusy },
       last_error: this.lastError ? { code: this.lastError.code, message: this.lastError.message } : null,
+      key: { ...this.keyInfo(), setup: this.keySetup },
     };
   }
 
+  /** Key facts for the page and /talk key: never the key, at most its last four characters. */
+  keyInfo() {
+    if (this.keys) return this.keys.info();
+    const present = !!this.getApiKey?.();
+    return { present, source: present ? "env" : null, file: null, hint: null, label: null, can_change: false, can_remove: false, keychain: false };
+  }
+
   healthz() {
-    return { ok: true, name: "sotto", version: VERSION, pid: process.pid, port: this.port, data_dir: this.paths.dir, plugin_root: this.pluginRoot, state: this.state };
+    // api_key (a boolean, never the key) lets toggle.sh restart a key-less
+    // daemon when the plugin settings now hold a key (it came in at spawn).
+    return { ok: true, name: "sotto", version: VERSION, pid: process.pid, port: this.port, data_dir: this.paths.dir, plugin_root: this.pluginRoot, state: this.state, api_key: !!this.getApiKey() };
   }
 
   changed() {
@@ -413,6 +431,7 @@ export class Voice {
       case "policy": r = this.setPolicy(req.policy); break;
       case "voice": r = req.voice == null || req.voice === "" ? { ok: true, message: voiceListMessage(this.currentVoice(req.config)) } : this.setVoice(req.voice, "control"); break;
       case "restart": r = this.manualRestart(); break;
+      case "key": r = this.keyControl(req); break;
       case "shutdown": {
         this.gracefulOff("shutdown");
         r = { ok: true, message: "sotto: daemon stopped." };
@@ -476,11 +495,16 @@ export class Voice {
     // it falls through to the connect/open-window path below.
     const hasLive = !!this.sideband || LIVE_STATES.has(this.state);
 
+    this.keys?.refresh(); // a key added to the Keychain from a terminal counts at once
     if (!this.getApiKey()) {
+      // First run: bind, stay paused, and open the window at the key setup
+      // card (SPEC §4.3). Saving a key there connects.
       this.setLastError("no_api_key", "OPENAI_API_KEY was not found");
       if (!hasLive) this.setState("paused");
-      return { ok: false, message: `sotto: ERROR OPENAI_API_KEY was not found. Add it to ${this.pluginRoot}/.env or export it before starting Claude Code.` };
+      if (!this.keyInfo().keychain) return { ok: false, message: MSG.noKeyNoWindow };
+      return { ok: false, message: this.openKeySetup(`sotto: voice ON (${project}), but there is no OpenAI API key yet.`) };
     }
+    this.keySetup = false;
     if (this.capReached()) {
       this.setLastError("daily_cap", "Daily voice cap reached");
       if (!hasLive) this.setState("paused");
@@ -530,6 +554,105 @@ export class Voice {
     if (this.sideband) this.narrator.route("policy_change", { policy });
     this.changed();
     return { ok: true, message: `sotto: speaking policy is now ${policy}.` };
+  }
+
+  // ---- API key (§4.3) -----------------------------------------------------------------------
+  /**
+   * Show the key setup card: in the connected page, or in a newly opened
+   * window. Returns `lead` plus where to type the key.
+   */
+  openKeySetup(lead) {
+    this.keySetup = true;
+    this.changed();
+    if (this.sse.count > 0) return `${lead} Add it in the voice window; it is saved in your macOS Keychain.`;
+    if (this.config.open_browser === false) return `${lead} Run /talk key to add it.`;
+    const r = this.chrome.open();
+    if (r && r.mode === "none") return `${lead} Open the voice window to add it.`;
+    return `${lead} Opening the voice window so you can add it; it is saved in your macOS Keychain.`;
+  }
+
+  /**
+   * /talk key: where the key comes from. `setup` (the user typed something
+   * after "key", which is never read) or no key at all opens the setup card.
+   */
+  keyControl(req) {
+    this.keys?.refresh();
+    const info = this.keyInfo();
+    this.log.info("key.status", { source: info.source, setup: !!req.setup });
+    const setup = !!req.setup || !info.present;
+    if (!setup) {
+      const change = info.can_change ? " Change or remove it in the voice window settings." : info.source === "env" ? " Change it where OPENAI_API_KEY is exported." : " Change it in that file.";
+      return { ok: true, message: `sotto: using the OpenAI API key ending in ${info.hint || "????"} from ${keyWhere(info)}.${change}` };
+    }
+    const lead = req.setup
+      ? "sotto: API keys are never read from /talk arguments (what you typed stays in your prompt history; rotate the key if it was real)."
+      : "sotto: no OpenAI API key found.";
+    if (!info.keychain) return { ok: false, message: `${lead} Export OPENAI_API_KEY or add it to ${this.pluginRoot}/.env, then run /talk on.` };
+    if (info.present && !info.can_change) {
+      return { ok: true, message: `${lead} The key in use comes from ${keyWhere(info)}; change it there.` };
+    }
+    return { ok: !!req.setup || info.present, message: this.openKeySetup(lead) };
+  }
+
+  /**
+   * POST /api/key from the page: check the key with OpenAI, store it in the
+   * Keychain, and connect if voice is waiting for it. Returns {status, body};
+   * the body never contains the key.
+   */
+  async saveKey(raw) {
+    const err = (status, code, message) => ({ status, body: { error: { code, message } } });
+    const key = normalizeKeyInput(raw);
+    if (!key) return err(400, "bad_key_format", "That does not look like an OpenAI API key. Keys start with sk-.");
+    if (!this.keys || !this.keyInfo().keychain) return err(501, "keychain_unavailable", "Saving a key needs the macOS Keychain. Export OPENAI_API_KEY before starting Claude Code instead.");
+    if (this.keySaving) return err(409, "busy", "Already checking a key.");
+    this.keySaving = true;
+    const t0 = this.clock.now();
+    try {
+      const v = await validateKey({ base: this.base, key, fetchImpl: this.fetchImpl, clock: this.clock });
+      this.log.info("key.check", { ok: v.ok, code: v.code, ms: this.clock.now() - t0 });
+      if (!v.ok) return err(v.code === "network" ? 504 : 400, v.code, v.message);
+      const saved = this.keys.save(key);
+      if (!saved.ok) {
+        this.log.error("key.save_error", { message: saved.message });
+        return err(500, "keychain_error", `Could not save the key in the macOS Keychain. ${saved.message}`);
+      }
+      const info = this.keyInfo();
+      this.log.info("key.saved", { source: info.source });
+      this.keySetup = false;
+      if (this.lastError && (this.lastError.code === "no_api_key" || this.lastError.code === "openai_auth")) this.lastError = null;
+      let connecting = false;
+      // paused: the first run (on() without a key). waiting_page: a page whose
+      // session create failed with no_api_key (the key was removed meanwhile).
+      if (this.owner && (this.state === "paused" || this.state === "waiting_page") && !this.capReached()) {
+        this.setState("waiting_page");
+        this.command("connect", "key");
+        this.timer("waitingPage", () => this.onPageTimeout(), WAITING_PAGE_MS);
+        connecting = true;
+      }
+      this.changed();
+      let message = connecting ? "Key saved. Connecting…" : this.owner ? "Key saved." : "Key saved. Run /talk on in Claude Code to start talking.";
+      if (info.source !== "keychain") message = `Key saved in the Keychain, but the key from ${keyWhere(info)} is used first.`;
+      return { status: 200, body: { ok: true, connecting, message, key: info } };
+    } finally {
+      this.keySaving = false;
+    }
+  }
+
+  /** POST /api/key/remove: delete the Keychain key (the only source the page may change). */
+  removeKey() {
+    const before = this.keyInfo();
+    if (!before.can_remove) {
+      return { status: 409, body: { error: { code: "not_removable", message: `The key in use comes from ${keyWhere(before)}; sotto can only remove a key it saved in the Keychain.` } } };
+    }
+    const r = this.keys.remove();
+    const info = this.keyInfo();
+    this.log.info("key.removed", { ok: r.ok, source: info.source });
+    if (!r.ok) return { status: 500, body: { error: { code: "keychain_error", message: "Could not remove the key from the macOS Keychain." } } };
+    this.changed();
+    const message = info.present
+      ? `Key removed from the Keychain. Now using the key from ${keyWhere(info)}.`
+      : "Key removed. The current voice session keeps running; the next one needs a key.";
+    return { status: 200, body: { ok: true, message, key: info } };
   }
 
   // ---- voice (§4.5, §6.14) ------------------------------------------------------------------
@@ -1308,6 +1431,7 @@ export class Voice {
   async gracefulOff(reason) {
     const gen = ++this.offGen;
     this.log.info("off", { reason });
+    this.keySetup = false;
     this.clear("waitingPage");
     this.clear("sessionEnd");
     this.clear("sessionEndOff");

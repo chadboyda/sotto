@@ -655,12 +655,19 @@ body[data-view="card"][data-dial="small"] .pending { text-align: left; align-sel
 .key-row input {
   flex: 1; min-width: 0; min-height: var(--hit);
   padding: 0 var(--space-3);
-  border: 1px dashed var(--edge);
+  border: 1px solid var(--edge);
   border-radius: var(--radius-sm);
   background: var(--surface-sunken);
-  color: var(--fg-3);
+  color: var(--fg);
+  font: inherit;
 }
 .key-row input::placeholder { color: var(--fg-3); }
+.key-row input:disabled { border-style: dashed; color: var(--fg-3); }
+.key-error, .field-help[data-tone="err"] { color: var(--err); font-size: var(--text-small); text-wrap: pretty; }
+.key-summary { display: flex; align-items: center; gap: var(--space-2); }
+.key-summary-text { flex: 1; min-width: 0; font-variant-numeric: tabular-nums; }
+.btn.small { min-height: 36px; padding: 0 var(--space-3); font-size: var(--text-small); }
+.key-summary .btn.danger { margin-left: 0; }
 
 /* Allow microphone: point at Chrome's bubble, top left of an --app window. */
 .pointer { display: flex; align-items: flex-start; gap: 4px; margin: -4px 0 var(--space-3) -8px; color: var(--attn); }

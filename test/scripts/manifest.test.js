@@ -15,7 +15,11 @@ describe("manifests", () => {
     const m = JSON.parse(read(".claude-plugin/plugin.json"));
     assert.equal(m.name, "sotto");
     assert.ok(m.$schema);
-    assert.deepEqual(Object.keys(m.userConfig), ["voice", "port", "idle_seconds", "idle_minutes", "wake_sensitivity", "speaking_policy", "daily_cap_minutes", "window"]);
+    assert.deepEqual(Object.keys(m.userConfig), ["voice", "port", "idle_seconds", "idle_minutes", "wake_sensitivity", "speaking_policy", "daily_cap_minutes", "window", "openai_api_key"]);
+    // The key option is sensitive (Claude Code keeps it in secure storage) and optional.
+    assert.equal(m.userConfig.openai_api_key.sensitive, true);
+    assert.equal(m.userConfig.openai_api_key.default, undefined);
+    assert.notEqual(m.userConfig.openai_api_key.required, true);
     assert.equal(m.userConfig.idle_seconds.default, 60);
     assert.deepEqual(m.userConfig.wake_sensitivity.options, ["off", "low", "medium", "high"]);
     assert.equal(m.userConfig.window.default, "auto");
@@ -58,7 +62,7 @@ describe("manifests", () => {
     const s = read("skills/talk/SKILL.md");
     assert.match(s, /^---\nname: talk\n/);
     assert.match(s, /\ndisable-model-invocation: true\n/);
-    assert.match(s, /\nargument-hint: "\[on\|off\|status\|restart\|quiet\|milestones\|walkthrough\|voice \[name\]\]"\n/);
+    assert.match(s, /\nargument-hint: "\[on\|off\|status\|restart\|quiet\|milestones\|walkthrough\|voice \[name\]\|key\]"\n/);
     assert.ok(!/allowed-tools/.test(s));
     assert.ok(!/!`/.test(s), "no inline bash");
   });

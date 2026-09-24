@@ -156,8 +156,73 @@ describe("toggle.sh cold start", () => {
   test("bogus argument prints usage and never contacts the daemon", async () => {
     const { D, env } = await setup();
     const out = parseOut(await run(TOGGLE, { env, input: stdinFor("bogus") }));
-    assert.equal(out.stopReason, "sotto: usage: /talk [on|off|status|restart|quiet|milestones|walkthrough|voice [name]]");
+    assert.equal(out.stopReason, "sotto: usage: /talk [on|off|status|restart|quiet|milestones|walkthrough|voice [name]|key]");
     assert.ok(!existsSync(join(D, "daemon.pid")));
+  });
+});
+
+describe("toggle.sh /talk key (SPEC §4.3)", () => {
+  const SECRET = "sk-test-" + "S3cr3tS3cr3tS3cr3t-typed";
+
+  test("/talk key cold-starts a daemon without needing an inbox socket", async () => {
+    const { D, env } = await setup({ CLAUDE_CODE_MESSAGING_SOCKET: "" });
+    const out = parseOut(await run(TOGGLE, { env, input: stdinFor("key") }));
+    assert.equal(out.stopReason, "stub: key");
+    const [body] = controlBodies(D);
+    assert.equal(body.action, "key");
+    assert.ok(!("setup" in body));
+  });
+
+  test("a key typed as an argument is never read or forwarded: setup instead", async () => {
+    const { D, env } = await setup();
+    for (const args of [`key ${SECRET}`, SECRET, `apikey  ${SECRET} more`]) {
+      const out = parseOut(await run(TOGGLE, { env, input: stdinFor(args) }));
+      assert.equal(out.stopReason, "stub: key", args);
+    }
+    const bodies = controlBodies(D);
+    assert.deepEqual(bodies.map((b) => [b.action, b.setup]), [["key", true], ["key", true], ["key", true]]);
+    const everything = readFileSync(join(D, "stub-control.jsonl"), "utf8")
+      + (existsSync(join(D, "logs", "toggle.log")) ? readFileSync(join(D, "logs", "toggle.log"), "utf8") : "");
+    assert.ok(!everything.includes("S3cr3t"), "the typed key goes nowhere");
+  });
+
+  test("the userConfig key reaches the daemon through its environment, not argv", async () => {
+    const { D, env } = await setup({ CLAUDE_PLUGIN_OPTION_OPENAI_API_KEY: SECRET });
+    parseOut(await run(TOGGLE, { env, input: stdinFor("on") }));
+    const spawned = JSON.parse(readFileSync(join(D, "stub-argv.json"), "utf8"));
+    assert.equal(spawned.userConfigKey, SECRET);
+    assert.ok(!spawned.argv.join(" ").includes("S3cr3t"));
+    assert.ok(!readFileSync(join(D, "stub-control.jsonl"), "utf8").includes("S3cr3t"), "not in /control either");
+  });
+
+  test("a running daemon without any key restarts once the plugin settings hold one", async () => {
+    const { D, env } = await setup();
+    parseOut(await run(TOGGLE, { env, input: stdinFor("on") }));
+    const first = Number(readFileSync(join(D, "daemon.pid"), "utf8"));
+    // Same daemon while no userConfig key is set.
+    parseOut(await run(TOGGLE, { env, input: stdinFor("status") }));
+    assert.equal(Number(readFileSync(join(D, "daemon.pid"), "utf8")), first);
+    const withKey = { ...env, CLAUDE_PLUGIN_OPTION_OPENAI_API_KEY: SECRET };
+    // status never restarts it.
+    parseOut(await run(TOGGLE, { env: withKey, input: stdinFor("status") }));
+    assert.equal(Number(readFileSync(join(D, "daemon.pid"), "utf8")), first);
+    const out = parseOut(await run(TOGGLE, { env: withKey, input: stdinFor("on") }));
+    assert.equal(out.stopReason, "stub: on");
+    const second = Number(readFileSync(join(D, "daemon.pid"), "utf8"));
+    assert.notEqual(second, first);
+    assert.equal(JSON.parse(readFileSync(join(D, "stub-argv.json"), "utf8")).userConfigKey, SECRET);
+    // Now it has a key: no further restarts.
+    parseOut(await run(TOGGLE, { env: withKey, input: stdinFor("on") }));
+    assert.equal(Number(readFileSync(join(D, "daemon.pid"), "utf8")), second);
+  });
+
+  test("a daemon that already has a key is not restarted", async () => {
+    const { D, env } = await setup();
+    parseOut(await run(TOGGLE, { env, input: stdinFor("on") }));
+    const first = Number(readFileSync(join(D, "daemon.pid"), "utf8"));
+    writeFileSync(join(D, "stub-has-key"), "");
+    parseOut(await run(TOGGLE, { env: { ...env, CLAUDE_PLUGIN_OPTION_OPENAI_API_KEY: SECRET }, input: stdinFor("on") }));
+    assert.equal(Number(readFileSync(join(D, "daemon.pid"), "utf8")), first);
   });
 });
 

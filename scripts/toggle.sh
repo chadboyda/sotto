@@ -8,8 +8,12 @@
 # /control?format=hook response (passed through verbatim) or one of the
 # bash-side strings in SPEC §9.1.
 #
-# Never touches OPENAI_API_KEY. Never writes to stderr. Errors are appended
-# to $D/logs/toggle.log. Must stay compatible with macOS /bin/bash 3.2.
+# Never reads OPENAI_API_KEY. The one key it handles is the sensitive
+# userConfig value CLAUDE_PLUGIN_OPTION_OPENAI_API_KEY, which it passes to a
+# daemon it spawns through the environment (never argv, never logged, SPEC
+# §4.3). Keys typed as /talk arguments are never read or forwarded.
+# Never writes to stderr. Errors are appended to $D/logs/toggle.log.
+# Must stay compatible with macOS /bin/bash 3.2.
 
 exec 2>/dev/null
 umask 077
@@ -70,6 +74,7 @@ read -r ARG ARG2 _ <<<"$ARGS_WS"
 
 POLICY=""
 VOICE_ARG=""
+KEY_SETUP=""
 shopt -s nocasematch
 case "$ARG" in
   "")                           ACTION=toggle ;;
@@ -81,12 +86,18 @@ case "$ARG" in
                                 POLICY="$(printf '%s' "$ARG" | tr '[:upper:]' '[:lower:]')" ;;
   voice|voices)                 ACTION=voice
                                 VOICE_ARG="$(printf '%s' "$ARG2" | tr '[:upper:]' '[:lower:]')" ;;
+  # /talk key shows where the API key comes from. Anything typed after it
+  # (or a bare /talk sk-...) is never read: it opens the setup window instead.
+  key|keys|apikey|api-key|api_key)
+                                ACTION=key
+                                [[ -n "$ARG2" ]] && KEY_SETUP=1 ;;
+  sk-*)                         ACTION=key; KEY_SETUP=1 ;;
   *)                            ACTION=usage ;;
 esac
 shopt -u nocasematch
 
 if [[ "$ACTION" == usage ]]; then
-  finish "sotto: usage: /talk [on|off|status|restart|quiet|milestones|walkthrough|voice [name]]"
+  finish "sotto: usage: /talk [on|off|status|restart|quiet|milestones|walkthrough|voice [name]|key]"
 fi
 
 # --- config (SPEC §4.1/§4.2); unset, empty or invalid -> default ---------------
@@ -279,6 +290,7 @@ daemon_down() {
     policy)     finish "sotto: voice is off. Turn it on with /talk on first." ;;
     voice)      voice_local ;;
   esac
+  # on/toggle/key continue: key needs a daemon to serve the setup window.
 }
 
 # pick_runtime: sets NODE to a runtime that can run the daemon (SPEC §6.2), or
@@ -316,7 +328,7 @@ pick_runtime() {
 
 # cold_start: spawn our daemon on $PORT and wait until it answers (sets H).
 cold_start() {
-  [[ -n "$SOCK" ]] || fail no_socket "sotto: ERROR this session has no inbox socket (CLAUDE_CODE_MESSAGING_SOCKET is unset), so voice cannot reach it."
+  [[ -n "$SOCK" || "$ACTION" == key ]] || fail no_socket "sotto: ERROR this session has no inbox socket (CLAUDE_CODE_MESSAGING_SOCKET is unset), so voice cannot reach it."
   pick_runtime
   ENTRY="${SOTTO_DAEMON_ENTRY:-$ROOT/daemon/index.js}"
   rm -f "$D/start-error"
@@ -325,7 +337,10 @@ cold_start() {
   # Spawned from the plugin root, not the session's project: version managers
   # (nodenv, nvm, asdf shims) pick Node from the cwd's .node-version/.nvmrc,
   # and the daemon should not pin the project directory for its lifetime.
-  ( cd "$ROOT" && exec nohup "$NODE" "$ENTRY" --port "$PORT" --data-dir "$D" --plugin-root "$ROOT" ) >/dev/null 2>&1 </dev/null &
+  # The sensitive userConfig key reaches the daemon only through its
+  # environment (never argv: `ps` shows argv to every local user).
+  ( cd "$ROOT" && CLAUDE_PLUGIN_OPTION_OPENAI_API_KEY="${CLAUDE_PLUGIN_OPTION_OPENAI_API_KEY:-}" \
+      exec nohup "$NODE" "$ENTRY" --port "$PORT" --data-dir "$D" --plugin-root "$ROOT" ) >/dev/null 2>&1 </dev/null &
   disown
   # Poll /healthz every 50 ms for up to ~5 s (version-manager shims can take a
   # second to start node). bash 3.2 has no sub-second clock, so bound by both
@@ -348,6 +363,17 @@ cold_start() {
   BASE="http://127.0.0.1:$PORT"
   KEYFILE="$D/daemon.key"
 }
+
+# A daemon of ours without any key, while the plugin settings now hold one:
+# the key only reaches a daemon at spawn, so restart it (it cannot be live).
+if [[ -n "$H" && -n "$CLAUDE_PLUGIN_OPTION_OPENAI_API_KEY" && "$H" == *'"api_key":false'* \
+      && "$H" == *"\"data_dir\":\"$E_D\""* && ( "$ACTION" == on || "$ACTION" == toggle || "$ACTION" == key ) ]]; then
+  read_key_file() { local k=""; [[ -r "$D/daemon.key" ]] && k="$(<"$D/daemon.key")"; printf '%s' "${k%%[[:space:]]*}"; }
+  post_shutdown "$BASE" "$(read_key_file)"
+  wait_gone "$BASE" || fail other_daemon_stuck "sotto: ERROR the voice daemon did not answer. See $D/logs/daemon.log"
+  i=0; while (( i < 40 )) && [[ -f "$D/daemon.pid" ]]; do sleep 0.05; i=$((i + 1)); done
+  H=""
+fi
 
 if [[ -z "$H" ]]; then
   daemon_down
@@ -380,6 +406,7 @@ if [[ -n "$CLAUDE_PROJECT_DIR" ]]; then json_escape -v v "$CLAUDE_PROJECT_DIR"; 
 BODY="{\"action\":\"$ACTION\""
 [[ "$ACTION" == policy ]] && BODY+=",\"policy\":\"$POLICY\""
 [[ "$ACTION" == voice && -n "$VOICE_ARG" ]] && BODY+=",\"voice\":\"$VOICE_ARG\""
+[[ "$ACTION" == key && -n "$KEY_SETUP" ]] && BODY+=",\"setup\":true"
 BODY+=",\"session\":{$SESSION}"
 IDLE_JSON=""
 [[ -n "$CFG_IDLE_S" ]] && IDLE_JSON+=",\"idle_seconds\":$CFG_IDLE_S"

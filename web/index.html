@@ -91,13 +91,16 @@
           <p class="pending-title"><svg aria-hidden="true"><use href="#i-check"/></svg>Claude finished while you were away</p>
           <p class="pending-text" id="overlay-pending-text"></p>
         </div>
-        <div class="key-field" id="key-field" hidden>
+        <!-- API key setup (SPEC §4.3): the key goes to the daemon, which checks it with
+             OpenAI and keeps it in the macOS Keychain. It is never shown again. -->
+        <form class="key-field" id="key-field" autocomplete="off" hidden>
           <label for="api-key-input">OpenAI API key</label>
           <div class="key-row">
-            <input id="api-key-input" type="password" autocomplete="off" spellcheck="false" placeholder="Key setup is coming soon" disabled>
-            <button type="button" class="btn" disabled>Save</button>
+            <input id="api-key-input" name="sotto-openai-key" type="password" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="sk-..." aria-describedby="api-key-error">
+            <button type="submit" class="btn" id="api-key-save">Save</button>
           </div>
-        </div>
+          <p class="key-error" id="api-key-error" role="alert" hidden></p>
+        </form>
         <p class="card-note" id="overlay-note" hidden></p>
         </div>
         <div class="card-actions">
@@ -175,6 +178,19 @@
     <div class="field">
       <label class="field-label" for="output-select">Speaker</label>
       <select id="output-select"></select>
+    </div>
+    <div class="field" id="key-settings">
+      <span class="field-label" id="key-settings-label">OpenAI API key</span>
+      <div class="key-summary">
+        <span class="key-summary-text" id="key-summary">Checking…</span>
+        <button type="button" class="btn small" id="key-change-btn" hidden>Change</button>
+        <button type="button" class="btn small danger" id="key-remove-btn" hidden>Remove</button>
+      </div>
+      <form class="key-row" id="key-edit" autocomplete="off" hidden>
+        <input id="key-edit-input" name="sotto-openai-key-new" type="password" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="sk-..." aria-labelledby="key-settings-label" aria-describedby="key-help">
+        <button type="submit" class="btn" id="key-edit-save">Save</button>
+      </form>
+      <p class="field-help" id="key-help"></p>
     </div>
     <div class="field">
       <label class="field-label" for="wake-select">Voice wake</label>

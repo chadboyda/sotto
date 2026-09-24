@@ -186,9 +186,10 @@ Stale files: if `D/daemon.pid` names a dead process, or `/healthz` does not answ
 | `speaking_policy` | string | `milestones` | `options`: quiet, milestones, walkthrough | Default narration level |
 | `daily_cap_minutes` | number | `120` | min 0, max 1440 | Voice minutes allowed per local day; `0` = no cap |
 | `window` | string | `auto` | `options`: auto, app, chrome, default | Where the voice page opens (§6.16). `SOTTO_BROWSER` overrides it. |
+| `openai_api_key` | string, `sensitive: true` | none | optional | The last-resort API key source (§4.3). Claude Code stores it in its secure storage and exports it to hooks as `CLAUDE_PLUGIN_OPTION_OPENAI_API_KEY`; it is not a `/config` row. |
 
 ### 4.2 How values reach the code
-- **Only toggle.sh reads config.** It reads `CLAUDE_PLUGIN_OPTION_VOICE`, `…_PORT`, `…_IDLE_SECONDS`, `…_IDLE_MINUTES`, `…_WAKE_SENSITIVITY`, `…_WINDOW`, `…_SPEAKING_POLICY` and `…_DAILY_CAP_MINUTES`. An unset, empty or invalid value falls back to the §4.1 default (P4). It sends the resolved values in the `/control` body (§6.4). Invalid means: not in `options`, not numeric, or out of range.
+- **Only toggle.sh reads config.** It reads `CLAUDE_PLUGIN_OPTION_VOICE`, `…_PORT`, `…_IDLE_SECONDS`, `…_IDLE_MINUTES`, `…_WAKE_SENSITIVITY`, `…_WINDOW`, `…_SPEAKING_POLICY` and `…_DAILY_CAP_MINUTES`. `…_OPENAI_API_KEY` is never put in the `/control` body: toggle.sh passes it to a daemon it spawns through the environment only (§4.3). An unset, empty or invalid value falls back to the §4.1 default (P4). It sends the resolved values in the `/control` body (§6.4). Invalid means: not in `options`, not numeric, or out of range.
 - **Idle fields are sent only when set.** `idle_seconds` and `idle_minutes` appear in the body only when the option is set and valid, so the daemon can tell "unset" from a value. The daemon resolves: `idle_seconds` if present, else `idle_minutes × 60` if present, else the previous value (default 60). Status reports both (`idle_minutes` = `idle_seconds / 60`).
 - **hook.sh reads no config.** It gets the port and key from `D/active`.
 - **Nothing references `${user_config.*}`** (P5).
@@ -196,15 +197,27 @@ Stale files: if `D/daemon.pid` names a dead process, or `/healthz` does not answ
 - Runtime policy changes (from `/talk <policy>` or the page) last until the daemon exits.
 
 ### 4.3 API key
-The daemon resolves `OPENAI_API_KEY` in this order:
-1. its process env (inherited from Claude Code's env through toggle.sh);
-2. `<plugin_root>/.env`;
-3. `D/.env`;
-4. `$HOME/.sotto/.env`.
+The daemon (`daemon/apikey.js` `KeyStore`) uses the first key it finds:
+1. `OPENAI_API_KEY` in its process env (inherited from Claude Code's env through toggle.sh);
+2. a `.env` file: `<plugin_root>/.env`, then `D/.env`, then `$HOME/.sotto/.env`;
+3. the macOS Keychain: generic password, service `sotto`, account `openai-api-key`, label `Sotto OpenAI API key`, read and written only through `/usr/bin/security` (so its default ACL trusts that tool and reads never prompt);
+4. the sensitive userConfig `openai_api_key`, which toggle.sh passes in the spawned daemon's environment as `CLAUDE_PLUGIN_OPTION_OPENAI_API_KEY`. The daemon moves it into memory and deletes it from `process.env` at start, so its children (window, git, security) do not inherit it.
 
-It parses `.env` itself: `KEY=VALUE` lines, optional `export ` prefix, optional single or double quotes, `#` comments. It reads only `OPENAI_API_KEY`.
+It parses `.env` itself: `KEY=VALUE` lines, optional `export ` prefix, optional single or double quotes, `#` comments. It reads only `OPENAI_API_KEY`. The environment and `.env` files are read on every use; the Keychain at first use and again on every `/control on`, `toggle` and `key`, and after a save or removal (each read spawns `security`, measured at about 25 ms).
 
-The key MUST NOT be logged, echoed in errors, sent to the page, or written to any file. toggle.sh never touches the key.
+The key MUST NOT be logged, echoed in errors, sent to the page, put on any command line, or written to any file by sotto. The only exception to "sent nowhere but OpenAI" is the Keychain write: `security -i` gets `add-generic-password -U -s sotto -a openai-api-key -l … -w "<key>"` **on stdin** (`-w <key>` in argv would show it in `ps`), and the write is verified by reading it back. The page and `/talk key` see only `hint`, the last four characters. toggle.sh never reads `OPENAI_API_KEY`, and never reads a key typed after `/talk key` (or a bare `/talk sk-…`): it sends `"setup":true` instead.
+
+**First run and key setup (the page).** `/talk on` without a key binds the owner, sets `last_error` `no_api_key`, stays `paused`, sets `keySetup`, and opens the window (message `sotto: voice ON (<project>), but there is no OpenAI API key yet. Opening the voice window so you can add it; it is saved in your macOS Keychain.`). The page shows the key card when `PageStatus.key.setup` is true, after a `/api/session` failure `no_api_key`, or after `openai_auth` when `key.can_change`. **Save** posts the key to `POST /api/key` (§6.4); the daemon:
+1. normalizes it (trim, a pair of quotes, a leading `OPENAI_API_KEY=`) and requires `^sk-[A-Za-z0-9_-]{16,400}$`, else 400 `bad_key_format`;
+2. requires the Keychain (macOS, not `SOTTO_KEYCHAIN=0`), else 501 `keychain_unavailable`;
+3. checks it: `GET <base>/models` with the key (10 s timeout). 401 → 400 `invalid_key`; 429 → `rate_limited`; other non-2xx → `openai_error`; network error or timeout → 504 `network`; a list without `gpt-live-1` → 400 `no_model_access`. A 403 on the list (a restricted key without the Models permission) falls back to `GET <base>/models/gpt-live-1`: 2xx passes, 404 → `no_model_access`, else `key_forbidden`. Error messages are sotto's own: OpenAI's 401 text echoes part of the key;
+4. stores it in the Keychain (500 `keychain_error` if that fails), clears a `no_api_key`/`openai_auth` last error and `keySetup`, and, if an owner is bound and the state is `paused` (and the cap is not reached), goes to `waiting_page` and sends SSE `command:"connect"` (reason `key`). With no owner it answers `Key saved. Run /talk on in Claude Code to start talking.`
+
+The settings drawer shows `Key ending in <hint>` with its source, **Change** (when `can_change`: no key, Keychain or userConfig source; env and `.env` keys must be changed where they are) and **Remove** (Keychain source only; two clicks). Removing a key does not stop a running session.
+
+**`/talk key`** (`action:"key"`): with a key, `sotto: using the OpenAI API key ending in <hint> from <source>.` plus where to change it. Without one, or with `setup:true`, it opens the window at the key card (`keySetup`), even with voice off; a daemon kept alive by that window does not exit as "unclaimed" while the window is open. If the key in use comes from the environment or a `.env` file, it says to change it there instead.
+
+**userConfig key and a running daemon.** The userConfig key only reaches a daemon at spawn. `/healthz` reports `"api_key":true|false` (never the key), and for `on`/`toggle`/`key` toggle.sh shuts down and respawns a daemon of this data dir that has no key while `CLAUDE_PLUGIN_OPTION_OPENAI_API_KEY` is set.
 
 ### 4.4 Environment overrides (tests and debugging only; no userConfig)
 | Env | Used by | Effect |
@@ -218,6 +231,8 @@ The key MUST NOT be logged, echoed in errors, sent to the page, or written to an
 | `SOTTO_NODE` | toggle.sh | Runtime binary to use (Node 22+ or Bun ≥ 1.1). Default: `node` on PATH when it is 22 or newer, else `bun` (§5.7, §6.2) |
 | `SOTTO_UPDATE` | daemon | `0` turns self-update off (no source checks; `/talk restart` answers that it is off) (§6.17) |
 | `SOTTO_UPDATE_CHECK_MS`, `SOTTO_UPDATE_SETTLE_MS`, `SOTTO_UPDATE_QUIET_MS` | daemon | Self-update timings (defaults 30000, 5000, 45000); the e2e shortens them (§6.17) |
+| `SOTTO_KEYCHAIN` | daemon | `0` disables the Keychain key source and store (§4.3) |
+| `SOTTO_KEYCHAIN_SERVICE`, `SOTTO_SECURITY_BIN` | daemon | Tests only: Keychain service name (default `sotto`) and a stand-in for `/usr/bin/security` |
 | `SOTTO_DAEMON_ENTRY` | toggle.sh | Daemon entry file (default `$ROOT/daemon/index.js`); tests point it at a stub |
 
 ### 4.5 Voice preference (`D/prefs.json`)
@@ -269,6 +284,8 @@ The user can change the voice without `/config`: `/talk voice <name>` (§5.7), t
 }
 ```
 
+Since then `idle_seconds`, `wake_sensitivity`, `window` and the sensitive, optional `openai_api_key` (§4.1, §4.3) were added; `.claude-plugin/plugin.json` is the source of truth.
+
 ### 5.2 `.claude-plugin/marketplace.json`
 ```json
 {
@@ -286,7 +303,7 @@ Frontmatter (exact):
 ---
 name: talk
 description: Turns sotto voice conversation on or off for this Claude Code session, or shows its status.
-argument-hint: "[on|off|status|restart|quiet|milestones|walkthrough|voice [name]]"
+argument-hint: "[on|off|status|restart|quiet|milestones|walkthrough|voice [name]|key]"
 disable-model-invocation: true
 ---
 ```
@@ -415,6 +432,8 @@ Invoked by the UserPromptExpansion hook. Stdin example (VERIFIED shape):
    | `restart` | `restart` (§6.17) |
    | `quiet`, `milestones`, `walkthrough` | `policy` with `"policy":<word>` |
    | `voice`, `voices` (+ optional second word) | `voice`, with `"voice":<lowercased second word>` when one is given (§4.5) |
+   | `key`, `keys`, `apikey`, `api-key`, `api_key` | `key`; with any second word, `"setup":true` (the word itself is never read or sent, §4.3) |
+   | a word starting with `sk-` | `key` with `"setup":true` |
    | anything else | print the usage message (§9.1) and exit |
 
 4. Resolve config (§4.2). `PORT` is the validated `CLAUDE_PLUGIN_OPTION_PORT` or `47821`.
@@ -425,11 +444,12 @@ Invoked by the UserPromptExpansion hook. Stdin example (VERIFIED shape):
      - For `off`/`status`, print `sotto: voice is off.` and exit (no spawn).
      - For `policy`, print `sotto: voice is off. Turn it on with /talk on first.`
      - For `restart`, print `sotto: voice is off. The next /talk on starts the latest code.`
+     - For `key`, spawn like `on` (below) but without requiring the inbox socket: the daemon serves the key setup window.
      - For `voice`, handle it locally and never spawn: list (current = `prefs.json` voice, else the resolved userConfig voice) or write `D/prefs.json` (§9.1 strings). The same local path runs when a sotto daemon of **another** data dir holds the port, because the choice belongs to this data dir.
      - Otherwise:
        - require `CLAUDE_CODE_MESSAGING_SOCKET` to be non-empty (error otherwise);
        - resolve the runtime (§6.2): `$SOTTO_NODE` if set (error if not found); else `node` if `node -v`, run from `$ROOT`, says 22 or newer; else `bun` (or `~/.bun/bin/bun`) if `bun --version` is 1.1 or newer; else fail at once with the §9.1 "no node" string for the case, which says how to install one;
-       - spawn exactly: `nohup "$NODE" "${SOTTO_DAEMON_ENTRY:-$ROOT/daemon/index.js}" --port "$PORT" --data-dir "$D" --plugin-root "$ROOT" >/dev/null 2>&1 </dev/null & disown`;
+       - spawn exactly (from `$ROOT`): `CLAUDE_PLUGIN_OPTION_OPENAI_API_KEY=<the userConfig key or empty> nohup "$NODE" "${SOTTO_DAEMON_ENTRY:-$ROOT/daemon/index.js}" --port "$PORT" --data-dir "$D" --plugin-root "$ROOT" >/dev/null 2>&1 </dev/null & disown`;
        - poll `/healthz` every 50 ms for up to 3 s (error if it never answers).
 6. `KEY=$(<"$D/daemon.key")`.
 7. Build the body (§6.4 `ControlRequest`) with printf and `json_escape` for env-derived strings. POST it: `curl -s -m 2 -X POST -H 'Content-Type: application/json' -H "X-Sotto-Key: $KEY" --data-binary @- "http://127.0.0.1:$PORT/control?format=hook"`.
@@ -522,16 +542,21 @@ No `dependencies` and no `devDependencies`. Everything is ESM. Test files match 
 | `POST /api/page` | page | Page → daemon events |
 | `GET /api/voices` | page | Voice list + current voice (§6.14) |
 | `POST /api/voice` | page | Set the voice; switches a live session (§6.14) |
+| `GET /api/key` | page | Key facts: `{present, source, file, hint, label, can_change, can_remove, keychain}` (§4.3); never the key |
+| `POST /api/key` | page | `{"key":"sk-…"}`: check with OpenAI, save in the Keychain, connect (§4.3). 200 `{ok, connecting, message, key}` or `{"error":{code,message}}` |
+| `POST /api/key/remove` | page | Delete the Keychain key. 200 `{ok, message, key}`; 409 `not_removable` for any other source |
 
 **`GET /healthz`** → 200:
 ```json
-{"ok":true,"name":"sotto","version":"0.1.0","pid":123,"port":47821,"data_dir":"<D>","plugin_root":"<ROOT>","state":"off"}
+{"ok":true,"name":"sotto","version":"0.1.0","pid":123,"port":47821,"data_dir":"<D>","plugin_root":"<ROOT>","state":"off","api_key":true}
 ```
+`api_key` says whether the daemon has a key from any source (§4.3).
 
 **`POST /control`**, body `ControlRequest`:
 ```json
 {
-  "action": "on|off|toggle|status|policy|voice|restart|shutdown",
+  "action": "on|off|toggle|status|policy|voice|restart|key|shutdown",
+  "setup": true,
   "policy": "quiet|milestones|walkthrough",
   "voice": "cedar",
   "session": {
@@ -557,6 +582,7 @@ Action semantics:
 | `status` | Message only |
 | `policy` | Set the runtime policy; if live, send the §8.4 policy instruction |
 | `voice` | Without `voice`: list (current = the bound session's voice; with no owner, `prefs.json` > `config.voice` > default). With `voice`: validate, write `D/prefs.json`, apply (§6.14). Works in every state, including `off`. |
+| `key` | Where the key comes from, or open the key setup window (§4.3). `setup` is present only for `key`. |
 | `shutdown` | Graceful close, then exit. The response is sent before exiting. |
 
 Messages are in §9.2.
@@ -574,7 +600,8 @@ Messages are in §9.2.
   "delegations": [{"id":"item_…","rev":3,"status":"answered","text":"what branch am I on","sent_at":"<iso>","answered_at":"<iso>"}],
   "counters": {"delegations":0,"inbox_sent":0,"inbox_failed":0,"thinking_sent":0,"commentary_sent":0,"instructions_sent":0,"appends_acked":0,"appends_failed":0,"hooks":0,"sessions_created":0},
   "last_error": {"code":"openai_auth","message":"…","at":"<iso>"},
-  "wake": {"sensitivity":"medium","boost_db":0,"consecutive_false":0,"wakes_voice":0,"wakes_notify":0,"false_wakes":0,"sleeps":0,"queued":0}
+  "wake": {"sensitivity":"medium","boost_db":0,"consecutive_false":0,"wakes_voice":0,"wakes_notify":0,"false_wakes":0,"sleeps":0,"queued":0},
+  "api_key": {"source":"env|dotenv|keychain|user_config|null"}
 }
 ```
 - `owner`, `live` and `last_error` are `null` when absent.
@@ -977,9 +1004,10 @@ A `commentary.append` cuts off whatever the model is saying (observed: a voice a
   ```json
   {"state":"…","owner":{"project":"…","cwd":"…"},"voice":"marin","speaking_policy":"milestones","idle_minutes":5,
    "live":{"session_id":"…","expires_at":0,"usage_seconds":0,"muted":false},"today":{"seconds":0,"cap_minutes":120},
-   "claude":{"busy":false},"last_error":{"code":"…","message":"…"}}
+   "claude":{"busy":false},"last_error":{"code":"…","message":"…"},
+   "key":{"present":true,"source":"keychain","file":null,"hint":"abcd","label":"the macOS Keychain","can_change":true,"can_remove":true,"keychain":true,"setup":false}}
   ```
-  `owner`, `live` and `last_error` are `null` when absent. No socket, no token and no key ever appear in it.
+  `owner`, `live` and `last_error` are `null` when absent. No socket, no token and no key ever appear in it (`key.hint` is the key's last four characters, §4.3).
 
 ### 6.13 Shutdown / off
 **Graceful off (reason `user` | `owner_gone` | `shutdown`):**
@@ -1277,7 +1305,7 @@ Result that arrived while voice was paused: <pendingResult>   <- only if set; cl
 ### 9.1 toggle.sh strings (bash side)
 | Condition | stopReason |
 |---|---|
-| bad argument | `sotto: usage: /talk [on|off|status|restart|quiet|milestones|walkthrough|voice [name]]` |
+| bad argument | `sotto: usage: /talk [on|off|status|restart|quiet|milestones|walkthrough|voice [name]|key]` |
 | voice, unknown name | `sotto: unknown voice "<name, [a-z0-9_-] only, ≤40>". Voices: alloy, ash, …, willow.` |
 | voice list, no daemon of this data dir | `sotto: voice is <v>. Voices: alloy, ash, …, <v> (current), …, willow. Change it with /talk voice <name>.` |
 | voice set, no daemon of this data dir | `sotto: voice set to <v>. It applies to the next voice session.` |
@@ -1303,7 +1331,11 @@ Result that arrived while voice was paused: <pendingResult>   <- only if set; cl
 | on, page already connected | `sotto: voice ON (<project>).` |
 | on, moved | `sotto: voice ON (<project>), moved from <old project>.` |
 | on, already owner and live | `sotto: voice is already ON here (<project>).` |
-| on, no key | `sotto: ERROR OPENAI_API_KEY was not found. Add it to <ROOT>/.env or export it before starting Claude Code.` |
+| on, no key | `sotto: voice ON (<project>), but there is no OpenAI API key yet. Opening the voice window so you can add it; it is saved in your macOS Keychain.` (page already connected: `… Add it in the voice window; it is saved in your macOS Keychain.`; `open_browser:false`: `… Run /talk key to add it.`; no window mode: `… Open the voice window to add it.`) |
+| on, no key, no Keychain | `sotto: ERROR OPENAI_API_KEY was not found. Run /talk key to add it, or export it before starting Claude Code.` |
+| key, have one | `sotto: using the OpenAI API key ending in <hint> from <the macOS Keychain | the plugin settings | the OPENAI_API_KEY environment variable | <.env path>>.` + ` Change or remove it in the voice window settings.` / ` Change it where OPENAI_API_KEY is exported.` / ` Change it in that file.` |
+| key, none | `sotto: no OpenAI API key found.` + the window sentence above |
+| key, `setup` | `sotto: API keys are never read from /talk arguments (what you typed stays in your prompt history; rotate the key if it was real).` + the window sentence |
 | on, cap reached | `sotto: daily voice cap reached (<N> min). Raise daily_cap_minutes in /config to continue.` |
 | off | `sotto: voice OFF. <m> min today ($<$>).` |
 | off, already off | `sotto: voice is already off.` |
@@ -1322,7 +1354,7 @@ Result that arrived while voice was paused: <pendingResult>   <- only if set; cl
 | restart, turned off | `sotto: restart is turned off for this daemon (SOTTO_UPDATE=0).` (`ok:false`) |
 | shutdown | `sotto: daemon stopped.` |
 
-With `no key` and `cap reached`, the owner is still bound (so `/talk off` works), but the state stays `paused` and the window is not opened.
+With `no key` and `cap reached`, the owner is still bound (so `/talk off` works), and the state stays `paused`. With `cap reached` the window is not opened; with `no key` it is, at the key card (§4.3).
 
 ### 9.3 Where each failure shows
 | Failure | Terminal | Page | Spoken |
@@ -1492,6 +1524,10 @@ Unit tests (§11.2/§11.3): `test/web/wake.test.js` (VAD on synthetic speech, wh
 5. `hook.sh` forwards to the new daemon through the old `D/active`; `/talk off` closes session 2; no secrets and no handover file on disk. `SOTTO_NODE=bun` runs the same test under Bun. Two sessions, ~30 billed seconds.
 
 Unit tests: `test/daemon/update.test.js` (fingerprint, settle, quiet polling, failure memory, manual, costs), `test/daemon/restart.test.js` (quiet rules with the fake clock, auto restart only after 45 s of silence or when asleep, held by a voice request, prepare/abort, in-process handover resuming owner, marker and history with the spoken cue, sleeping without it), `test/daemon/handover.test.js` (real processes: `/control restart` swaps pid on the same port with the same key and `D/active`; broken code fails the preflight and the daemon carries on; a successor that dies → the old daemon listens again).
+
+### 11.7 API key setup (§4.3)
+- `npm test`: `test/daemon/apikey.test.js` (input normalization, source order env > `.env` > Keychain > userConfig, Keychain caching and refresh, `security` driven through a fake binary that logs its argv (the key must never appear there), a real Keychain round trip under a random temporary service on macOS, `validateKey` against every OpenAI answer, the 403 fallback and a timeout); `test/daemon/apikey-flow.test.js` (first run: `/talk on` → key card → `POST /api/key` → Keychain → `connect`; every error code; remove; `/talk key` messages; the userConfig key; the key never in logs, SSE, `status.json` or any data-dir file); `test/scripts/toggle.test.js` (`/talk key` cold start without a socket, a typed key never forwarded, the userConfig key in the spawn env and not argv, restart of a key-less daemon); `test/web/view.test.js` (`keyCardView`, `keySettingsView`).
+- `npm run e2e:key` (`test/e2e/keysetup.mjs`, also run by `npm run e2e`): a plugin root without `.env`, a temporary Keychain service, `/talk on` through toggle.sh, the real page in headless Chrome driven over the DevTools protocol: key card, a wrong key rejected by OpenAI (nothing stored), the real key checked and saved, the page connects a real `gpt-live-1` session on its own, `/talk key`, the drawer's "Key ending in" and Remove, `/talk off`, the key in no data-dir file, the temporary item deleted. HOME must stay real: with a fake HOME every Keychain write fails ("authorization was canceled by the user", verified). About 15 billed seconds.
 
 ### 11.5 Desktop app (§6.16)
 - `npm test`: `test/daemon/window.test.js` (the chooser: precedence, every mode × build state × platform, the Bluetooth-input rule, background build without blocking, `open` failure and page watchdog fallbacks, close backstop; the sources hash equals `build-app.sh --print-hash`) and `test/scripts/app-static.test.js` (`bash -n`, Info.plist keys, and bridge.js run in a stub page: state only, no caption text or token, host API).

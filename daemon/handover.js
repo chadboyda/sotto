@@ -148,6 +148,9 @@ export async function performRestart({
     v: 1, reason, parent_pid: process.pid, from: from?.all || null, to: to?.all || null,
     web_changed: !!(from && to && from.web !== to.web),
     daemon_key: d.daemonKey, page_token: d.pageToken, voice: d.voice.snapshot(prep),
+    // The userConfig API key lives only in the daemon's memory (SPEC §4.3):
+    // the successor gets it over this pipe, never argv or the environment.
+    user_config_key: d.keys?.userConfigKey || null,
   };
   d.stopListening();
   d.server.closeAllConnections?.();

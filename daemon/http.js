@@ -157,6 +157,21 @@ export function createHttpServer({ voice, port, daemonKey, pageToken, pageSecret
       if (!r.ok) return err(res, 400, "bad_voice", r.message);
       return send(res, 200, { ok: true, voice: r.voice, switching: r.switching, message: r.message });
     }
+    // API key setup (SPEC §4.3). Responses carry at most the key's last four characters.
+    if (p === "/api/key" && method === "GET") {
+      if (!pageOk(req, url)) return err(res, 403, "bad_token");
+      return send(res, 200, voice.keyInfo());
+    }
+    if (p === "/api/key" && method === "POST") {
+      if (!pageOk(req, url)) return err(res, 403, "bad_token");
+      const r = await voice.saveKey(body.key);
+      return send(res, r.status, r.body);
+    }
+    if (p === "/api/key/remove" && method === "POST") {
+      if (!pageOk(req, url)) return err(res, 403, "bad_token");
+      const r = voice.removeKey();
+      return send(res, r.status, r.body);
+    }
     if (p === "/api/page" && method === "POST") {
       if (!pageOk(req, url)) return err(res, 403, "bad_token");
       send(res, 204);
