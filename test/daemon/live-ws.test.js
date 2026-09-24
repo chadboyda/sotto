@@ -163,21 +163,88 @@ test("pacer: one frame per 20 ms from the app, in order; nothing before start", 
   assert.equal(p.stats().input_ms, 1000);
 });
 
-test("pacer: fills silence once the app is more than 60 ms behind, then drops as many late frames", async () => {
+test("pacer: fills silence once the app is more than 60 ms behind; a late burst is trimmed back to target", async () => {
   const { clock, sent, p } = pacer();
   p.start();
   await clock.advance(200);
   const filled = p.stats().fill_frames;
   assert.ok(filled >= 7 && filled <= 8, `filled ${filled}`);
   assert.ok(sent.every((b) => b.every((x) => x === 0)));
-  // The late frames arrive in a burst: dropped, no double time.
+  // The late frames arrive in a burst: queued, the excess over 3 frames trimmed within ~0.5 s.
   for (let i = 0; i < filled; i++) p.push(frame(5));
-  assert.equal(p.stats().dropped_late, filled);
   p.push(frame(7));
-  await clock.advance(20);
-  assert.equal(sent.at(-1)[0], 7);
-  // Timeline stays at wall time: ~ (220 / 20) frames.
-  assert.ok(Math.abs(p.stats().sent_frames - 11) <= 2, `sent ${p.stats().sent_frames}`);
+  await clock.advance(600);
+  assert.ok(p.stats().queued <= 3, `queued ${p.stats().queued}`);
+  assert.ok(p.stats().dropped_late <= filled, "never drops more than the burst's excess");
+  // Timeline stays at wall time (800 / 20 frames), at most fillAfterMs (3 frames) behind.
+  assert.ok(p.stats().sent_frames >= 38 && p.stats().sent_frames <= 41, `sent ${p.stats().sent_frames}`);
+});
+
+/** Feed the pacer an app stream at `fps` for `ms`; returns how many real frames went out. */
+async function stream(clock, p, sent, { ms, fps = 50, value = 1 }) {
+  const before = sent.length;
+  let next = 0;
+  for (let t = 0; t < ms; t += 1) {
+    while (next <= t) { p.push(frame(value)); next += 1000 / fps; }
+    await clock.advance(1);
+  }
+  return sent.slice(before).filter((b) => b[0] === value).length;
+}
+
+test("pacer: after a capture stall (rebuild, route change, sleep/wake) real frames flow again, nothing is dropped", async () => {
+  const { clock, sent, p } = pacer();
+  p.start();
+  await stream(clock, p, sent, { ms: 2000 });
+  await clock.advance(300); // the app rebuilt its capture: 300 ms with no frames, none arrive later
+  const s0 = p.stats();
+  const real = await stream(clock, p, sent, { ms: 30_000 });
+  const s = p.stats();
+  const fills = s.fill_frames - s0.fill_frames;
+  assert.equal(s.dropped_late - s0.dropped_late, 0, "no frame dropped as late");
+  assert.equal(fills, 0, "no silence substituted while the app streams");
+  assert.ok(real >= 1495, `real frames sent ${real} of 1500`);
+});
+
+test("pacer: stalls with the timestamp jumping back or ahead (seq restart) never lock into silence", async () => {
+  const { clock, sent, p } = pacer();
+  p.start();
+  for (const gap of [150, 700, 60, 2500]) {
+    await stream(clock, p, sent, { ms: 1000 });
+    await clock.advance(gap);
+    p.resync(); // the app's route message after a rebuild
+  }
+  const s0 = p.stats();
+  const real = await stream(clock, p, sent, { ms: 10_000 });
+  assert.equal(p.stats().fill_frames - s0.fill_frames, 0);
+  assert.equal(p.stats().dropped_late - s0.dropped_late, 0);
+  assert.ok(real >= 498, `real ${real}`);
+});
+
+test("pacer: app clock drift of +/-0.5 % keeps drops and silence under 1 %", async () => {
+  for (const fps of [50 * 1.005, 50 * 0.995]) {
+    const { clock, sent, p } = pacer();
+    p.start();
+    const real = await stream(clock, p, sent, { ms: 60_000, fps });
+    const s = p.stats();
+    const pushed = Math.floor(60_000 * fps / 1000);
+    assert.ok((s.dropped_late + s.dropped) / pushed < 0.01, `fps ${fps}: dropped ${s.dropped_late + s.dropped}`);
+    assert.ok(s.fill_frames / s.sent_frames < 0.01, `fps ${fps}: fills ${s.fill_frames}`);
+    assert.ok(real / s.sent_frames > 0.99, `fps ${fps}: real ${real} of ${s.sent_frames}`);
+    assert.ok(s.queued <= 4, `latency bounded (queued ${s.queued})`);
+  }
+});
+
+test("pacer: onDropRate fires when over 5 % of frames are dropped or replaced by silence in 5 s", async () => {
+  const warns = [];
+  const { clock, sent, p } = pacer({ onDropRate: (w) => warns.push(w) });
+  p.start();
+  await stream(clock, p, sent, { ms: 10_000 });
+  assert.equal(warns.length, 0, "a healthy stream never warns");
+  // App at half rate: silence fills half the slots.
+  await stream(clock, p, sent, { ms: 6000, fps: 25 });
+  assert.ok(warns.length >= 1, "warned");
+  assert.ok(warns.at(-1).fill_ratio > 0.05);
+  assert.equal(p.stats().drop_warnings, warns.length);
 });
 
 test("pacer: queue capped at 10 frames (oldest dropped); muted sends zeros", async () => {

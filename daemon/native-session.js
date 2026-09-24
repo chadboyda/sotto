@@ -84,6 +84,9 @@ export class NativeController {
       send: (pcm) => { this.session?.pushAudio(pcm); },
       isMuted: () => !!(this.voice.muteWanted || this.voice.live?.muted),
       onGraceExpired: () => { if (!this.link) this.voice.onAppGone(); },
+      // More than 5 % of the app's frames dropped (or replaced by silence while
+      // the app was sending) over 5 s: the model is not hearing the mic.
+      onDropRate: (info) => this.log.warn("pacer.drop_rate", { ...info, live_id: this.session?.id || null }),
     });
     // `hearing` overrides the page's thresholds (tests only: createDaemon nativeOptions).
     this.hearing = createHearingMonitor(hearing);
@@ -311,6 +314,8 @@ export class NativeController {
         this.route = { mode: truncate(String(msg.mode ?? ""), 16), input: dev(msg.input), output: dev(msg.output), echo_cancellation: truncate(String(msg.echo_cancellation ?? ""), 16) };
         this.log.info("native.route", this.route);
         // A different mic: not heard on it yet; re-arm the checks if live (as the page does).
+        // The app rebuilt its capture for the new route: frames queued from before are stale.
+        this.pacer.resync();
         if (this.micKey() !== before) {
           this.hearing.reset();
           if (this.session?.ready) this.hearing.start(this.clock.now(), this.micKey());
