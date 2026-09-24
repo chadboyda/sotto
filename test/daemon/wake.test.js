@@ -310,7 +310,7 @@ test("a permission prompt while sleeping wakes a session that says it (no greeti
   assert.doesNotMatch(seed, /Result that arrived while voice was paused/, "flushed as commentary instead");
   const said = appends(ws, "commentary");
   assert.equal(said.length, 2);
-  assert.match(said[0].content, /waiting for your approval in the terminal/);
+  assert.match(said[0].content, /your approval in the terminal/);
   assert.equal(said[0].delegation_id, null);
   assert.equal(said[1].content, "Also: tests finished.");
   assert.equal(appends(ws, "instructions").length, 0);

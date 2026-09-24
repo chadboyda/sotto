@@ -311,7 +311,7 @@ async function main() {
   const tAsk = Date.now();
   const ask = spawnSync(path.join(REPO, "scripts", "hook.sh"), ["PreToolUse"], { input: askBody, encoding: "utf8", env: hookEnv() });
   check("hook.sh PreToolUse (AskUserQuestion): exit 0, silent", ask.status === 0 && ask.stdout === "" && ask.stderr === "");
-  const askSent = await until(() => readLog().find((e) => e.ev === "client.send" && e.type === "session.commentary.append" && ts(e) >= tAsk - 50 && /^Claude's asking: Which color should the button be\? Options: Red or Blue\./.test(e.content || "")), 20000);
+  const askSent = await until(() => readLog().find((e) => e.ev === "client.send" && e.type === "session.commentary.append" && ts(e) >= tAsk - 50 && /^(?:Claude's asking|Claude has a question|Quick question from Claude): Which color should the button be\? Options: Red or Blue\..*terminal\.$/.test(e.content || "")), 20000);
   check("AskUserQuestion → commentary.append with the question and options", !!askSent, askSent ? `${ts(askSent) - tAsk} ms after the hook` : "");
   const askAck = askSent && await until(() => readLog().find((e) => e.ev === "append.ack" && e.event_id === askSent.event_id), 10000);
   check("question commentary acked", !!askAck);

@@ -10,6 +10,8 @@ import { writeActive, removeActive, createPendingContext, removePendingContext, 
 import { Transcript } from "./transcript.js";
 import { DelegationEngine, parseTaskNotifications } from "./delegation.js";
 import { Mirror, MIRROR_MODES } from "./mirror.js";
+import { materialOf } from "./phrasing.js";
+import { StyleWatch } from "./stylewatch.js";
 import { Narrator, elicitationSpeech, serverName, ToolLine, AgentTracker, TopLevelWork, reportSentence, isBackgroundLaunch, agentsText, cardText, permissionLabel, reminderSpeech } from "./policy.js";
 import { Approvals, commandFingerprint, findRunning } from "./approvals.js";
 import { SpeechQueue, COMMENTARY_PREROLL_MS } from "./speaker.js";
@@ -239,7 +241,9 @@ export class Voice {
         this.log.info("speech.send", { source: a.source || null, audio_age_ms: Number.isFinite(at) ? this.clock.now() - at : null });
         this.sendAppend(a);
       },
-      demote: (a) => this.sendAppend({ ...a, kind: "thinking", content: BG + a.content }),
+      // Claude's words only: a relay frame ("tell the user…") as a background
+      // note would invite the voice to announce it after all.
+      demote: (a) => this.sendAppend({ ...a, kind: "thinking", content: BG + materialOf(a.content) }),
       // Not wired to output audio: measured on gpt-live-1 (e2e, 2026-09-23),
       // output audio chunks arrive continuously, silence included (the last
       // chunk was 42 ms old when the voice had been quiet for 1.2 s), which
@@ -247,6 +251,14 @@ export class Voice {
       // session-timeline end_ms, tracks audible speech.
     });
     this.narrator = new Narrator({ clock: this.clock, policy: () => this.policy, emit: (a) => this.deliver(a) });
+    // The voice's own speech: a tag line, a repeated phrase or a banned opener
+    // gets one silent corrective instruction (stylewatch.js, SPEC §8.1).
+    this.style = new StyleWatch({
+      clock: this.clock, log: this.log,
+      correct: (content) => { if (this.sideband) this.deliver({ kind: "instructions", content, delegationId: null }); },
+    });
+    this.cantHearVariant = 0;
+    this.reminderVariant = 0; // rotates the approval reminder line (phrasing.js)
     // The Claude card (SPEC-DEVIATIONS "Claude card"): the parent session's own
     // words first, a deduped plain-words tool line, and a count of background agents.
     this.toolLine = new ToolLine();
@@ -1510,7 +1522,7 @@ export class Voice {
     for (const p of due) p.reminders++;
     if (due.length) {
       this.log.info("approval.remind", { ids: due.map((p) => p.id), waited_ms: due.map((p) => now - p.at) });
-      this.deliver({ kind: "commentary", content: reminderSpeech(due), delegationId: null, source: "approval_reminder", dedupeKey: `reminder:${due.map((p) => p.id).join(",")}:${due[0].reminders}` });
+      this.deliver({ kind: "commentary", content: reminderSpeech(due, this.reminderVariant++), delegationId: null, source: "approval_reminder", dedupeKey: `reminder:${due.map((p) => p.id).join(",")}:${due[0].reminders}` });
     }
     this.scheduleApprovalReminder();
   }
@@ -1691,7 +1703,7 @@ export class Voice {
     if (this.cantHearSaidAt !== undefined && now - this.cantHearSaidAt < CANT_HEAR_SAY_MS) return;
     this.live.cantHearSaid = true;
     this.cantHearSaidAt = now;
-    this.deliver({ kind: "instructions", content: cantHearInstruction(), delegationId: null });
+    this.deliver({ kind: "instructions", content: cantHearInstruction(this.cantHearVariant++), delegationId: null });
   }
 
   /**
@@ -2206,6 +2218,7 @@ export class Voice {
       case "session.output_transcript.delta":
         this.transcript.add("assistant", evt.delta, evt.start_ms, evt.end_ms);
         this.speech.onOutput(evt.delta, evt.start_ms, evt.end_ms);
+        this.style.onOutput(evt.delta);
         break;
       case "session.delegation.created": this.delegation.onCreated(evt); break;
       case "session.usage.updated": this.onUsage(sb.id, Number(evt.usage?.seconds)); break;
@@ -2559,6 +2572,7 @@ export class Voice {
     this.agents.reset(); this.work.reset(); this.reports.clear(); this.toolLine.reset(); this.agentsShown = 0;
     this.clearApprovals();
     this.speech.drain();
+    this.style.reset();
     this.nonce = null;
     this.voiceSwitch = null;
     this.personaSwitch = null;
@@ -2772,6 +2786,7 @@ export class Voice {
     this.mirror.dispose();
     this.narrator.dispose();
     this.speech.drain();
+    this.style.reset();
     this.statusFile.stop();
   }
 }

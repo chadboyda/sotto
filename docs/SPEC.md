@@ -904,29 +904,31 @@ The token line matters: it lets Claude Code verify the message as an own-child m
 
 | source | quiet | milestones | walkthrough |
 |---|---|---|---|
-| `voice_result` | commentary(id, **S**) + thinking(null, **R**) | same | commentary(id, **S**), then up to 2 more commentary(id) chunks of the rest + thinking(null, **R**) |
+| `voice_result` | commentary(id, relay("answer", **M**)) + thinking(null, **R**); from an earlier Live session: commentary(null, relay("earlier", **M**, request text)) | same | the same, then up to 2 more commentary(id) chunks of the rest + thinking(null, **R**) |
 | `stale_result` | thinking(null, "[Background reference; not user speech] Result for the earlier request \"<text>\": " + **S**) | same | same |
-| `typed_result` | thinking(null, bg + **S**) | commentary(null, "Claude Code finished: " + first 2 sentences of **S**) + thinking(null, **R**) | commentary(null, "Claude Code finished: " + **S**) + thinking(null, **R**) |
-| `progress_text` (intermediate assistant message) | thinking(null, bg + text ≤600) | same | commentary(null, text ≤400), throttled to 1 per 15 s, else thinking |
+| `typed_result` | thinking(null, bg + **S**) | commentary(null, relay("typed", first sentence of **M** ≤160)) + thinking(null, **R**) | commentary(null, relay("typed", **M**)) + thinking(null, **R**) |
+| `progress_text` (intermediate assistant message) | thinking(null, bg + text ≤600) | same | commentary(null, relay("progress", text ≤400)), throttled to 1 per 15 s, else thinking |
 | `tool_milestone` | thinking(null, bg + "Claude progress: " + labels) | same | same |
-| `permission` | commentary(null, "Claude Code is waiting for your approval in the terminal to <label>.") | same | same |
+| `permission` | commentary(null, `permission` template (§6.10.5), e.g. "Claude needs your approval in the terminal to <label>.") | same | same |
 | `policy_change` | instructions(null, §8.4) | same | same |
-| `other_result` (turn with no known origin) | thinking(null, bg + **S**) | same | commentary(null, "Claude Code finished: " + first sentence ≤160) + thinking(**R**) |
-| `mirror_result` (turn started by a mirror, §6.18) | Claude's reply is a bare acknowledgement ("Noted."): thinking(null, bg + "Claude Code has seen what the user just told you and had nothing to add."); otherwise commentary(null, "Claude Code, on what you just said: " + first 2 sentences ≤300) + thinking(**R**) | same | same, full summary |
-| `background_voice` (task turn for work launched while answering a voice request) | commentary(null, "Update on your earlier request \"<text>\": " + first 2 sentences) + thinking(**R**) | same | same, full summary |
-| `background_result` (task turn for work launched in a typed turn) | thinking(null, bg + "Background work finished. " + **S**) | commentary(null, "Background work finished: " + first sentence ≤160) + thinking(**R**) | same, first 2 sentences |
+| `other_result` (turn with no known origin) | thinking(null, bg + **S**) | same | commentary(null, relay("other", first sentence ≤160)) + thinking(**R**) |
+| `mirror_result` (turn started by a mirror, §6.18) | Claude's reply is a bare acknowledgement ("Noted."): thinking(null, bg + "Claude Code has seen what the user just told you and had nothing to add."); otherwise commentary(null, relay("mirror", first 2 sentences ≤300)) + thinking(**R**) | same | same, full material |
+| `background_voice` (task turn for work launched while answering a voice request) | commentary(null, relay("background", first 2 sentences, request text)) + thinking(**R**) | same | same, full material |
+| `background_result` (task turn for work launched in a typed turn) | thinking(null, bg + "Background work finished. " + **S**) | commentary(null, relay("bgwork", first sentence ≤160)) + thinking(**R**) | same, first 2 sentences |
 | `question` (AskUserQuestion, ExitPlanMode) | commentary(id of the voice request in flight or null, §6.10.1 text) + thinking(bg + plan, ≤2 chunks) | same | same |
 | `attention` (Elicitation, `agent_needs_input`, `quota_auto_resume_stale`, unmatched `permission_prompt`/elicitation dialog) | commentary(id or null, text) | same | same |
 | `notice` (`quota_auto_resume_disabled`) | commentary(null, text) | same | same |
 | `completion` (batched SubagentStop/TaskCompleted/TeammateIdle/`agent_completed`) | thinking(bg + notes) | commentary for items of level milestones + thinking | commentary for all + thinking |
-| `idle` (`idle_prompt`) | thinking | commentary "Claude Code is waiting for you in the terminal." once per idle period, unless the turn's result was spoken | same |
-| `tool_failure` (PostToolUseFailure, main thread, not `is_interrupt`) | thinking | same | commentary("<label> failed[ with exit code N].") ≤ 1 per 15 s + thinking |
+| `idle` (`idle_prompt`) | thinking | commentary `idle` template ("Claude's waiting for you in the terminal.") once per idle period, unless the turn's result was spoken. Not reached from the Notification hook since hotfix #17 (`Narrator.onIdle` ignores Claude Code's generic idle notice) | same |
+| `tool_failure` (PostToolUseFailure, main thread, not `is_interrupt`) | thinking | same | commentary(`toolFailure` template, "<Label> failed."; the exit code only in the thinking note) ≤ 1 per 15 s + thinking |
 | `context` | thinking(bg + text) | same | same |
 
 Here `bg` = `"[Background reference; not user speech] "`.
 
-- **S** = `speech.summary(last_assistant_message, 900)` prefixed with `"Claude Code's answer: "`.
-- **R** = the reference copy. It is sent only if the speakable full text is longer than **S**: `bg + "Claude Code's full reply (abridged): " + speech.speakable(text)`, cut to at most 2 chunks.
+- **M** = the material to relay, `phrasing.relayMaterial(last_assistant_message, 900)`: `speech.speakable()` after dropping markdown label lines ("**What changed:**") and bold bullet labels ("- **Threshold:** …"), then without short "Label: " sentence starts, "(code omitted)" markers, stock tag lines ("No input needed from you.", `phrasing.isTagline`) and any sentence said twice; ≤ 900 chars cut at a sentence end.
+- **relay(kind, M)** = a one-line frame, then `"\nClaude said: "` + **M** (`phrasing.relay`). The frame says whose words these are and how to say them: `"Claude's reply to what the user asked. Tell the user the gist in your own words, speaking to them as \"you\", conversationally, in one to three short sentences, in your persona. Don't read lists, labels, file paths or formatting aloud; mention details only if they matter or the user asks. Stop when the news ends: no closing line about the user not needing to do anything."` (answer; `earlier`, `mirror` and `background` change the first sentence; `typed`, `bgwork`, `other` and `progress` ask for one short sentence). Results are never framed as a quote to read ("Claude Code's answer: …" is gone, §8.1 "How you talk").
+- **S** = `"Claude's reply: " + M` (silent contexts: stale results, quiet typed turns, the seed's pending result).
+- **R** = the reference copy, for follow-up questions. It is sent only if the speakable full text is longer than **M**: `bg + "Claude's full reply, for follow-up questions (abridged): " + speech.speakable(text)`, cut to at most 2 chunks.
 
 Milestone labels (from PreToolUse `tool_name`/`tool_input`; never raw arguments):
 
@@ -944,17 +946,18 @@ Milestone labels (from PreToolUse `tool_name`/`tool_input`; never raw arguments)
 - **`progress_text`:** on `MessageDisplay` with `final:true`, hold the text (concatenated deltas per `message_id`). If a later PreToolUse or MessageDisplay arrives first, emit it as `progress_text`. If a Stop arrives first, discard it (the Stop path covers it).
 - **`permission`:** labels use the milestone table verbs ("run a shell command", "edit hooks.json"). Deduplicate the same label within 10 s.
 - **Everything:** skip a thinking append whose content equals one sent in the last 30 s.
-- **`typed_result` under milestones** is "Claude Code finished: " + the first sentence of **S**, clipped to 160 chars (was 2 sentences; §6.10.2).
-- **`progress_text` under milestones:** commentary "Still working: <first sentence ≤160>" when the main turn has run ≥ 30 s and no such note was spoken in the last 30 s; else thinking.
+- **`typed_result` under milestones** is relay("typed", the first sentence of **M**, clipped to 160 chars) (was 2 sentences; §6.10.2).
+- **`progress_text` under milestones:** commentary relay("progress", <first sentence ≤160>) when the main turn has run ≥ 30 s and no such note was spoken in the last 30 s; else thinking.
+- **Demoted and repeated commentary** (§6.10.2) goes to the voice as `bg + M` only, never with its relay frame (a frame in a background note invites the voice to announce it).
 
 #### 6.10.1 Things the user must know (notifications)
 Every source below is decided in `policy.js` (`Narrator`), fed by `voice.handleHook` (§6.4 `/hook/*`). Nothing spoken contains code, paths, URLs or secrets: every text passes `speech.speakable()`.
 
 | Hook (CLI 2.1.281 payload) | Handling |
 |---|---|
-| PreToolUse / PermissionRequest `tool_name: AskUserQuestion` | `question`: "Claude's asking: <question>? Options: A, B, or C. Answer in the terminal." (multiSelect: "Pick any of: A and B"; 2 to 4 questions: "Claude has N questions for you in the terminal. First: … Second: …"). Deduped per `tool_use_id` and per text for 10 min, so the PreToolUse and the PermissionRequest of one call speak once; never a milestone, never "approval to use AskUserQuestion". Also for subagents. |
-| same, `ExitPlanMode` | `question`: "Claude's plan is ready for your approval in the terminal: <first heading>." (walkthrough adds "In short: <≤300 chars>"); the plan text goes as thinking. |
-| PermissionRequest (other tools) | `permission`, per pending approval (§6.10.4): "Claude Code is waiting for your approval in the terminal to <label>." / from a subagent: "A background agent is waiting for your approval in the terminal to <label>." Spoken under every policy and never deduped: only a repeated hook for the same pending approval is silent. |
+| PreToolUse / PermissionRequest `tool_name: AskUserQuestion` | `question`: `questionOne` template, e.g. "Claude's asking: <question>? Options: A, B, or C. Answer in the terminal." (multiSelect: "Pick any of: A and B"; 2 to 4 questions: `questionMany`, "Claude has N questions for you in the terminal. First: … Second: …"). Deduped per `tool_use_id` and per text (in its plain variant) for 10 min, so the PreToolUse and the PermissionRequest of one call speak once; never a milestone, never "approval to use AskUserQuestion". Also for subagents. |
+| same, `ExitPlanMode` | `question`: `plan` template, e.g. "Claude's plan is ready for your approval in the terminal: <first heading>." (walkthrough adds "In short: <≤300 chars>"); the plan text goes as thinking. |
+| PermissionRequest (other tools) | `permission`, per pending approval (§6.10.4): `permission` template (§6.10.5), e.g. "Claude needs your approval in the terminal to <label>." / from a subagent: `permissionAgent`, e.g. "A background agent is waiting for your approval in the terminal to <label>." Spoken under every policy and never deduped: only a repeated hook for the same pending approval is silent. |
 | Notification `permission_prompt` | spoken as `attention` only if no approval or question was announced in the last 120 s (PermissionRequest already spoke it 6 s earlier). |
 | Notification `elicitation_dialog`, `elicitation_url_dialog` | same rule against the Elicitation hook. |
 | Notification `idle_prompt` | `idle`. The idle period starts at a result and ends at the next main-thread UserPromptSubmit. |
@@ -962,7 +965,7 @@ Every source below is decided in `policy.js` (`Narrator`), fed by `voice.handleH
 | Notification `quota_auto_resume_disabled` | `notice`. |
 | Notification `quota_auto_resume_fired`, `agent_completed` | `completion` (milestones); quiet: context. |
 | Notification `auth_success`, `elicitation_complete`, `elicitation_response` | ignored. Unknown types: `context`. |
-| Elicitation | `attention`: "<server> is asking for your input in the terminal: <message>." / url mode: "<server> needs you to finish a step in your browser. Check the terminal." (the URL is never spoken). |
+| Elicitation | `attention`: `elicitation` template, e.g. "<server> is asking for your input in the terminal: <message>." / url mode: "<server> needs you to finish a step in your browser. Check the terminal." (the URL is never spoken). |
 | SubagentStop | counts toward the agents chip only for a real agent, once per `agent_id` (`AgentTracker.complete`): an id that sent its own hooks or is listed as a `subagent` in `background_tasks`. The progress-line agent Claude Code runs about every 30 s beside each background agent (its `agent_type` is the session's own agent name, its id none of the session's agents) and `agent_type` "" (prompt suggestions, /btw) are ignored (`agent.stop_ignored`). Only **top-level work** is voiced (`TopLevelWork`): a main-thread background `Agent`/`Task`, `Workflow` or background `Bash` launch, named from its `description` (Workflow: `meta.description`, name or script) as a gerund ("Fix wake detection" → "fixing wake detection"), bound to its agent id by the `background_tasks` description or the task-notification `<task-id>`/`<tool-use-id>`. Its outcome is the first real sentence of the SubagentHandback report, `last_assistant_message` or the notification `<result>` (sanitized, "I" → "It", ≤ 25 words). Nested agents (a subagent's own, a workflow's) produce no append of any kind. `agents_done` (`Narrator.onAgentDone`, 10 s wait) is spoken only when no spoken result or progress line of the parent's followed; a busy parent is waited for (≤ 3 min); at most one line per 60 s, later ones batched at the end of the cooldown; never under quiet; never a bare count: "Fixing wake detection is done. Normal speech wakes it now." / "Two things finished. Fixing wake detection: … Drafting redesign concepts: …". |
 | TaskCompleted | a checklist tick: the card only (`activity` kind `task`), never an append to the voice model. A `task_id` that is a known agent completes that agent (above). |
 | TeammateIdle | `completion` item "the <name> teammate", level walkthrough. |
@@ -1021,6 +1024,26 @@ Answers to Claude's questions are decisions, and a voice model that thinks the c
 - **On set:** thinking(null, bg + "Claude Code ended its turn with a question and is waiting for the user's answer: \"<q ≤300>\". The user's next words may be that answer. An answer is a decision for Claude Code: delegate it."), or "Claude Code asked the user a question in the terminal and is waiting for the answer: …" for AskUserQuestion.
 - **Cleared** by the next main-thread UserPromptSubmit (thinking: "…is no longer waiting for an answer"), an owner switch or voice off.
 - While set, the seed (§8.2) ends with "Claude Code is waiting for the user's answer to: <q> An answer is a decision for Claude Code: delegate it.", and the mirror (§6.18) treats a short yes/no as a decision. `/status` shows `claude.awaiting_input`.
+
+#### 6.10.5 Spoken templates (`daemon/phrasing.js`, pure)
+Fixed notices are short spoken lines with a few variants each (`phrasing.TEMPLATES`), rotated per kind by a counter in the `Narrator` (`Rotation`), so back-to-back notices do not sound canned. Variant 0 is the plainest. Every variant keeps its meaning: an approval says "approval" and "terminal", a question says where to answer, cant-hear names the mic in the voice window. No variant opens with a banned opener (§8.4 "Style correction"), and the fixed text of each is at most 110 characters; slots are clipped by the caller and every append still passes `fitTokens`.
+
+| Template | Variants (slot in angle brackets) |
+|---|---|
+| `permission` | "Claude needs your approval in the terminal to <label>." / "Heads up, Claude's waiting for your approval in the terminal to <label>." / "Claude wants to <label>. It needs your approval in the terminal." |
+| `permissionAgent` (a subagent's approval) | "A background agent is waiting for your approval in the terminal to <label>." / "Heads up, a background agent needs your approval in the terminal to <label>." / "One of the background agents wants to <label>. It needs your approval in the terminal." |
+| `reminder`, `reminderAgent`, `reminderMany` (§6.10.4) | "By the way, Claude's still waiting on your approval to <label>." / "Just a reminder, Claude still needs your approval in the terminal to <label>." (agent: "a background agent"; several: "By the way, <n> approvals are still waiting for you in the terminal." / "Just a reminder, <n> approvals are still waiting in the terminal.") |
+| `permissionNote` (Notification `permission_prompt`) | "Claude needs you in the terminal: <message>." / "Claude's waiting on you in the terminal: <message>." / "Something needs you in the terminal: <message>." (no message: "Claude's waiting for your approval in the terminal." / "There's an approval waiting for you in the terminal." / "Claude needs your approval in the terminal.") |
+| `idle` | "Claude's waiting for you in the terminal." / "Over to you, Claude's waiting in the terminal." / "Claude's stopped and is waiting on you in the terminal." |
+| `questionOne` | "Claude's asking: <q> Answer in the terminal." / "Claude has a question: <q> You can answer in the terminal." / "Quick question from Claude: <q> Answer it in the terminal." |
+| `questionMany`, `questionNone` | "Claude has <n> questions for you in the terminal. <list>" / "Claude's got <n> questions for you, answer them in the terminal. <list>"; "Claude has a question for you in the terminal." / "Claude's asking you something in the terminal." |
+| `plan` | "Claude's plan is ready for your approval in the terminal: <title>." / "Claude has a plan ready: <title>. It needs your approval in the terminal." / "The plan's ready for your approval in the terminal: <title>." |
+| `elicitation`, `sessionInput` | "<server> is asking for your input in the terminal: <message>." / "<server> needs something from you in the terminal: <message>."; "A background Claude session needs your input: <message>." / "One of the background Claude sessions needs you: <message>." |
+| `usageReset`, `usageGaveUp` | "Your usage limit has reset. Press Enter in the terminal to continue." / "The usage limit's reset. Press Enter in the terminal to keep going."; "Claude stopped waiting for the usage limit, so the task didn't continue." / "Claude gave up waiting on the usage limit, so that task didn't pick back up." |
+| `toolFailure` | "<Label> failed." / "Hm, <label> failed." / "Looks like <label> failed." |
+| `cantHear` | §8.3 |
+
+A question is deduplicated on its plain variant, so the PreToolUse and PermissionRequest of one call still speak once although the next variant differs.
 
 ### 6.11 Voice-session lifecycle (`daemon/voice.js`)
 **States:** `off` → `waiting_page` → `connecting` → `live` ⇄ `paused`; `live` ⇄ `sleeping` (§6.15); `live` → `reconnecting` → `live`; any → `closing` → `off`.
@@ -1361,6 +1384,16 @@ Full duplex is the product: the user can talk over the voice at any time and gpt
 You are Sotto, the voice of Claude Code, a coding agent working in the user's terminal on the project "{{project}}". The user is a developer talking with you hands-free while Claude Code does the work. You handle the spoken conversation; Claude Code reads code, runs commands, and makes changes.
 {{persona}}Speak naturally and briefly, like a sharp colleague pairing with the user. Keep most replies to one to three short sentences. Never read code, file paths, URLs, commands, or long identifiers aloud character by character; describe them instead, for example "the hooks file" or "a long commit hash". Never say passwords, API keys, tokens, or other secrets aloud, even if one appears in a result; say that one was shown in the terminal.
 If the user sounds frustrated, acknowledge it in a few words and focus on the next helpful step.
+
+How you talk: this is a spoken conversation, not a written report.
+- Talk like a person on a call: contractions ("it's", "we're", "didn't"), plain everyday words, short sentences, one idea at a time.
+- Relay, don't read. Claude's results reach you as material: give the gist in your own words, leading with what matters, in one to three short sentences. Never read out lists, headings, labels like "Summary:" or "Next steps:", bullet markers, file paths, ids, version strings or runs of numbers. Pick the one or two details that matter and offer the rest ("want the details?") instead of reciting it.
+- Say "Claude", not "Claude Code", unless you need to be precise. For work done in this session, "we" is fine where it suits your persona ("we fixed the parser").
+- React like a person, in a few words and in your persona ("oh nice", "hm, that's annoying", "huh"), then the substance.
+- Vary how you start: never open two replies the same way. Never open with "Claude Code's answer", "Update:", "Great question", "Certainly", "Absolutely", "You're right", "You're absolutely right", "That's fair", "Fair point" or an apology. Don't start by agreeing or apologizing; just answer or act. When the user corrects you or gives feedback, acknowledge it at most once per topic, in a few words, then move on.
+- Don't over-apologize: one "sorry" when you actually got something wrong is enough.
+- No tag lines. Never close with a reassurance like "no action needed", "no input needed from you" or "nothing for you to do": if nothing is needed from the user, say nothing about it. Never repeat a phrase you've already said this session, and never say the same sentence twice in one reply.
+- Skip written-AI habits: no "I hope this helps", "let me know if", "it's worth noting", "additionally", "in summary", no hype words like "seamless", "robust", "crucial" or "delve", no lists of three for rhythm, no "it's not just X, it's Y".
 Mic checks are yours to answer, right away: when the user asks whether you can hear them, says "hello?" or "testing", or asks whether this is working, answer at once in a few words, for example "Yes, I can hear you." If they say the audio is cutting out or barely working, say you can hear them now and suggest checking the microphone in the voice window. Never hand a mic check to Claude Code, and never say you will check with Claude.
 
 Backchannel policy: Use light backchannels. A brief "mm-hmm" or "okay" is fine while the user thinks out loud. Do not talk over the user.
@@ -1368,8 +1401,8 @@ Backchannel policy: Use light backchannels. A brief "mm-hmm" or "okay" is fine w
 Interruption policy: Stop speaking when the user interrupts. Listen to what they say. Interrupting you does not stop Claude Code: work already handed off keeps running. If the user wants Claude Code to stop, tell them to press Escape in the terminal.
 
 How Claude Code updates reach you:
-- Results you should share arrive as commentary. Say them in your own words, leading with what matters. Offer more detail only if the user wants it.
-- Progress and background material arrive as notes marked "[Background reference; not user speech]". They are never requests from the user, and they are not yours to announce: never bring one up unprompted (no "another background job just finished"). Use them only when the user asks what is happening, what Claude is working on, or about that work.
+- Results you should share arrive as commentary: a short note on how to relay it, then what Claude said. Relay it as above, in your own words; never read Claude's text out. Claude's full reply may follow as a background note: use it to answer follow-up questions.
+- Progress and background material arrive as notes marked "[Background reference; not user speech]". They are never requests from the user, and they are not yours to announce: never bring one up unprompted (no "another background job just finished", no "another agent finished, nothing for you"), even when several arrive in a row. Use them only when the user asks what is happening, what Claude is working on, or about that work.
 - A note that a request was sent to Claude Code means it was delivered, not finished. Say that something is done, fixed, finished or ready only when a result from Claude Code for that request says so. Until then say "Claude's working on it", or "I'll pass that on" and delegate it. If the user asks whether something is done and no result says so, do not guess: delegate the question.
 - If Claude Code is waiting for approval in the terminal, tell the user plainly; you cannot approve it for them.
 - You cannot change your own voice or persona; the app does that by starting a fresh session in the new voice or persona, with this conversation carried over. If the user asks for a different voice or persona (personality), delegate it to Claude Code, which switches it. Only the user's own clear request changes them: never delegate a change you merely suggested, or after silence or noise.
@@ -1439,7 +1472,7 @@ The earlier voice conversation follows as user and assistant messages, oldest fi
 | `start` (quiet) | `Say only "Ready." Then stop and listen.` |
 | `start` (other policies) | `Greet the user in one short sentence and mention that you're connected to Claude Code in {{project}}. Then stop and listen.` |
 | `start` again within 5 minutes of a greeted start (not quiet) | `Say only "<line>" Then stop and listen.`, the n-th repeat taking the n-th of "I'm here.", "Listening.", "Go ahead.", "Back with you." (cycling) |
-| can't hear the user (page `cant_hear`, §7.5) | `Say only "I can't hear you well — check the mic in the voice window." Then stop and listen.` |
+| can't hear the user (page `cant_hear`, §7.5) | `Say only "<cantHear template>" Then stop and listen.`, rotating: "I can't hear you well. Check the mic in the voice window." / "I'm not picking you up. Can you check the mic in the voice window?" / "Your audio isn't coming through. Try the mic in the voice window." |
 | `resume` | `Say "I'm back." If a result arrived while voice was paused, tell the user about it briefly. Then stop and listen.` |
 | `reconnect` | none |
 | `reconnect` after a persona switch (§4.6; also when it changed the voice) | `In one short sentence, in your new personality, tell the user you're now <Name>. Then stop and listen; the conversation continues from where it left off.` |
@@ -1448,6 +1481,7 @@ The earlier voice conversation follows as user and assistant messages, oldest fi
 
 ### 8.4 Runtime instructions
 - **Policy change:** `The update preference has changed. <policy_text> Apply it from now on without announcing it.`
+- **Style correction** (`daemon/stylewatch.js`, pure; wired in `voice.onLiveEvent`): the output transcript is split into utterances (a pause over 1.5 s). An utterance that says the same sentence or the same run of 4+ words twice (`repeat`), closes with a stock tag line or the same short closing sentence as an earlier one (`tagline`; all stock reassurances are one family), or opens with a banned opener (reflexive agreement or apology, "Claude Code's answer", "Update:", …) or the same first two words as an earlier one (`opener`) gets one instructions append, e.g. `You keep adding tag lines like "no action for you". Stop: never close an update with a reassurance, and if nothing is needed from the user, say nothing about it. Don't repeat a phrase you've already said this session. This is a note about your speaking style, not something the user said: don't answer it or mention it, just apply it from now on.` Each phrase is corrected once per conversation (the stock family gets one reminder after 3 more), at most one correction per 15 s; the history is kept 30 min and cleared at voice off. Logged as `style.correction`.
 - **Owner switch:** `The user switched to a different Claude Code session, in the project {{project}}. From now on, requests go to that session, and results for the previous project will not arrive. Briefly tell the user you're now connected to {{project}}.`
 
 ---

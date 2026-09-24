@@ -1,6 +1,7 @@
 // Voice orchestrator: regression tests for the v1 review fixes.
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { relay } from "../../daemon/phrasing.js";
 import fs from "node:fs";
 import path from "node:path";
 import { makeHarness, SESSION } from "../helpers/daemon-harness.js";
@@ -29,7 +30,8 @@ test("an answer to a request from before a reconnect is sent with delegation_id 
   await h.clock.advance(0);
   const c = appends(ws, "commentary").at(-1);
   assert.equal(c.delegation_id, null);
-  assert.equal(c.content, `Result for your earlier request "what branch am I on": Claude Code's answer: You are on main.`);
+  assert.equal(c.content, relay("earlier", "You are on main.", { requestText: "what branch am I on" }));
+  assert.match(c.content, /earlier request "what branch am I on"/);
 });
 
 test("append_failed: a rejected delegation id is retried once with null", async (t) => {
@@ -158,7 +160,7 @@ test("subagent hooks never mark the main thread busy", async (t) => {
   assert.equal(h.voice.delegation.claudeBusy, false);
   h.voice.handleHook("PermissionRequest", { tool_name: "Bash", agent_id: "agent-1" }, OWNER);
   assert.equal(h.voice.delegation.claudeBusy, false);
-  assert.match(appends(ws, "commentary").at(-1).content, /waiting for your approval/, "permission is still announced");
+  assert.match(appends(ws, "commentary").at(-1).content, /your approval in the terminal/, "permission is still announced");
 });
 
 test("a final MessageDisplay that arrives after Stop is not re-spoken and does not set busy", async (t) => {

@@ -2,6 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { route, Narrator, milestoneLabel, permissionLabel, resultParts, toolActivity, ToolLine, AgentTracker, AGENT_STALE_MS, agentsText, cardText, AGENT_DONE_MS, AGENT_SPEAK_COOLDOWN_MS, workLabel, reportSentence, finishedSentence } from "../../daemon/policy.js";
 import { createFakeClock } from "../helpers/fake-clock.js";
+import { relay, RELAY_MARK } from "../../daemon/phrasing.js";
 
 const BG = "[Background reference; not user speech] ";
 const SHORT = "You are on the main branch. Nothing is uncommitted.";
@@ -14,13 +15,14 @@ const kinds = (acts) => acts.map((a) => `${a.kind}:${a.delegationId ?? "null"}`)
 test("voice_result: commentary(id, S) (+ thinking R when longer), all policies", () => {
   for (const p of ["quiet", "milestones"]) {
     const s = route("voice_result", p, { text: SHORT, delegationId: "d1" });
-    assert.deepEqual(s, [{ kind: "commentary", delegationId: "d1", content: "Claude Code's answer: " + SHORT }]);
+    assert.deepEqual(s, [{ kind: "commentary", delegationId: "d1", content: relay("answer", SHORT) }]);
+    assert.doesNotMatch(s[0].content, /Claude Code's answer/);
     const l = route("voice_result", p, { text: LONG, delegationId: "d1" });
     assert.equal(l[0].kind, "commentary");
-    assert.ok(l[0].content.startsWith("Claude Code's answer: Result. The tests pass."));
+    assert.ok(l[0].content.includes(RELAY_MARK + "Result. The tests pass."));
     assert.ok(l.slice(1).length >= 1 && l.slice(1).length <= 2);
     for (const a of l.slice(1)) { assert.equal(a.kind, "thinking"); assert.equal(a.delegationId, null); }
-    assert.ok(l[1].content.startsWith(BG + "Claude Code's full reply (abridged): "));
+    assert.ok(l[1].content.startsWith(BG + "Claude's full reply, for follow-up questions (abridged): "));
   }
   const w = route("voice_result", "walkthrough", { text: LONG, delegationId: "d1" });
   assert.deepEqual(kinds(w).slice(0, 3), ["commentary:d1", "commentary:d1", "commentary:d1"]);
@@ -31,16 +33,16 @@ test("voice_result: commentary(id, S) (+ thinking R when longer), all policies",
 test("stale_result: background thinking with the request text", () => {
   for (const p of ["quiet", "milestones", "walkthrough"]) {
     const a = route("stale_result", p, { text: SHORT, delegationId: "d1", requestText: 'what "branch"' });
-    assert.deepEqual(a, [{ kind: "thinking", delegationId: null, content: `${BG}Result for the earlier request "what 'branch'": Claude Code's answer: ${SHORT}` }]);
+    assert.deepEqual(a, [{ kind: "thinking", delegationId: null, content: `${BG}Result for the earlier request "what 'branch'": Claude's reply: ${SHORT}` }]);
   }
 });
 
 test("typed_result per policy", () => {
-  assert.deepEqual(route("typed_result", "quiet", { text: SHORT }), [{ kind: "thinking", delegationId: null, content: BG + "Claude Code's answer: " + SHORT }]);
+  assert.deepEqual(route("typed_result", "quiet", { text: SHORT }), [{ kind: "thinking", delegationId: null, content: BG + "Claude's reply: " + SHORT }]);
   const text3 = "One done. Two done. Three done.";
   // Milestones: one short sentence (§6.10.2), so a typed turn never crowds the voice.
-  assert.deepEqual(route("typed_result", "milestones", { text: text3 }), [{ kind: "commentary", delegationId: null, content: "Claude Code finished: One done." }]);
-  assert.deepEqual(route("typed_result", "walkthrough", { text: text3 }), [{ kind: "commentary", delegationId: null, content: "Claude Code finished: " + text3 }]);
+  assert.deepEqual(route("typed_result", "milestones", { text: text3 }), [{ kind: "commentary", delegationId: null, content: relay("typed", "One done.") }]);
+  assert.deepEqual(route("typed_result", "walkthrough", { text: text3 }), [{ kind: "commentary", delegationId: null, content: relay("typed", text3) }]);
   const m = route("typed_result", "milestones", { text: LONG });
   assert.equal(m[0].kind, "commentary");
   assert.ok(m.slice(1).every((a) => a.kind === "thinking"));
@@ -58,7 +60,7 @@ test("tool_milestone, permission and policy_change", () => {
   assert.deepEqual(route("tool_milestone", "walkthrough", { labels: ["reading a.js", "searching the code"] }),
     [{ kind: "thinking", delegationId: null, content: BG + "Claude progress: reading a.js; searching the code" }]);
   assert.deepEqual(route("permission", "quiet", { label: "run a shell command" }),
-    [{ kind: "commentary", delegationId: null, content: "Claude Code is waiting for your approval in the terminal to run a shell command." }]);
+    [{ kind: "commentary", delegationId: null, content: "Claude needs your approval in the terminal to run a shell command." }]);
   const pc = route("policy_change", "milestones", { policy: "quiet" });
   assert.equal(pc[0].kind, "instructions");
   assert.match(pc[0].content, /^The update preference has changed\. Update preference: Quiet\./);
@@ -159,7 +161,7 @@ test("cardText: Claude's words without markdown, code or paths, a sentence or tw
 
 test("resultParts: empty text is handled", () => {
   const r = resultParts("");
-  assert.equal(r.S, "Claude Code finished, with nothing to report.");
+  assert.equal(r.S, "Claude finished, with nothing to report.");
   assert.deepEqual(r.R, []);
 });
 
@@ -220,7 +222,7 @@ test("permission: a repeated hook for the same call is spoken once; every other 
   assert.equal(n.onPermission("Bash", { command: "npm test" }, { id: "toolu_2", agent: true }), "run a shell command");
   assert.equal(n.onPermission("Bash", { command: "npm test" }, { id: "toolu_2", agent: true }), null, "same approval id");
   assert.deepEqual(out.slice(2).map((a) => a.content), [
-    "Claude Code is waiting for your approval in the terminal to run a shell command.",
+    "Claude wants to run a shell command. It needs your approval in the terminal.", // third main-thread approval: variant 2
     "A background agent is waiting for your approval in the terminal to run a shell command.",
   ]);
   assert.deepEqual(out.slice(2).map((a) => a.dedupeKey), ["approval:toolu_1", "approval:toolu_2"], "keyed by approval, not by text");
@@ -272,7 +274,7 @@ test("background agent done: named and specific, only when the parent does not s
   await clock.advance(2000);
   n.route("background_result", { text: "The agent counted 3 files." });
   await clock.advance(AGENT_DONE_MS);
-  assert.deepEqual(out.filter((a) => a.kind === "commentary").map((a) => a.content), ["Background work finished: The agent counted 3 files."]);
+  assert.deepEqual(out.filter((a) => a.kind === "commentary").map((a) => a.content), [relay("bgwork", "The agent counted 3 files.")]);
   // Quiet: never spoken.
   ({ clock, out, n } = narrator("quiet"));
   n.onAgentDone({ label: "x", result: "y" });
@@ -326,7 +328,7 @@ test("spoken progress is Claude's own words, never tool names", async () => {
   n.onToolUse("Edit", { file_path: "/a/voice.js" }); // releases the held message
   await clock.advance(3000);
   const said = out.filter((a) => a.kind === "commentary").map((a) => a.content);
-  assert.deepEqual(said, ["Still working: I found the bug in voice.js."]);
+  assert.deepEqual(said, [relay("progress", "I found the bug in voice.js.")]);
   const all = out.map((a) => a.content).join("\n");
   assert.ok(!/helper agent|running cd|\bcd\b|\bls\b/.test(all), all);
 });
