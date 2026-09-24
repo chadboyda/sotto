@@ -210,10 +210,14 @@ wait_gone() {
   [[ -z "$(healthz "$1")" ]]
 }
 
+# key_header KEY: the daemon-key header line, for `curl -H @<(key_header K)`.
+# The key never goes on curl's command line (macOS `ps` shows every user's argv).
+key_header() { printf 'X-Sotto-Key: %s\n' "$1"; }
+
 # post_shutdown BASE KEY: ask a daemon to stop (fire and forget).
 post_shutdown() {
   printf '{"action":"shutdown"}' | curl -s -m 2 -o /dev/null -X POST \
-    -H 'Content-Type: application/json' -H "X-Sotto-Key: $2" \
+    -H 'Content-Type: application/json' -H @<(key_header "$2") \
     --data-binary @- "$1/control" >/dev/null
 }
 
@@ -424,7 +428,7 @@ post_control() {
   read_key
   RESP="$(printf '%s' "$BODY" | curl -s -m 2 -X POST \
     -H 'Content-Type: application/json' \
-    -H "X-Sotto-Key: $KEY" \
+    -H @<(key_header "$KEY") \
     --data-binary @- "$BASE/control?format=hook")"
   RESP="${RESP%$'\n'}"
   if [[ "$RESP" == \{*\} && "$RESP" == *'"continue":false'* && "$RESP" != *$'\n'* ]]; then

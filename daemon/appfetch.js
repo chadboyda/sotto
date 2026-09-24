@@ -9,7 +9,9 @@
 //
 // A release is adopted only when all of these hold:
 //   1. sha256 of Sotto.zip equals the published Sotto.zip.sha256;
-//   2. the zip holds exactly Sotto.app;
+//   2. the zip holds exactly Sotto.app, and before unpacking every entry is a
+//      plain file or directory under Sotto.app/ (no `..`, absolute paths or
+//      symlinks), so a crafted archive cannot write outside the staging dir;
 //   3. Contents/Resources/sotto-source.json has this plugin's app sources hash
 //      (a release built from other sources, e.g. a locally edited app/, is
 //      never used: the local build runs instead);
@@ -115,6 +117,73 @@ async function fetchBytes(url, { fetchImpl, maxBytes, timeoutMs }) {
   return Buffer.concat(chunks);
 }
 
+/** More entries than any Sotto.app zip has (13 today). */
+export const MAX_ZIP_ENTRIES = 2000;
+
+/**
+ * The entries of a zip from its central directory: [{name, mode}] with the
+ * unix mode from the external attributes (0 when made on another OS).
+ * Throws on anything we do not produce (zip64, multi-disk, truncation).
+ */
+export function zipEntries(buf) {
+  const min = 22;
+  let eocd = -1;
+  for (let i = buf.length - min; i >= Math.max(0, buf.length - min - 0xffff); i--) {
+    if (buf.readUInt32LE(i) === 0x06054b50) { eocd = i; break; }
+  }
+  if (eocd < 0) throw new Error("no end of central directory");
+  const disk = buf.readUInt16LE(eocd + 4), cdDisk = buf.readUInt16LE(eocd + 6);
+  const count = buf.readUInt16LE(eocd + 10);
+  const size = buf.readUInt32LE(eocd + 12), off = buf.readUInt32LE(eocd + 16);
+  if (disk !== 0 || cdDisk !== 0 || count === 0xffff || off === 0xffffffff) throw new Error("multi-disk or zip64 archive");
+  if (count > MAX_ZIP_ENTRIES) throw new Error(`${count} entries`);
+  if (off + size > eocd) throw new Error("central directory out of bounds");
+  const out = [];
+  let p = off;
+  for (let n = 0; n < count; n++) {
+    if (p + 46 > eocd || buf.readUInt32LE(p) !== 0x02014b50) throw new Error("bad central directory entry");
+    const madeBy = buf.readUInt16LE(p + 4) >> 8;
+    const nameLen = buf.readUInt16LE(p + 28), extraLen = buf.readUInt16LE(p + 30), commentLen = buf.readUInt16LE(p + 32);
+    const ext = buf.readUInt32LE(p + 38);
+    if (p + 46 + nameLen > eocd) throw new Error("bad central directory entry");
+    const name = buf.subarray(p + 46, p + 46 + nameLen).toString("utf8");
+    out.push({ name, mode: madeBy === 3 ? (ext >>> 16) : 0 });
+    p += 46 + nameLen + extraLen + commentLen;
+  }
+  return out;
+}
+
+const S_IFMT = 0o170000, S_IFREG = 0o100000, S_IFDIR = 0o040000;
+
+/**
+ * Refuse a zip before ditto unpacks it unless every entry is a plain file or
+ * directory under Sotto.app/ (or ditto's __MACOSX/ sidecar): no absolute or
+ * `..` paths, no backslashes or control characters, no symlinks or devices.
+ * The signature checks run only after unpacking, so this is what keeps a
+ * crafted archive from writing outside the staging directory.
+ * Returns null when fine, else the reason.
+ */
+export function zipEntryProblem(entries) {
+  for (const { name, mode } of entries) {
+    if (!name || name.startsWith("/") || /[\\\x00-\x1f\x7f]/.test(name)) return `bad name ${JSON.stringify(name).slice(0, 120)}`;
+    const parts = name.replace(/\/$/, "").split("/");
+    if (parts.some((s) => s === ".." || s === "." || s === "")) return `bad path ${JSON.stringify(name).slice(0, 120)}`;
+    if (parts[0] !== "Sotto.app" && parts[0] !== "__MACOSX") return `unexpected entry ${JSON.stringify(name).slice(0, 120)}`;
+    const type = mode & S_IFMT;
+    if (type !== 0 && type !== S_IFREG && type !== S_IFDIR) return `not a plain file ${JSON.stringify(name).slice(0, 120)}`;
+  }
+  return null;
+}
+
+/** Any symlink or special file under `dir` (after unpacking), else null. */
+function specialFileUnder(dir, fsImpl) {
+  for (const e of fsImpl.readdirSync(dir, { withFileTypes: true })) {
+    const p = path.join(dir, e.name);
+    if (e.isDirectory()) { const r = specialFileUnder(p, fsImpl); if (r) return r; } else if (!e.isFile()) return p;
+  }
+  return null;
+}
+
 const run = (execFile, cmd, args, timeout = 60_000) => new Promise((resolve) => {
   execFile(cmd, args, { timeout, maxBuffer: 4 * 1024 * 1024 }, (err, stdout, stderr) => {
     resolve({ code: err ? (typeof err.code === "number" ? err.code : 1) : 0, out: `${stdout || ""}${stderr || ""}` });
@@ -168,11 +237,17 @@ export async function installRelease({
     const zip = await fetchBytes(urls.zip, { fetchImpl, maxBytes: MAX_ZIP_BYTES, timeoutMs });
     const got = createHash("sha256").update(zip).digest("hex");
     if (got !== want) throw new FetchError("sha256_mismatch", `expected ${want}, got ${got}`);
+    let listed;
+    try { listed = zipEntries(zip); } catch (e) { throw new FetchError("bad_zip", e.message); }
+    const problem = zipEntryProblem(listed);
+    if (problem) throw new FetchError("bad_zip", problem);
     const zipPath = path.join(stage, ZIP_NAME);
     fsImpl.writeFileSync(zipPath, zip, { mode: 0o600 });
     const unpack = path.join(stage, "x");
     const dx = await run(execFile, "/usr/bin/ditto", ["-x", "-k", zipPath, unpack]);
     if (dx.code !== 0) throw new FetchError("unzip", dx.out.trim().slice(0, 300));
+    const special = specialFileUnder(unpack, fsImpl);
+    if (special) throw new FetchError("bad_zip", `not a plain file: ${path.relative(unpack, special)}`);
     const entries = fsImpl.readdirSync(unpack).filter((n) => n !== "__MACOSX");
     if (entries.length !== 1 || entries[0] !== "Sotto.app") throw new FetchError("bad_zip", `entries: ${entries.join(", ")}`);
     const bundle = path.join(unpack, "Sotto.app");

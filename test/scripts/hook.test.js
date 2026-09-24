@@ -325,3 +325,12 @@ describe("hook.sh owner path", () => {
     }
   });
 });
+
+// The daemon key must never be on a command line: macOS `ps` shows every
+// user's argv, and the daemon listens on loopback for all local users.
+test("scripts never pass the daemon key in curl argv", () => {
+  for (const f of ["scripts/hook.sh", "scripts/toggle.sh", "scripts/lib.sh", "bin/sotto"]) {
+    const src = readFileSync(join(ROOT, f), "utf8");
+    assert.doesNotMatch(src, /-H\s+["']X-Sotto-Key:/, `${f} puts X-Sotto-Key on curl's command line`);
+  }
+});

@@ -38,9 +38,11 @@ if [[ "$NONCE" =~ ^[0-9a-f]+$ ]]; then MARK="[sotto voice $NONCE]"; else MARK="[
 
 # Fire-and-forget POST. All three std streams of the background job are
 # redirected so nothing keeps the hook's pipes open (ARCHITECTURE §2 hang).
+# The daemon key reaches curl through a /dev/fd header file, never argv:
+# macOS `ps` shows every user's command lines.
 ( printf '%s' "$INPUT" | curl -s -m 3 -o /dev/null -X POST \
     -H 'Content-Type: application/json' \
-    -H "X-Sotto-Key: $KEY" \
+    -H @<(printf 'X-Sotto-Key: %s\n' "$KEY") \
     -H "X-Sotto-Socket: $OWNER" \
     --data-binary @- "http://127.0.0.1:$PORT/hook/$EVENT" ) >/dev/null 2>&1 </dev/null &
 

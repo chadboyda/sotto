@@ -21,7 +21,7 @@ Sotto is a Claude Code plugin for full-duplex voice with a running session, buil
 - `toggle.sh` always prints exactly one line, `{"continue":false,"stopReason":…}`, and exits 0. The daemon's `/healthz` and `/control?format=hook` responses must stay compact single-line JSON, because toggle.sh matches them as text.
 - **Secrets:**
   - `OPENAI_API_KEY`, the inbox token, `daemon.key` and the page token are never logged, echoed, sent to the page or written to disk.
-  - The key never goes on a command line: the Keychain write feeds `security -i` on stdin, and toggle.sh passes the userConfig key to the daemon in its environment. The page only ever sees the last four characters. Keys typed after `/talk` are never read.
+  - No key or token goes on a command line (macOS `ps` shows every user's argv): scripts hand curl the daemon key as `-H @<(printf 'X-Sotto-Key: %s\n' "$KEY")`, and the Keychain write feeds `security -i` on stdin, and toggle.sh passes the userConfig key to the daemon in its environment. The page only ever sees the last four characters. Keys typed after `/talk` are never read.
   - `.env` is gitignored.
   - The pre-commit hook blocks `.env` files, `sk-proj-…` keys, and the literal key from `.env`.
 - **The spec's exact strings are contracts:** event names, headers, messages and file names. Don't rename them casually. The tests pin many of them.
@@ -53,7 +53,7 @@ Sotto is a Claude Code plugin for full-duplex voice with a running session, buil
 - Data dir: `${CLAUDE_PLUGIN_DATA}`. For `--plugin-dir` runs that is `~/.claude/plugins/data/sotto-inline`; for the symlink install it is `~/.claude/plugins/data/sotto-skills-dir`. The fallback is `~/.sotto`.
 - Useful files there: `logs/daemon.log` (JSONL, `ev` field), `status.json`, and `active` (present only while a session owns voice).
 - `SOTTO_DEBUG=1` logs full hook bodies and every non-audio sideband event.
-- `curl -s -H "X-Sotto-Key: $(cat $D/daemon.key)" http://127.0.0.1:47821/status` returns full status and counters.
+- `curl -s -H @<(printf 'X-Sotto-Key: %s\n' "$(<$D/daemon.key)") http://127.0.0.1:47821/status` returns full status and counters.
 
 ## Conventions
 - ESM, `node:` built-ins, and small pure modules with injected `clock`, `fetchImpl` and `WebSocketImpl` so the logic is testable with fakes. New daemon logic gets a unit test, and a pure module if possible.

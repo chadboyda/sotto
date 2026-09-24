@@ -778,8 +778,9 @@ export class Voice {
 
   /**
    * Persist a voice choice (prefs.json) and apply it. gpt-live-1's
-   * audio.output.voice cannot change after startup (ref-live-*: "Voice and
-   * format are immutable after startup"), so a live session is re-created:
+   * audio.output.voice cannot change after startup (Live API reference,
+   * developers.openai.com/api/reference/resources/live/primary-websocket:
+   * voice and format "are immutable after startup"), so a live session is re-created:
    * the old one is closed, the page is asked to reconnect, and the new
    * session is seeded with the recent conversation and confirms in the new voice.
    * Returns {ok, message, voice, switching}.

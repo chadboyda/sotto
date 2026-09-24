@@ -12,6 +12,7 @@ import { spawn, spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import {
   installRelease, parseShaFile, pluginVersion, releaseUrls, shouldDownload, verifyApp, readDownloadStamp,
+  zipEntries, zipEntryProblem,
   RELEASE_BASE, RETRY_MS, REQUIREMENT, TEAM_ID,
 } from "../../daemon/appfetch.js";
 import { appBuildState, appSourceHash } from "../../daemon/window.js";
@@ -215,6 +216,37 @@ describe("installRelease", { skip: DARWIN ? false : "needs ditto (macOS)" }, () 
     assert.equal(refused.reason, "network");
   });
 
+  test("a zip with a path escaping the staging dir or a symlink is refused before or right after unpacking", async () => {
+    const pl = fakePlugin("4.1.0");
+    const data = tmp();
+    const out = path.join(data, "app");
+    // Crafted archive: a valid Sotto.app plus an entry that climbs out of the staging dir.
+    const craft = path.join(tmp(), "evil.zip");
+    const py = spawnSync("python3", ["-c", `import sys, zipfile
+z = zipfile.ZipFile(sys.argv[1], "w")
+z.writestr("Sotto.app/Contents/Resources/sotto-source.json", '{"hash":"' + sys.argv[2] + '"}')
+z.writestr("Sotto.app/../../../escaped.txt", "x")
+z.close()`, craft, pl.hash], { encoding: "utf8" });
+    assert.equal(py.status, 0, py.stderr);
+    srv.publish("4.1.0", fs.readFileSync(craft));
+    let verifyCalls = 0;
+    const r = await installRelease({ outDir: out, version: "4.1.0", hash: pl.hash, base: srv.base, verify: async () => { verifyCalls++; return { ok: true }; } });
+    assert.equal(r.reason, "bad_zip");
+    assert.match(r.message, /bad path/);
+    assert.equal(verifyCalls, 0);
+    assert.ok(!fs.existsSync(path.join(data, "escaped.txt")) && !fs.existsSync(path.join(out, "escaped.txt")));
+    // A symlink inside the bundle (ditto keeps symlinks).
+    const { bundleDir } = makeZip(pl.hash);
+    fs.symlinkSync("/etc", path.join(bundleDir, "Sotto.app", "Contents", "Resources", "etc"));
+    const zipPath = path.join(tmp(), "Sotto.zip");
+    assert.equal(spawnSync("ditto", ["-c", "-k", "--keepParent", path.join(bundleDir, "Sotto.app"), zipPath]).status, 0);
+    srv.publish("4.1.1", fs.readFileSync(zipPath));
+    const r2 = await installRelease({ outDir: out, version: "4.1.1", hash: pl.hash, base: srv.base, verify: ok });
+    assert.equal(r2.reason, "bad_zip");
+    assert.match(r2.message, /not a plain file/);
+    assert.ok(!fs.existsSync(path.join(out, "Sotto.app")));
+  });
+
   test("an oversized download is cut off", async () => {
     const pl = fakePlugin("5.0.0");
     const out = path.join(tmp(), "app");
@@ -264,5 +296,25 @@ describe("installRelease", { skip: DARWIN ? false : "needs ditto (macOS)" }, () 
     const child = spawn(process.execPath, [path.join(ROOT, "daemon/appfetch.js"), "--out", out, "--plugin-root", pl.root, "--hash", pl.hash, "--base", srv.base, "--no-build"], { stdio: "ignore" });
     assert.equal(await new Promise((resolve) => child.on("exit", resolve)), 1);
     assert.ok(!fs.existsSync(path.join(out, "built-by-script")));
+  });
+});
+
+describe("zip entry checks", () => {
+  test("only plain files and directories under Sotto.app/ pass", () => {
+    const f = (name, mode = 0o100644) => ({ name, mode });
+    assert.equal(zipEntryProblem([f("Sotto.app/", 0o40755), f("Sotto.app/Contents/Info.plist"), f("__MACOSX/Sotto.app/._x"), f("Sotto.app/x", 0)]), null);
+    for (const bad of ["../x", "/etc/passwd", "Sotto.app/../../x", "Sotto.app/./x", "Sotto.app//x", "Other.app/x", "Sotto.app\\..\\x", "Sotto.app/a\nb"]) {
+      assert.ok(zipEntryProblem([f(bad)]), bad);
+    }
+    assert.match(zipEntryProblem([f("Sotto.app/link", 0o120777)]), /not a plain file/);
+    assert.match(zipEntryProblem([f("Sotto.app/dev", 0o020644)]), /not a plain file/);
+  });
+
+  test("zipEntries reads a ditto archive and refuses garbage", { skip: DARWIN ? false : "needs ditto (macOS)" }, () => {
+    const { bytes } = makeZip("b".repeat(64));
+    const names = zipEntries(bytes).map((e) => e.name);
+    assert.ok(names.includes("Sotto.app/Contents/Resources/sotto-source.json"), names.join(", "));
+    assert.throws(() => zipEntries(Buffer.from("not a zip at all, just some bytes")));
+    assert.throws(() => zipEntries(bytes.subarray(0, bytes.length - 30)));
   });
 });

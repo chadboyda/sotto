@@ -44,6 +44,8 @@ test("healthz shape and no-store", async (t) => {
   assert.equal(r.status, 200);
   assert.equal(r.headers["cache-control"], "no-store");
   assert.equal(r.headers["access-control-allow-origin"], undefined);
+  assert.equal(r.headers["x-frame-options"], "DENY");
+  assert.equal(r.headers["x-content-type-options"], "nosniff");
   assert.deepEqual(r.json, { ok: true, name: "sotto", version: "0.2.0", pid: process.pid, port: h.port, data_dir: h.dataDir, plugin_root: h.pluginRoot, state: "off", api_key: true });
 });
 

@@ -21,7 +21,9 @@ function safeEqual(a, b) {
 
 function send(res, status, body, headers = {}) {
   if (res.headersSent) return;
-  const h = { "Cache-Control": "no-store", ...headers };
+  // Never framed by another site (the page is top-level in Chrome and the app);
+  // no content sniffing of JSON or audio.
+  const h = { "Cache-Control": "no-store", "X-Frame-Options": "DENY", "X-Content-Type-Options": "nosniff", ...headers };
   if (body === undefined || body === null) {
     res.writeHead(status, h);
     res.end();
