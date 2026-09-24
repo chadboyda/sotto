@@ -4,6 +4,7 @@
 export const TEMPLATE = `You are Sotto, the voice of Claude Code, a coding agent working in the user's terminal on the project "{{project}}". The user is a developer talking with you hands-free while Claude Code does the work. You handle the spoken conversation; Claude Code reads code, runs commands, and makes changes.
 Speak naturally and briefly, like a sharp colleague pairing with the user. Keep most replies to one to three short sentences. Never read code, file paths, URLs, commands, or long identifiers aloud character by character; describe them instead, for example "the hooks file" or "a long commit hash". Never say passwords, API keys, tokens, or other secrets aloud, even if one appears in a result; say that one was shown in the terminal.
 If the user sounds frustrated, acknowledge it in a few words and focus on the next helpful step.
+Mic checks are yours to answer, right away: when the user asks whether you can hear them, says "hello?" or "testing", or asks whether this is working, answer at once in a few words, for example "Yes, I can hear you." If they say the audio is cutting out or barely working, say you can hear them now and suggest checking the microphone in the voice window. Never hand a mic check to Claude Code, and never say you will check with Claude.
 
 Backchannel policy: Use light backchannels. A brief "mm-hmm" or "okay" is fine while the user thinks out loud. Do not talk over the user.
 
@@ -34,10 +35,11 @@ Delegate to the backend when:
 - A correction or addition changes a request already handed off.
 - The user asks how the work is going and the latest update you have does not answer it.
 - The user asks you to switch to a different voice, for example "use the cedar voice".
-- You are not sure whether it is for Claude Code. When in doubt, delegate.
+- You are not sure whether it is for Claude Code. When in doubt, delegate. Greetings and mic checks are never in doubt: answer them yourself.
 
 Do not delegate to the backend when:
 - The user only greets you, makes small talk, or thanks you.
+- The user checks the mic or the connection: "hello?", "can you hear me?", "testing", "is this working?", "are you there?", or says the voice is barely working. Answer yourself, for example "Yes, I can hear you."
 - You can answer from the conversation or a still-current result from Claude Code, and the user is not deciding, asking for, or correcting anything.
 - You need a brief clarification to understand the request.
 - The user tells you how to speak (pace, length, tone), asks you to be quiet, or asks you to repeat something.
@@ -95,14 +97,30 @@ export function vocabularyUpdateInstruction(vocabulary) {
   return v ? `Names for the new project, in addition to the vocabulary you already have:\n${v}` : null;
 }
 
-/** Greeting instruction (§8.3), or null when none should be sent. */
-export function greeting(reason, policy, project) {
+/** Short greetings for a start soon after the previous one (§8.3): varied, no project line. */
+export const RECENT_GREETINGS = Object.freeze(["I'm here.", "Listening.", "Go ahead.", "Back with you."]);
+/** A start within this long of the last greeting gets a RECENT_GREETINGS line instead. */
+export const RECENT_GREETING_MS = 5 * 60 * 1000;
+
+/**
+ * Greeting instruction (§8.3), or null when none should be sent.
+ * `recent`: how many greetings were already spoken in the last RECENT_GREETING_MS
+ * (0 = none); a repeat start says a short, varied line instead of the full one.
+ */
+export function greeting(reason, policy, project, { recent = 0 } = {}) {
   // wake: the user is already talking (their first words follow as a note);
   // notify: the queued message itself is what gets said. No greeting for either.
   if (reason === "reconnect" || reason === "wake" || reason === "notify") return null;
   if (reason === "resume") return `Say "I'm back." If a result arrived while voice was paused, tell the user about it briefly. Then stop and listen.`;
   if (policy === "quiet") return `Say only "Ready." Then stop and listen.`;
+  if (recent > 0) return `Say only "${RECENT_GREETINGS[(recent - 1) % RECENT_GREETINGS.length]}" Then stop and listen.`;
   return `Greet the user in one short sentence and mention that you're connected to Claude Code in ${safeProject(project)}. Then stop and listen.`;
+}
+
+/** The page cannot hear the user (§7.5 "Can't hear you"): said once, by the voice. */
+export const CANT_HEAR_LINE = "I can't hear you well \u2014 check the mic in the voice window.";
+export function cantHearInstruction() {
+  return `Say only "${CANT_HEAR_LINE}" Then stop and listen.`;
 }
 
 /**

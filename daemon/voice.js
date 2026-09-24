@@ -11,7 +11,7 @@ import { DelegationEngine } from "./delegation.js";
 import { Mirror, MIRROR_MODES } from "./mirror.js";
 import { Narrator, milestoneLabel, elicitationSpeech, serverName } from "./policy.js";
 import { SpeechQueue, COMMENTARY_PREROLL_MS } from "./speaker.js";
-import { renderForPolicy, buildSeedInput, greeting, ownerSwitchInstruction, voiceSwitchGreeting, vocabularyUpdateInstruction, updateGreeting } from "./prompt.js";
+import { renderForPolicy, buildSeedInput, greeting, ownerSwitchInstruction, voiceSwitchGreeting, vocabularyUpdateInstruction, updateGreeting, cantHearInstruction, RECENT_GREETING_MS } from "./prompt.js";
 import { readPrefs, writePrefs, resolveVoice, normalizeVoice, voiceListMessage, unknownVoiceMessage, normalizeWindow, resolveWindowPref } from "./prefs.js";
 import { collectVocabulary, renderVocabulary, vocabularyHint, TIER } from "./vocabulary.js";
 import { buildSessionBody, createLiveSession, Sideband } from "./live.js";
@@ -23,6 +23,8 @@ import { WakeGovernor, WAKE_SOURCES, sleepDecision, idleSecondsOf } from "./wake
 import { decodeWavB64, wavDurationMs, transcribeWithFallback, wakeInstruction } from "./transcribe.js";
 import { normalizeKeyInput, validateKey, keyWhere } from "./apikey.js";
 
+/** The voice says "I can't hear you well" at most this often (§7.5). */
+const CANT_HEAR_SAY_MS = 10 * 60 * 1000;
 // Idle/sleep is checked this often while live. Short, because the idle
 // timeout is now tens of seconds, not minutes (§6.15).
 const IDLE_TICK_MS = 2000;
@@ -1174,6 +1176,7 @@ export class Voice {
       case "dc_open": case "dc_closed": break;
       case "muted": if (this.live) { this.live.muted = !!msg.muted; this.changed(); } break;
       case "activity": this.lastPageActivityAt = this.clock.now(); break;
+      case "cant_hear": this.onCantHear(msg); break;
       case "pause": this.pause("pause"); break;
       case "stop": this.off("user"); break;
       case "set_policy": this.setPolicy(msg.policy); break;
@@ -1192,6 +1195,24 @@ export class Voice {
         break;
       default: break;
     }
+  }
+
+  /**
+   * The page cannot hear the user (§7.5 "Can't hear you"): log it and have the
+   * voice say so once per session, at most once per CANT_HEAR_SAY_MS.
+   */
+  onCantHear(msg) {
+    const num = (v) => (Number.isFinite(Number(v)) ? Number(v) : undefined);
+    this.log.warn("page.cant_hear", {
+      kind: truncate(String(msg.kind || ""), 32), input: truncate(String(msg.input_label || ""), 120),
+      peak_rms: num(msg.peak_rms), speech_ms: num(msg.speech_ms), since_ms: num(msg.since_ms),
+    });
+    const now = this.clock.now();
+    if (this.state !== "live" || !this.live || this.live.cantHearSaid) return;
+    if (this.cantHearSaidAt !== undefined && now - this.cantHearSaidAt < CANT_HEAR_SAY_MS) return;
+    this.live.cantHearSaid = true;
+    this.cantHearSaidAt = now;
+    this.deliver({ kind: "instructions", content: cantHearInstruction(), delegationId: null });
   }
 
   onRtcState(state) {
@@ -1377,7 +1398,12 @@ export class Voice {
       // The first session after a self-update (§6.17) says so, once.
       const updated = this.updateCue && (reason === "reconnect" || reason === "resume");
       this.updateCue = false;
-      const g = switched ? voiceSwitchGreeting(this.live.voice) : updated ? updateGreeting() : greeting(reason, this.policy, this.owner?.project);
+      // Several starts in a few minutes (closing and reopening the window) greet
+      // with a short, varied line instead of the same full sentence each time.
+      const now = this.clock.now();
+      this.greetedAt = (this.greetedAt || []).filter((t) => now - t < RECENT_GREETING_MS);
+      const g = switched ? voiceSwitchGreeting(this.live.voice) : updated ? updateGreeting() : greeting(reason, this.policy, this.owner?.project, { recent: this.greetedAt.length });
+      if (g && reason === "start" && !switched && !updated) this.greetedAt.push(now);
       if (g) this.deliver({ kind: "instructions", content: g, delegationId: null });
       // Held and carried commentary follows the greeting.
       this.speech.resume({ prerollMs: g ? COMMENTARY_PREROLL_MS : 0 });
