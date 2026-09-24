@@ -159,6 +159,7 @@ The orchestrator owns README.md, .gitignore and docs/.
 | `D/pending-context` | daemon | hook.sh (PreToolUse) | 0600 | Empty flag file. Created when the daemon writes a voice message to the inbox while Claude is busy (§6.9). hook.sh deletes it when consumed. The daemon deletes it on Stop and when voice goes off. |
 | `D/status.json` | daemon | humans, tests | 0600 | Same JSON as `GET /status`, rewritten at most once per second on change. |
 | `D/prefs.json` | daemon, toggle.sh (only when no daemon of this data dir runs) | daemon, toggle.sh | 0600 | `{"voice":"<name>"}`, compact, one line (toggle.sh reads it with a bash regex). Written atomically (tmp + rename). Survives restarts; see §4.5. A missing, malformed or invalid file is ignored. |
+| `D/voice-previews/<voice>.wav` | daemon | daemon (`GET /api/voice-preview`) | 0600 (dir 0700) | Cached voice sample (mono PCM16 WAV, 24 kHz, ~2 s), recorded on the first preview request for that voice (§6.14.1). Written atomically (tmp + rename). Delete the directory to re-record. |
 | `D/usage.json` | daemon | daemon | 0600 | `{"days":{"YYYY-MM-DD":<seconds float>}}` in local dates; entries older than 30 days are pruned. |
 | `D/logs/daemon.log` (+`.1`) | daemon | humans | 0600 | JSONL, rotated at 5 MB (§10). |
 | `D/logs/crash.log` | daemon | humans | 0600 | Uncaught exceptions with stacks. |
@@ -547,6 +548,7 @@ No `dependencies` and no `devDependencies`. Everything is ESM. Test files match 
 | `GET /api/key` | page | Key facts: `{present, source, file, hint, label, can_change, can_remove, keychain}` (§4.3); never the key |
 | `POST /api/key` | page | `{"key":"sk-…"}`: check with OpenAI, save in the Keychain, connect (§4.3). 200 `{ok, connecting, message, key}` or `{"error":{code,message}}` |
 | `POST /api/key/remove` | page | Delete the Keychain key. 200 `{ok, message, key}`; 409 `not_removable` for any other source |
+| `GET /api/voice-preview?voice=<v>` | page | A short sample of a voice as `audio/wav` (§6.14.1) |
 
 **`GET /healthz`** → 200:
 ```json
@@ -708,7 +710,7 @@ Messages are in §9.2.
   "session": {
     "model": "gpt-live-1",
     "instructions": "<§8.1 rendered>",
-    "input": [ { "type": "message", "role": "developer", "content": [ { "type": "input_text", "text": "<§8.2 seed>" } ] } ],
+    "input": [ { "type": "message", "role": "developer", "content": [ { "type": "input_text", "text": "<§8.2 seed>" } ] }, … ],   // plus the §8.2 voice-history messages
     "audio": { "output": { "voice": "<config.voice>" } },
     "delegation": { "type": "client" },
     "store": false,
@@ -934,6 +936,8 @@ A `commentary.append` cuts off whatever the model is saying (observed: a voice a
 - **While speaking**, everything is held. Only `question`, `permission` and `attention` may go out while speech continues, at a sentence boundary (last output text ends in `.!?…:;`) or after 3 s.
 - **Held ≥ 20 s:** low/normal items become thinking (`bg + content`); high items are never demoted and go out at the next boundary (or 3 s later).
 - With no Live session, a released item takes the §6.11 paused path (results → `pendingResult`, which now also covers `question`, `attention`, `background_*`).
+- **Session swaps** (voice switch, reconnect, expiry): the queue is **suspended** from the moment the old session is dropped until the replacement is ready, so held items wait for it instead of falling into `pendingResult`. If no output speech followed the last released commentary, it goes back to the front of the queue (the closing session never said it). On ready, the queue resumes after the greeting (a 2500 ms pre-roll when a greeting was sent). If the swap ends any other way (`paused`, `off`, `sleeping`, `waiting_page`), it resumes at once and the items take the paused path.
+- **De-duplication:** an item whose text (case and whitespace ignored) is already queued is dropped. While suspended and for 20 s after resuming, an item is also dropped when the same text is in flight (sent, not yet heard) or was spoken (output speech observed after its append) in the last 120 s. Outside that window a repeated text is a new event (a second approval prompt) and is spoken.
 
 **`speech.js`** (pure):
 - `speakable(md)`:
@@ -1035,12 +1039,20 @@ After `off`, the daemon exits in 3 s unless it is re-bound. On `shutdown` or a s
 Trigger: `/control` `voice` (toggle.sh, the CLI) or `POST /api/voice`.
 1. Validate against the 22 voices; persist `{"voice":<v>}` to `D/prefs.json`; set `config.voice = v`.
 2. If the state is `live` and the attached session's voice differs:
-   - detach the sideband and send it `session.close` without waiting (its `session.closed` still books usage; it is not treated as a loss);
+   - detach the sideband, suspend the speech queue (§6.10.2) and send the old session `session.close` (its `session.closed` books usage; it is not treated as a loss);
    - stop the live timers; set `voiceSwitch = v`; SSE `notice` `voice_change`; state `reconnecting`;
-   - SSE `command:"reconnect"` with reason `voice_change`, with the same no-page fallbacks as §6.11 (open the window after 4 s, pause after 30 s). It does **not** count toward the 3-per-10-min reconnect limit.
-3. The page re-offers with `reason:"reconnect"`: the seed carries the recent voice history and Claude context (§8.2), so the conversation continues. The session body uses the new voice.
+   - **after** `session.closed` arrives (or 2 s pass without it), SSE `command:"reconnect"` with reason `voice_change`, with the same no-page fallbacks as §6.11 (open the window after 4 s, pause after 30 s). It does **not** count toward the 3-per-10-min reconnect limit. The wait matters: the page's reconnect tears down the old peer connection, and when that happened together with `session.close` the server ended the old session as `connection_lost` / `remote_hangup` instead of `close_requested`. Logged as `voice.switch_closed {confirmed, ms}`.
+3. The page re-offers with `reason:"reconnect"`: the seed carries the recent voice history as user/assistant messages (already spoken, §8.2) and the Claude context, so the conversation continues without repeating the last update. The session body uses the new voice.
 4. When the new sideband is ready, the greeting is the §8.3 voice-switch line instead of none.
 5. If the voice changes while a session is `connecting` (or the ready session's voice differs from `config.voice`), the switch runs as soon as that session is ready, with no greeting in the old voice. In `reconnecting`, the pending replacement simply uses the new voice and greets with the switch line. In `off`, `waiting_page` and `paused`, the voice applies to the next session.
+
+#### 6.14.1 Voice samples (`daemon/preview.js`, `GET /api/voice-preview`)
+The settings drawer can play a sample of any voice without touching the live session (the voice is immutable per Live session).
+- **`GET /api/voice-preview?voice=<v>`** (page auth) → 200 `audio/wav` (mono PCM16, 24 kHz), `Cache-Control: private, max-age=86400`. 400 `bad_voice`; 403 `bad_token`; 503 `no_api_key` and 429 `daily_cap` (only when the voice is not cached yet); 502 with `preview_timeout` / `preview_closed` / `preview_silent` / `preview_stuck` / `openai_error` when recording failed (failures are not cached).
+- **Cached:** `D/voice-previews/<v>.wav` is served as is.
+- **First request for a voice:** a primary WebSocket Live session (`wss://…/v1/live/sessions`, `session.start` with `model`, the sample instructions, `audio: {format: {type:"audio/pcm", rate:24000}, output: {voice}}`, `store:false`). After `session.started` the daemon streams silence as input in real time (100 ms chunks; without input audio the session timeline does not run and the model says nothing). The instructions have the model say `Hi, I'm <Voice>. This is how I sound.` If there is no speech and no transcript 3 s after `session.started`, one `instructions.append` repeats the sentence; still silent at 5.5 s, the session is closed and one new session is tried. The sentence is over when the output transcript is complete and the output audio has been quiet (peak < 1200) for 700 ms; then the daemon sends `session.close`, answers the request (it does not wait for `session.closed`), trims leading and trailing silence (80 ms lead, 250 ms tail) and caches the WAV. Hard cap 12 s per session. Concurrent requests for one voice share one recording.
+- **Billing:** per second, no 15 s minimum on a WebSocket; `session.closed` usage is booked to today's usage (`D/usage.json`) like any session. Measured: 2-5 s per sample (~$0.003), 100 s for all 22 voices.
+- **Page:** "Hear the voices" (a `<details>` under the voice picker) holds one chip per voice. A chip fetches the WAV with the `X-Sotto-Page` header, plays it through its own `Audio` element (routed to the selected speaker), never the session's `<audio>`; clicking again stops it, as does closing the drawer. Picking a voice is still the select.
 
 ### 6.15 Idle sleep and automatic wake (`daemon/wake.js`, `daemon/transcribe.js`)
 Live sessions bill every connected second, silence included, and a WebRTC create bills 15 s up front (credited once it runs; guide-voice-latency-cost.md). So the daemon closes idle sessions quickly and re-creates them on demand.
@@ -1300,8 +1312,10 @@ Do not guess the result while waiting.
 - **milestones:** `Update preference: Milestones. Besides answering the user, briefly mention only notable events: Claude Code finished work, needs approval, or hit an error the user must handle. Keep routine progress to yourself unless asked.`
 - **walkthrough:** `Update preference: Walkthrough. Narrate Claude Code's useful progress in short sentences as it works, skip steps that are already out of date, and explain results when Claude Code finishes. Yield immediately when the user speaks.`
 
-### 8.2 `input` seed (one developer message, ≤ 24,000 chars)
-Build it in this order, dropping the oldest material first if it is over budget:
+### 8.2 `input` seed (developer background, then the voice history as messages)
+`session.input` is a list of messages (API limits: 128 messages, 8,192 combined tokens; the daemon keeps the estimate under 7,000). The first is the developer background below. For `resume`, `reconnect`, `wake` and `notify` the earlier voice conversation follows as real `user` (`input_text`) and `assistant` (`output_text`) messages, consecutive lines of one role merged, then a closing developer message `[End of the earlier voice conversation. All of it was already spoken; continue from here without repeating it.]`. Observed live: with the history quoted inside the developer message ("You said: …"), the replacement session after a voice switch spoke the last update again. Over budget, the oldest Claude exchanges go first, then the oldest voice lines. A `pendingResult` whose text the voice already spoke (§6.10.2) is not seeded.
+
+The developer background, in this order, dropping the oldest material first if it is over budget:
 ```
 [Background reference; not user speech]
 Project: <project>   Folder: <cwd basename>   Git branch: <branch or "unknown">
@@ -1310,10 +1324,9 @@ Recent Claude Code conversation (oldest first):
 User: <text ≤600 chars>
 Claude Code: <speakable text ≤600 chars>
 ... (up to the last 4 user/assistant text exchanges from transcript_path)
-Earlier voice conversation (oldest first):        <- resume/reconnect only
-You said: … / The user said: … (up to the last 30 transcript lines)
 Result that arrived while voice was paused: <pendingResult>   <- only if set; cleared after seeding
 Claude Code is waiting for the user's answer to: <q> An answer is a decision for Claude Code: delegate it.   <- only while Claude waits (§6.10.3)
+The earlier voice conversation follows as user and assistant messages, oldest first. Everything in the assistant messages was already said aloud to the user: do not repeat it, and do not announce again any update or result it covers.   <- only when voice messages follow (up to the last 30 transcript lines)
 ```
 - **Git branch:** `git -C <cwd> rev-parse --abbrev-ref HEAD` via `execFile`, with an 800 ms timeout.
 - **Transcript tail:** read at most the last 256 KB of `transcript_path`. Parse the JSONL lines defensively:

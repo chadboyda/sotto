@@ -20,6 +20,7 @@
     <symbol id="i-gear" viewBox="0 0 24 24"><path d="M12 15.25a3.25 3.25 0 1 0 0-6.5 3.25 3.25 0 0 0 0 6.5Z"/><path d="M19.4 13.5a7.7 7.7 0 0 0 0-3l2-1.55-2-3.46-2.38.96a7.6 7.6 0 0 0-2.6-1.5L14 2.5h-4l-.42 2.45a7.6 7.6 0 0 0-2.6 1.5L4.6 5.5l-2 3.46 2 1.55a7.7 7.7 0 0 0 0 3l-2 1.55 2 3.46 2.38-.96a7.6 7.6 0 0 0 2.6 1.5L10 21.5h4l.42-2.45a7.6 7.6 0 0 0 2.6-1.5l2.38.96 2-3.46-2-1.55Z"/></symbol>
     <symbol id="i-pause" viewBox="0 0 24 24"><path d="M9 6v12M15 6v12"/></symbol>
     <symbol id="i-play" viewBox="0 0 24 24"><path d="M8 5.5v13l10.5-6.5L8 5.5Z"/></symbol>
+    <symbol id="i-stop" viewBox="0 0 24 24"><rect x="7" y="7" width="10" height="10" rx="1.5"/></symbol>
     <symbol id="i-power" viewBox="0 0 24 24"><path d="M12 3.5v8"/><path d="M7.05 6.6a7.5 7.5 0 1 0 9.9 0"/></symbol>
     <symbol id="i-close" viewBox="0 0 24 24"><path d="M6.5 6.5l11 11M17.5 6.5l-11 11"/></symbol>
     <symbol id="i-alert" viewBox="0 0 24 24"><path d="M12 3.8 2.8 19.5h18.4L12 3.8Z"/><path d="M12 10v4.2M12 17.1v.1"/></symbol>
@@ -169,6 +170,11 @@
       <label class="field-label" for="voice-select">Voice</label>
       <select id="voice-select"></select>
       <p class="field-help" id="voice-help">Changing it restarts the voice session; the conversation carries over.</p>
+      <details class="voice-samples" id="voice-samples">
+        <summary>Hear the voices</summary>
+        <div class="voice-grid" id="voice-grid" role="group" aria-label="Voice samples"></div>
+        <p class="field-help">Plays a short sample; the live session keeps its voice. Each sample is recorded once (a few seconds of voice time) and then kept.</p>
+      </details>
     </div>
     <div class="field">
       <label class="field-label" for="input-select">Microphone</label>

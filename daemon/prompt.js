@@ -147,7 +147,7 @@ const cap = (s, n) => {
  * @param {string[]} o.backlog  progress notes that arrived while voice was paused
  * @param {string|null} [o.awaiting]  Claude's open question to the user (§6.10.3)
  */
-export function buildSeed({ project, cwd, branch, reason = "start", exchanges = [], voiceHistory = [], pendingResult = null, backlog = [], awaiting = null, maxChars = SEED_MAX }) {
+export function buildSeed({ project, cwd, branch, reason = "start", exchanges = [], voiceHistory = [], pendingResult = null, backlog = [], awaiting = null, note = null, maxChars = SEED_MAX }) {
   const folder = String(cwd || "").split("/").filter(Boolean).pop() || "unknown";
   const head = [
     "[Background reference; not user speech]",
@@ -168,6 +168,7 @@ export function buildSeed({ project, cwd, branch, reason = "start", exchanges = 
     if (notes.length) parts.push("Claude Code progress while voice was paused:", ...notes);
     if (tail) parts.push(tail);
     if (wait) parts.push(wait);
+    if (note) parts.push(note);
     return parts.join("\n");
   };
   let text = assemble();
@@ -178,4 +179,55 @@ export function buildSeed({ project, cwd, branch, reason = "start", exchanges = 
     text = assemble();
   }
   return text.length > maxChars ? text.slice(0, maxChars) : text;
+}
+
+/** Estimated token budget for the whole seed: the API allows 8,192 combined tokens. */
+export const SEED_TOKENS = 7000;
+const MAX_SEED_MESSAGES = 120; // API limit: 128 messages
+export const VOICE_HISTORY_NOTE = "The earlier voice conversation follows as user and assistant messages, oldest first. Everything in the assistant messages was already said aloud to the user: do not repeat it, and do not announce again any update or result it covers.";
+export const VOICE_HISTORY_END = "[End of the earlier voice conversation. All of it was already spoken; continue from here without repeating it.]";
+
+/**
+ * The seed as `session.input` messages (§8.2). Background (project, Claude
+ * Code exchanges, backlog, pending result) is one developer message; the voice
+ * history of a resume/reconnect follows as real user and assistant messages,
+ * so the model knows what it already said aloud. Observed live: with the
+ * history quoted inside the developer message ("You said: …"), a replacement
+ * session after a voice switch spoke the last update again.
+ * The whole list stays under SEED_TOKENS (the oldest Claude exchanges go
+ * first, then the oldest voice lines) and under 128 messages.
+ *
+ * @param {object} o  buildSeed's options, plus estTokens(text) → number
+ * @returns {{role:"developer"|"user"|"assistant", text:string}[]}
+ */
+export function buildSeedInput({ estTokens = (t) => t.length / 3, ...o }) {
+  let msgs = [];
+  if (o.reason && o.reason !== "start") {
+    for (const l of (o.voiceHistory || []).slice(-30)) {
+      const text = cap(l.text, 600);
+      if (!text) continue;
+      const role = l.role === "assistant" ? "assistant" : "user";
+      const last = msgs[msgs.length - 1];
+      if (last && last.role === role) last.text = cap(`${last.text} ${text}`, 1200);
+      else msgs.push({ role, text });
+    }
+  }
+  msgs = msgs.slice(-(MAX_SEED_MESSAGES - 2));
+  const tokens = (list) => list.reduce((n, m) => n + estTokens(m.text) + 4, 0);
+  const endTokens = estTokens(VOICE_HISTORY_END) + 4;
+  let maxChars = SEED_MAX;
+  let dev = buildSeed({ ...o, voiceHistory: [], note: msgs.length ? VOICE_HISTORY_NOTE : null, maxChars });
+  for (;;) {
+    const total = estTokens(dev) + 4 + tokens(msgs) + (msgs.length ? endTokens : 0);
+    if (total <= SEED_TOKENS) break;
+    // Oldest Claude exchanges go first (down to half the developer budget, as
+    // buildSeed drops them first), then the oldest voice lines, then the rest.
+    if (msgs.length && maxChars <= SEED_MAX / 2) { msgs.shift(); continue; }
+    if (maxChars < 500) break;
+    maxChars = Math.floor(maxChars * 0.85);
+    dev = buildSeed({ ...o, voiceHistory: [], note: msgs.length ? VOICE_HISTORY_NOTE : null, maxChars });
+  }
+  const out = [{ role: "developer", text: dev }, ...msgs];
+  if (msgs.length) out.push({ role: "developer", text: VOICE_HISTORY_END });
+  return out;
 }

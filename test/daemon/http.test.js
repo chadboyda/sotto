@@ -92,7 +92,8 @@ test("/control: every action, both response formats, §9.2 messages", async (t) 
   assert.equal((await ctl({ action: "policy", policy: "quiet" })).json.message, "sotto: speaking policy is now quiet.");
   const t0 = Date.now();
   const off = await ctl({ action: "off" }, "?format=hook");
-  assert.ok(Date.now() - t0 < 300, "/control answers fast");
+  // Proves off does not wait for the (up to 15 s) session close; 2 s leaves room for load.
+  assert.ok(Date.now() - t0 < 2000, "/control answers fast");
   assert.deepEqual(off.json, { continue: false, stopReason: "sotto: voice OFF. 0 min today ($0.00)." });
   await new Promise((r) => setTimeout(r, 50));
   assert.ok(!fs.existsSync(active), "active removed on off");

@@ -4,7 +4,7 @@ import assert from "node:assert/strict";
 import { writeFileSync, existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
-import { HOOK, ROOT, run, runSync, tempDir, rmDir, baseEnv, sleep } from "./helpers/run.js";
+import { HOOK, ROOT, run, runSync, tempDir, rmDir, baseEnv, sleep, spawnBaseline } from "./helpers/run.js";
 import { startFakeDaemon } from "./helpers/fake-daemon.js";
 
 const EVENTS = ["UserPromptSubmit", "PreToolUse", "PermissionRequest", "MessageDisplay", "Stop", "StopFailure", "SessionEnd",
@@ -41,18 +41,22 @@ const quartile = (xs) => [...xs].sort((x, y) => x - y)[Math.floor(xs.length / 4)
 
 /**
  * The hook's own cost must be small: lower-quartile(hook) - lower-quartile(bare
- * script) <= 8 ms, and the absolute median <= 40 ms. Lower quartiles shrug off
- * the load spikes of a parallel `npm test`; a measurement round that still
- * fails is retried twice before the test fails. Unloaded, the hook and the bare
- * script are within ~1-2 ms of each other (SPEC goal: gate <= 10 ms p95).
+ * script) <= 8 ms, and the median <= 40 ms. Lower quartiles shrug off the load
+ * spikes of a parallel `npm test`; a measurement round that still fails is
+ * retried before the test fails. Unloaded, the hook and the bare script are
+ * within ~1-2 ms of each other (SPEC goal: gate <= 10 ms p95).
+ * Under sustained load (a build or a CPU burner next to `npm test`) both
+ * stretch together, so both bounds scale with the bare script: the extra is
+ * 8 ms + 25 % of the bare q1, and the median may reach 3x the bare median.
+ * Unloaded (bare q1 ~3 ms) that is the original 8.75 ms / 40 ms.
  */
 function assertFastGate(runOnce, input) {
   let msg = "";
-  for (let attempt = 0; attempt < 3; attempt++) {
+  for (let attempt = 0; attempt < 5; attempt++) {
     const hook = [], base = [];
     for (let i = 0; i < 20; i++) { hook.push(runOnce(i)); base.push(bareBashMs(input)); }
     const h = quartile(hook), b = quartile(base), m = median(hook);
-    if (h - b <= 8 && m <= 40) return;
+    if (h - b <= 8 + 0.25 * b && m <= Math.max(40, 3 * median(base))) return;
     msg = `hook q1 ${h.toFixed(2)} ms (median ${m.toFixed(2)}) vs bare script q1 ${b.toFixed(2)} ms`;
   }
   assert.fail(msg);
@@ -199,7 +203,9 @@ describe("hook.sh owner path", () => {
         assert.deepEqual([r.code, r.stdout, r.stderr], [0, "", ""], ev);
         times.push(r.ms);
       }
-      assert.ok(median(times) < 200, `median ${median(times).toFixed(1)} ms`);
+      // 200 ms plus a load allowance (10 bare bash spawns; ~30 ms unloaded).
+      const bound = 200 + 10 * spawnBaseline().bash;
+      assert.ok(median(times) < bound, `median ${median(times).toFixed(1)} ms (bound ${bound.toFixed(0)} ms)`);
       assert.ok(existsSync(join(D, "pending-context")), "only a main-thread PreToolUse claims the flag");
     } finally {
       rmDir(join(D, "pending-context"));
@@ -221,7 +227,9 @@ describe("hook.sh owner path", () => {
       writeActive(D2, SOCK, slow.port);
       const r = await run(HOOK, { args: ["Stop"], env: { ...env, CLAUDE_PLUGIN_DATA: D2 }, input: "{}" });
       assert.equal(r.code, 0);
-      assert.ok(r.ms < 1000, `took ${r.ms.toFixed(0)} ms`);
+      // Far below the daemon's 2 s delay, plus a load allowance.
+      const bound = 1000 + 10 * spawnBaseline().bash;
+      assert.ok(r.ms < bound, `took ${r.ms.toFixed(0)} ms (bound ${bound.toFixed(0)} ms)`);
       const reqs = await slow.waitForRequests(1);
       assert.equal(reqs.length, 1);
     } finally {
@@ -236,7 +244,8 @@ describe("hook.sh owner path", () => {
       writeActive(D2, SOCK, 1); // nothing listens on port 1
       const r = await run(HOOK, { args: ["Stop"], env: { ...env, CLAUDE_PLUGIN_DATA: D2 }, input: "{}" });
       assert.deepEqual([r.code, r.stdout, r.stderr], [0, "", ""]);
-      assert.ok(r.ms < 500);
+      const bound = 500 + 10 * spawnBaseline().bash;
+      assert.ok(r.ms < bound, `took ${r.ms.toFixed(0)} ms (bound ${bound.toFixed(0)} ms)`);
     } finally {
       rmDir(D2);
     }

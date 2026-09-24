@@ -160,7 +160,9 @@ test("expiry: reconnect in a silent moment inside the last 5 minutes", async (t)
   ws2.receive({ type: "session.started", session: {} });
   assert.equal(h.voice.state, "live");
   assert.equal(appends(ws2, "instructions").length, 0);
-  assert.match(h.fetchCalls[1].body.session.input[0].content[0].text, /Voice session: reconnected\.[\s\S]*You said: talking/);
+  const input = h.fetchCalls[1].body.session.input;
+  assert.match(input[0].content[0].text, /Voice session: reconnected\./);
+  assert.ok(input.some((m) => m.role === "assistant" && m.content[0].type === "output_text" && m.content[0].text === "talking"), "voice history as assistant messages");
 });
 
 test("expiry hard deadline at expires_at - 60 s even while talking", async (t) => {

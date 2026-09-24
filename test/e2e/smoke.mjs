@@ -295,6 +295,16 @@ async function main() {
     check("spoken confirmation in the new voice", true, JSON.stringify(confirmed.trim().slice(0, 80)));
     timings.voice_switch_to_confirmation_ms = Date.now() - tSwitch;
   } else warn("spoken confirmation in the new voice", "no 'switched'/'cedar' in the output transcript");
+  // Regression (round 2): the replacement session used to speak the last update
+  // (the files answer) again. Its seed now carries the voice history as
+  // assistant messages, already spoken. Listen to the new session for a moment.
+  if (created2?.live_id) {
+    await sleep(4000);
+    const said2 = readLog().filter((e) => e.ev === "session.output_transcript.delta" && e.live_id === created2.live_id).map((e) => e.delta).join("");
+    check("new voice does not re-speak the last update", !/banana|daemon folder|web folder|scripts folder/i.test(said2), JSON.stringify(said2.trim().slice(0, 120)));
+    const closeFirst = readLog().find((e) => e.ev === "voice.switch_closed");
+    if (closeFirst) timings.voice_switch_close_wait_ms = closeFirst.ms;
+  }
   check("prefs.json persisted the voice", JSON.parse(fs.readFileSync(path.join(D, "prefs.json"), "utf8")).voice === "cedar");
 
   // 8c. Claude asks the user a question (AskUserQuestion PreToolUse through the
@@ -311,12 +321,36 @@ async function main() {
   check("question commentary acked", !!askAck);
   if (askSent) timings.ask_hook_to_commentary_send_ms = ts(askSent) - tAsk;
 
+  // 8d. Voice sample for the picker (GET /api/voice-preview): a separate tiny
+  //     primary-WebSocket session in another voice, cached as a WAV. The live
+  //     session must not notice.
+  const secret = fs.readFileSync(path.join(D, "page.secret"), "utf8").trim();
+  const boot = await (await fetch(`${BASE}/api/bootstrap`, { headers: { "X-Sotto-Boot": secret } })).json();
+  const tPrev = Date.now();
+  const prev = await fetch(`${BASE}/api/voice-preview?voice=sage`, { headers: { "X-Sotto-Page": boot.page_token } });
+  const prevMs = Date.now() - tPrev;
+  const prevWav = Buffer.from(await prev.arrayBuffer());
+  const prevAudioMs = prevWav.length > 44 ? Math.round(((prevWav.length - 44) / 48000) * 1000) : 0;
+  check("voice preview: first request records a WAV", prev.status === 200 && prev.headers.get("content-type") === "audio/wav" && prevWav.toString("ascii", 0, 4) === "RIFF" && prevAudioMs > 800 && prevAudioMs < 6000, `${prev.status}, ${prevAudioMs} ms of audio in ${prevMs} ms`);
+  timings.voice_preview_first_ms = prevMs;
+  const tPrev2 = Date.now();
+  const prev2 = await fetch(`${BASE}/api/voice-preview?voice=sage`, { headers: { "X-Sotto-Page": boot.page_token } });
+  await prev2.arrayBuffer();
+  timings.voice_preview_cached_ms = Date.now() - tPrev2;
+  check("voice preview: second request is served from the cache", prev2.status === 200 && timings.voice_preview_cached_ms < 500, `${timings.voice_preview_cached_ms} ms`);
+  const prevRec = readLog().find((e) => e.ev === "preview.recorded" && e.voice === "sage");
+  if (prevRec) check("voice preview transcript", /sage/i.test(prevRec.transcript || ""), JSON.stringify(prevRec.transcript));
+  const prevClosed = await until(() => readLog().find((e) => e.ev === "preview.closed" && e.voice === "sage"), 5000);
+  if (prevClosed) timings.voice_preview_billed_s = prevClosed.seconds;
+  const sPrev = await status();
+  check("voice preview left the live session alone", sPrev.state === "live" && sPrev.live?.session_id === liveId, `${sPrev.state} ${sPrev.live?.session_id === liveId ? "same session" : "session changed"}`);
+
   // 9. /talk off through the real toggle.sh.
   const off = toggle("off");
   check("toggle.sh off: voice OFF message", off.status === 0 && /^sotto: voice OFF\./.test(off.out?.stopReason || ""), `${off.out?.stopReason} (${off.ms} ms)`);
   const closed = await until(() => readLog().find((e) => e.ev === "session.closed" && e.live_id === liveId), 20000);
   check("session.closed close_requested", closed?.reason === "close_requested", closed?.reason);
-  billed = closed?.seconds != null ? closed.seconds + (firstBilled || 0) : null;
+  billed = closed?.seconds != null ? closed.seconds + (firstBilled || 0) + (timings.voice_preview_billed_s || 0) : null;
   timings.live_wall_ms = Date.now() - liveSince;
   check("active file removed", !fs.existsSync(path.join(D, "active")));
   const gone = await until(() => !alive(pid), 8000);

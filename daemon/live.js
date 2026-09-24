@@ -19,12 +19,19 @@ export const DATA_CHANNEL_CONFIG = Object.freeze({
 });
 
 /** Build the POST /live/sessions body. Never includes audio.format or session.start. */
+/** `seed`: one developer text, or [{role, text}] messages (prompt.js buildSeedInput). */
+export function seedMessages(seed) {
+  const list = Array.isArray(seed) ? seed : [{ role: "developer", text: seed }];
+  // Assistant history uses output_text; developer and user messages input_text.
+  return list.map((m) => ({ type: "message", role: m.role, content: [{ type: m.role === "assistant" ? "output_text" : "input_text", text: m.text }] }));
+}
+
 export function buildSessionBody({ instructions, seed, voice, sdp }) {
   return {
     session: {
       model: LIVE_MODEL,
       instructions,
-      input: [{ type: "message", role: "developer", content: [{ type: "input_text", text: seed }] }],
+      input: seedMessages(seed),
       audio: { output: { voice } },
       delegation: { type: "client" },
       store: false,

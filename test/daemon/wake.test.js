@@ -181,7 +181,8 @@ test("voice wake: seed says so, no greeting, the clip is transcribed and injecte
   assert.equal(h.voice.state, "live");
   const seed = h.fetchCalls[1].body.session.input[0].content[0].text;
   assert.match(seed, /Voice session: woke from sleep because the user started speaking/);
-  assert.match(seed, /The user said|You said: Hi there\./, "earlier voice history is seeded");
+  const history = h.fetchCalls[1].body.session.input.slice(1).map((m) => `${m.role}: ${m.content[0].text}`).join("\n");
+  assert.match(history, /assistant: Hi there\./, "earlier voice history is seeded (as assistant messages)");
   assert.equal(appends(ws, "instructions").length, 0, "no greeting: the user is already talking");
 
   h.voice.handlePage({ type: "wake_audio", session_id: h.voice.live.id, audio: wavB64(1200), clip_ms: 1200 });

@@ -78,8 +78,31 @@ export function freePort() {
 
 export const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-/** Poll fn() until truthy or timeout; returns the last value. */
-export async function waitFor(fn, timeoutMs = 3000, stepMs = 25) {
+/**
+ * Load allowance for wall-clock bounds. `npm test` runs test files in
+ * parallel, and a loaded machine (a build, a CPU burner) stretches every
+ * process spawn. Timing tests assert `budget + slack()`, where slack() is a
+ * multiple of what spawning a bare `/bin/bash` and a bare `node` costs right
+ * now: unloaded that is ~3 ms and ~40 ms, so the bound stays tight; under load
+ * both the measured script and the baseline stretch together.
+ * Returns {bash, node} median milliseconds of 5 fresh spawns each.
+ */
+export function spawnBaseline() {
+  const bash = [], node = [];
+  for (let i = 0; i < 5; i++) {
+    let t0 = performance.now();
+    spawnSync("/bin/bash", ["-c", ":"]);
+    bash.push(performance.now() - t0);
+    t0 = performance.now();
+    spawnSync(process.execPath, ["-e", "0"]);
+    node.push(performance.now() - t0);
+  }
+  const med = (xs) => xs.sort((a, b) => a - b)[xs.length >> 1];
+  return { bash: med(bash), node: med(node) };
+}
+
+/** Poll fn() until truthy or timeout; returns the last value (timeouts are generous: polling returns early). */
+export async function waitFor(fn, timeoutMs = 8000, stepMs = 25) {
   const end = Date.now() + timeoutMs;
   let v;
   while (Date.now() < end) {

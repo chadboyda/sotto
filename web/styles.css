@@ -732,6 +732,29 @@ body[data-card="permission"][data-dial="small"] .stage { padding-top: 52px; }
   background-repeat: no-repeat;
   cursor: pointer;
 }
+/* Voice samples (settings drawer): a disclosure with one play chip per voice. */
+.voice-samples summary { cursor: pointer; font-size: var(--text-small); font-weight: 600; color: var(--fg-2); min-height: 32px; display: flex; align-items: center; width: fit-content; }
+.voice-samples summary:hover { color: var(--fg); }
+.voice-samples[open] summary { margin-bottom: 6px; }
+.voice-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(104px, 1fr)); gap: 6px; margin-bottom: 6px; }
+.voice-chip {
+  display: flex; align-items: center; gap: 6px;
+  min-height: 36px; padding: 0 10px;
+  border: 1px solid var(--edge); border-radius: var(--radius-sm);
+  background: var(--surface-2); color: var(--fg);
+  font-size: var(--text-small); font-weight: 500; text-align: left;
+  cursor: pointer;
+  transition-property: background-color, border-color; transition-duration: var(--dur-fast);
+}
+.voice-chip svg { width: 14px; height: 14px; flex: none; fill: currentColor; stroke: none; color: var(--fg-2); }
+.voice-chip:hover { border-color: var(--fg-3); }
+.voice-chip[aria-current="true"] { border-color: var(--fg-2); }
+.voice-chip[data-state="playing"] { background: var(--surface-sunken); border-color: var(--fg); }
+.voice-chip[data-state="playing"] svg { color: var(--fg); }
+.voice-chip[data-state="loading"] { cursor: progress; }
+.voice-chip[data-state="loading"] svg { animation: sample-pulse 900ms ease-in-out infinite alternate; }
+@keyframes sample-pulse { from { opacity: 1; } to { opacity: 0.25; } }
+@media (prefers-reduced-motion: reduce) { .voice-chip[data-state="loading"] svg { animation: none; opacity: 0.5; } }
 .segmented { display: grid; grid-template-columns: repeat(3, 1fr); gap: 4px; padding: 4px; border-radius: 12px; background: var(--surface-sunken); border: 1px solid var(--edge); }
 .segmented button {
   min-height: 40px;

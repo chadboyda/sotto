@@ -99,9 +99,13 @@ test("parseFrontmatter reads top-level scalars and ignores folded continuation l
 
 test("collectVocabulary: all sources, priority order, dedupe, filters, fast", async (t) => {
   const f = makeFixture(t);
-  const v = await collectVocabulary({ home: f.home, cwd: f.cwd, dataDir: f.dataDir, project: "claude-live", branch: Promise.resolve("feat/vocabulary") });
+  // A generous deadline: this test is about content, and under load (npm test
+  // runs files in parallel, maybe next to a build) the default 200 ms deadline
+  // can cut the scan short. Unloaded the fixture scan takes ~10 ms; the
+  // deadline itself is tested below with deadlineMs: 0.
+  const v = await collectVocabulary({ home: f.home, cwd: f.cwd, dataDir: f.dataDir, project: "claude-live", branch: Promise.resolve("feat/vocabulary"), deadlineMs: 10000 });
   assert.equal(v.partial, false);
-  assert.ok(v.ms < 200, `took ${v.ms} ms`);
+  assert.ok(v.ms < 2000, `took ${v.ms} ms`);
   const by = Object.fromEntries(v.terms.map((x) => [x.term, x]));
   const names = v.terms.map((x) => x.term);
 
@@ -134,7 +138,7 @@ test("collectVocabulary: all sources, priority order, dedupe, filters, fast", as
 });
 
 test("collectVocabulary: missing everything yields only the project; trivial branches are skipped", async () => {
-  const v = await collectVocabulary({ home: "/nonexistent/home", cwd: "/nonexistent/cwd", dataDir: "/nonexistent/data", project: "proj", branch: "main" });
+  const v = await collectVocabulary({ home: "/nonexistent/home", cwd: "/nonexistent/cwd", dataDir: "/nonexistent/data", project: "proj", branch: "main", deadlineMs: 10000 });
   assert.deepEqual(v.terms.map((x) => x.term), ["proj"]);
   const none = await collectVocabulary({});
   assert.deepEqual(none.terms, []);

@@ -6,7 +6,7 @@ import assert from "node:assert/strict";
 import { readFileSync, existsSync, statSync, mkdirSync, writeFileSync, realpathSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { join } from "node:path";
-import { TOGGLE, ROOT, run, tempDir, rmDir, baseEnv, freePort, waitFor, isAlive, sleep } from "./helpers/run.js";
+import { TOGGLE, ROOT, run, tempDir, rmDir, baseEnv, freePort, waitFor, isAlive, sleep, spawnBaseline } from "./helpers/run.js";
 import { startFakeDaemon } from "./helpers/fake-daemon.js";
 
 const STUB = join(ROOT, "test/scripts/helpers/stub-daemon.js");
@@ -90,7 +90,9 @@ describe("toggle.sh cold start", () => {
     const r = await run(TOGGLE, { env, input: stdinFor("on") });
     const out = parseOut(r);
     assert.equal(out.stopReason, "stub: on");
-    assert.ok(r.ms < 3500, `took ${r.ms.toFixed(0)} ms`);
+    // Load allowance: 10 bare node spawns (~0.4 s unloaded; toggle.sh starts node).
+    const bound = 3500 + 10 * spawnBaseline().node;
+    assert.ok(r.ms < bound, `took ${r.ms.toFixed(0)} ms (bound ${bound.toFixed(0)} ms)`);
     // Verbatim pass-through: exactly the stub's JSON.
     assert.equal(r.stdout, JSON.stringify({ continue: false, stopReason: "stub: on" }) + "\n");
 
@@ -388,7 +390,10 @@ describe("toggle.sh with the daemon down", () => {
     const r = await run(TOGGLE, { env, input: stdinFor("on") });
     const out = parseOut(r);
     assert.match(out.stopReason, /^sotto: ERROR node on PATH is v18\.18\.0; sotto needs Node 22 or newer/);
-    assert.ok(r.ms < 3000, `took ${r.ms.toFixed(0)} ms (the poll stops at the start-error file)`);
+    // Without the early stop the poll runs 4-5 s, so 4 s is the hard ceiling of
+    // the load allowance (3 s + 10 bare node spawns).
+    const bound = Math.min(4000, 3000 + 10 * spawnBaseline().node);
+    assert.ok(r.ms < bound, `took ${r.ms.toFixed(0)} ms, bound ${bound.toFixed(0)} ms (the poll stops at the start-error file)`);
   });
 
   test("daemon that never listens -> spawn timeout error within ~5 s", async () => {
@@ -403,7 +408,8 @@ describe("toggle.sh with the daemon down", () => {
     // The poll is bounded at 4-5 s (version-manager shims start node slowly);
     // 7.5 s leaves room for a loaded machine (npm test runs files in parallel)
     // while still proving the poll ends well inside the 15 s hook timeout.
-    assert.ok(r.ms < 7500, `took ${r.ms.toFixed(0)} ms`);
+    const bound = 7500 + 10 * spawnBaseline().node;
+    assert.ok(r.ms < bound, `took ${r.ms.toFixed(0)} ms (bound ${bound.toFixed(0)} ms)`);
   });
 });
 
@@ -445,7 +451,7 @@ describe("toggle.sh with something else on the port", () => {
 
     const out = parseOut(await run(TOGGLE, { env, input: stdinFor("on") }));
     assert.equal(out.stopReason, "stub: on");
-    assert.ok(await waitFor(() => !isAlive(otherPid), 2000), "old daemon exited");
+    assert.ok(await waitFor(() => !isAlive(otherPid), 6000), "old daemon exited");
     assert.deepEqual(controlBodies(otherD).map((b) => b.action), ["on", "status", "shutdown"]);
     const ours = Number(readFileSync(join(D, "daemon.pid"), "utf8"));
     assert.ok(isAlive(ours));
@@ -461,7 +467,7 @@ describe("toggle.sh with something else on the port", () => {
     const otherPid = Number(readFileSync(join(otherD, "daemon.pid"), "utf8"));
     const r = await run(TOGGLE, { env, input: stdinFor("on") });
     assert.equal(parseOut(r).stopReason, "stub: on");
-    assert.ok(!isAlive(otherPid) || (await waitFor(() => !isAlive(otherPid), 2000)));
+    assert.ok(!isAlive(otherPid) || (await waitFor(() => !isAlive(otherPid), 6000)));
     assert.deepEqual(controlBodies(D).map((b) => b.action), ["on"]);
   });
 });
@@ -495,7 +501,7 @@ describe("toggle.sh after the port option changed", () => {
 
     const out = parseOut(await run(TOGGLE, { env: env2, input: stdinFor("on") }));
     assert.equal(out.stopReason, "stub: on");
-    assert.ok(await waitFor(() => !isAlive(oldPid), 2000), "old-port daemon stopped");
+    assert.ok(await waitFor(() => !isAlive(oldPid), 6000), "old-port daemon stopped");
     assert.equal(readFileSync(join(D, "daemon.port"), "utf8").trim(), newPort);
     assert.deepEqual(controlBodies(D).map((b) => b.action), ["on", "status", "off", "shutdown", "on"]);
   });

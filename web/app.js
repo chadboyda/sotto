@@ -93,6 +93,7 @@ const el = {
   policyHelp: $("policy-help"),
   voiceSelect: $("voice-select"),
   voiceHelp: $("voice-help"),
+  voiceGrid: $("voice-grid"),
   inputSelect: $("input-select"),
   outputSelect: $("output-select"),
   pauseBtn: $("pause-btn"),
@@ -1944,11 +1945,96 @@ async function loadVoices() {
   }
 }
 
+const capName = (name) => name.charAt(0).toUpperCase() + name.slice(1);
+
 function renderVoices() {
   const v = S.voices;
   if (!v) return;
-  const cap = (name) => name.charAt(0).toUpperCase() + name.slice(1);
-  fillSelect(el.voiceSelect, v.voices.map((name) => [name, cap(name)]), v.current);
+  fillSelect(el.voiceSelect, v.voices.map((name) => [name, capName(name)]), v.current);
+  renderSamples();
+}
+
+// Voice samples (GET /api/voice-preview): a short WAV per voice, played by its
+// own Audio element so the session's <audio> (the echo canceller's reference)
+// and the live session's voice are never touched. The daemon records a voice
+// on its first request (~4 s) and serves the cached file after that.
+const sample = { voice: null, state: "idle", audio: null, urls: new Map(), gen: 0 };
+
+function renderSamples() {
+  const grid = el.voiceGrid;
+  const v = S.voices;
+  if (!grid || !v) return;
+  if (grid.childElementCount !== v.voices.length) {
+    grid.replaceChildren(...v.voices.map((name) => {
+      const b = document.createElement("button");
+      b.type = "button";
+      b.className = "voice-chip";
+      b.dataset.voice = name;
+      b.innerHTML = '<svg aria-hidden="true"><use href="#i-play"/></svg><span></span>';
+      b.querySelector("span").textContent = capName(name);
+      b.addEventListener("click", () => playSample(name));
+      return b;
+    }));
+  }
+  for (const b of grid.children) {
+    const name = b.dataset.voice;
+    const state = sample.voice === name ? sample.state : "idle";
+    b.dataset.state = state;
+    b.setAttribute("aria-current", String(name === v.current));
+    b.setAttribute("aria-label", state === "playing" ? `Stop the ${capName(name)} sample` : state === "loading" ? `Loading the ${capName(name)} sample` : `Play a sample of ${capName(name)}${name === v.current ? " (current voice)" : ""}`);
+    b.setAttribute("aria-busy", String(state === "loading"));
+    b.querySelector("use").setAttribute("href", state === "playing" ? "#i-stop" : "#i-play");
+    b.disabled = !S.token;
+  }
+}
+
+function stopSample() {
+  sample.gen++;
+  if (sample.audio) {
+    sample.audio.onended = null;
+    try { sample.audio.pause(); } catch { /* ignore */ }
+  }
+  sample.audio = null;
+  sample.voice = null;
+  sample.state = "idle";
+  renderSamples();
+}
+
+async function playSample(name) {
+  if (sample.voice === name && sample.state !== "idle") { stopSample(); return; }
+  stopSample();
+  const gen = sample.gen;
+  sample.voice = name;
+  sample.state = "loading";
+  renderSamples();
+  try {
+    let url = sample.urls.get(name);
+    if (!url) {
+      const res = await fetch(`/api/voice-preview?voice=${encodeURIComponent(name)}`, { headers: { "X-Sotto-Page": S.token || "" } });
+      if (!res.ok) {
+        let msg = "";
+        try { msg = (await res.json())?.error?.message || ""; } catch { /* not JSON */ }
+        throw new Error(msg || `HTTP ${res.status}`);
+      }
+      url = URL.createObjectURL(await res.blob());
+      sample.urls.set(name, url);
+    }
+    if (gen !== sample.gen) return; // stopped or another voice clicked meanwhile
+    const a = new Audio(url);
+    // Same speaker as the session.
+    const sink = el.outputSelect.value || "";
+    if (sink && typeof a.setSinkId === "function") { try { await a.setSinkId(sink); } catch { /* default output */ } }
+    if (gen !== sample.gen) return;
+    sample.audio = a;
+    sample.state = "playing";
+    a.onended = () => { if (sample.audio === a) stopSample(); };
+    renderSamples();
+    await a.play();
+  } catch (err) {
+    if (gen !== sample.gen) return;
+    stopSample();
+    showBanner("error", `Could not play the ${capName(name)} sample: ${String(err?.message || err).replace(/^sotto: /, "")}`, "voice_preview");
+  }
 }
 
 async function chooseVoice(name) {
@@ -2192,6 +2278,8 @@ el.settings.addEventListener("close", () => {
   if (!keyBusy) stopKeyEdit();
   disarmRemove();
 });
+// A sample stops with the drawer.
+el.settings.addEventListener("close", () => { if (sample.state !== "idle") stopSample(); });
 el.settings.addEventListener("click", (e) => {
   // A click on the backdrop (the dialog box itself, outside its content) closes it.
   if (e.target !== el.settings) return;

@@ -15,6 +15,7 @@ export function dataPaths(D) {
     status: path.join(D, "status.json"),
     usage: path.join(D, "usage.json"),
     prefs: path.join(D, "prefs.json"),
+    previews: path.join(D, "voice-previews"), // cached voice samples (<voice>.wav)
     logs,
     daemonLog: path.join(logs, "daemon.log"),
     crashLog: path.join(logs, "crash.log"),

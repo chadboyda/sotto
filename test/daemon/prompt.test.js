@@ -3,7 +3,8 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { render, renderForPolicy, buildSeed, greeting, policyChangeInstruction, ownerSwitchInstruction, POLICY_TEXT } from "../../daemon/prompt.js";
+import { render, renderForPolicy, buildSeed, buildSeedInput, SEED_TOKENS, VOICE_HISTORY_NOTE, VOICE_HISTORY_END, greeting, policyChangeInstruction, ownerSwitchInstruction, POLICY_TEXT } from "../../daemon/prompt.js";
+import { estTokens } from "../../daemon/speech.js";
 import { parseTranscript, readTranscriptTail, gitBranch } from "../../daemon/claude-context.js";
 
 const HEADINGS = ["Backchannel policy:", "Interruption policy:", "Delegation policy:", "Backend tools:", "Delegate to the backend when:", "Do not delegate to the backend when:"];
@@ -112,4 +113,34 @@ test("gitBranch uses execFile and handles errors", async () => {
   assert.equal(await gitBranch("/repo", { execFile: ok }), "feat/x");
   assert.equal(await gitBranch("/repo", { execFile: (c, a, o, cb) => cb(new Error("no")) }), null);
   assert.equal(await gitBranch(null), null);
+});
+
+test("buildSeedInput: voice history as user/assistant messages, merged by role, under the API limits", () => {
+  const voiceHistory = [
+    { role: "user", text: "what branch" }, { role: "user", text: "are we on?" },
+    { role: "assistant", text: "Let me ask Claude." }, { role: "assistant", text: "You're on banana." },
+  ];
+  const msgs = buildSeedInput({ project: "p", cwd: "/x/p", branch: "b", reason: "reconnect", voiceHistory, estTokens });
+  assert.equal(msgs[0].role, "developer");
+  assert.ok(msgs[0].text.includes(VOICE_HISTORY_NOTE));
+  assert.ok(!/You said|The user said/.test(msgs[0].text), "history is not quoted in the developer message");
+  assert.deepEqual(msgs.slice(1), [
+    { role: "user", text: "what branch are we on?" },
+    { role: "assistant", text: "Let me ask Claude. You're on banana." },
+    { role: "developer", text: VOICE_HISTORY_END },
+  ]);
+  // start: no history at all.
+  assert.equal(buildSeedInput({ project: "p", cwd: "/x", reason: "start", voiceHistory, estTokens }).length, 1);
+  // Budget: big exchanges and history still fit SEED_TOKENS (API: 8,192 combined) and 128 messages.
+  const long = "word ".repeat(200);
+  const big = buildSeedInput({
+    project: "p", cwd: "/x", reason: "reconnect", estTokens,
+    exchanges: Array.from({ length: 8 }, (_, i) => ({ role: i % 2 ? "assistant" : "user", text: long })),
+    voiceHistory: Array.from({ length: 30 }, (_, i) => ({ role: i % 2 ? "assistant" : "user", text: long })),
+  });
+  const total = big.reduce((n, m) => n + estTokens(m.text) + 4, 0);
+  assert.ok(total <= SEED_TOKENS, `${total} tokens`);
+  assert.ok(big.length <= 128);
+  assert.ok(big.some((m) => m.role === "assistant"), "recent voice lines survive");
+  assert.ok(long.startsWith(big.at(-2).text.slice(0, -1)), "the newest line is kept (capped at 600 chars)");
 });

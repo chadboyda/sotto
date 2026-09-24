@@ -106,11 +106,13 @@ On macOS the voice window is a small native app, **Sotto**: a menu-bar icon plus
 **Changing the voice.** gpt-live-1 fixes the voice when a session starts, so a change re-creates the Live session: the old one closes, the window connects a new one seeded with the recent conversation, and the new voice says "Switched to cedar." It takes about a second. Three ways to do it:
 - type `/talk voice cedar` (no model turn);
 - ask out loud ("can you switch to the cedar voice?"): the voice hands that to Claude, which runs `sotto voice cedar`. The plugin's `bin/` is on Claude's Bash `PATH`. Claude Code may ask you once to approve that command; add `Bash(sotto voice:*)` to your allow rules to skip the prompt;
-- the voice window's picker, once the page has one (it uses the daemon's `/api/voices` and `/api/voice`).
+- the Voice picker in the voice window's settings (the gear).
 
 The choice is saved in `prefs.json` in the data directory. It beats the `voice` option in `/config`, which beats the default (`marin`).
 
 **Updates.** When the plugin's code changes on disk (a `git pull` in the plugin directory, or your own edits), the daemon notices within about 30 s and restarts itself at the next quiet moment: while voice sleeps, or after 45 s with nobody talking and nothing pending for Claude. It never restarts mid-sentence or while Claude works on a voice request. The new daemon takes over the same session, the window reconnects (and reloads if the page changed), and if you were mid-conversation the voice says "I just updated myself" and carries on with what you were talking about. Code that does not load is never switched to. `/talk restart` does the same right away (at the next short pause).
+
+To hear a voice before switching, open **Hear the voices** under the picker and click a name. The live session keeps its voice. The first sample of a voice takes about 4 seconds: a tiny separate Live session says "Hi, I'm Cedar. This is how I sound." (a few billed seconds, well under a cent, counted in today's usage). After that the sample is saved in `voice-previews/` in the data directory and plays at once.
 
 Only one session owns voice at a time. `/talk on` in another session moves voice there, and the voice tells you it switched projects. Voice turns itself off when the owning session exits.
 

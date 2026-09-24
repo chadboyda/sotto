@@ -172,6 +172,13 @@ export function createHttpServer({ voice, port, daemonKey, pageToken, pageSecret
       const r = voice.removeKey();
       return send(res, r.status, r.body);
     }
+    // Voice sample for the picker (preview.js). GET, page token; audio/wav.
+    if (p === "/api/voice-preview" && method === "GET") {
+      if (!pageOk(req, url)) return err(res, 403, "bad_token");
+      const r = await voice.voicePreview(url.searchParams.get("voice") || "");
+      if (!r.wav) return send(res, r.status, r.body);
+      return send(res, 200, r.wav, { "Content-Type": "audio/wav", "Cache-Control": "private, max-age=86400" });
+    }
     if (p === "/api/page" && method === "POST") {
       if (!pageOk(req, url)) return err(res, 403, "bad_token");
       send(res, 204);

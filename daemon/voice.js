@@ -10,11 +10,12 @@ import { Transcript } from "./transcript.js";
 import { DelegationEngine } from "./delegation.js";
 import { Mirror, MIRROR_MODES } from "./mirror.js";
 import { Narrator, milestoneLabel, elicitationSpeech, serverName } from "./policy.js";
-import { SpeechQueue } from "./speaker.js";
-import { renderForPolicy, buildSeed, greeting, ownerSwitchInstruction, voiceSwitchGreeting, vocabularyUpdateInstruction, updateGreeting } from "./prompt.js";
+import { SpeechQueue, COMMENTARY_PREROLL_MS } from "./speaker.js";
+import { renderForPolicy, buildSeedInput, greeting, ownerSwitchInstruction, voiceSwitchGreeting, vocabularyUpdateInstruction, updateGreeting } from "./prompt.js";
 import { readPrefs, writePrefs, resolveVoice, normalizeVoice, voiceListMessage, unknownVoiceMessage } from "./prefs.js";
 import { collectVocabulary, renderVocabulary, vocabularyHint, TIER } from "./vocabulary.js";
 import { buildSessionBody, createLiveSession, Sideband } from "./live.js";
+import { PreviewCache, recordPreview } from "./preview.js";
 import { readTranscriptTail, readAbsorbed, gitBranch } from "./claude-context.js";
 import { truncate } from "./log.js";
 import { usageToday } from "./format.js";
@@ -42,6 +43,11 @@ const RECONNECT_MAX = 3;
 const RECONNECT_WATCH_MS = 30000;
 /** How long a missing page may take to come back before the window is reopened. */
 const RECONNECT_OPEN_MS = 4000;
+// Voice switch: wait this long for the old session's session.closed before the
+// page reconnects. Tearing the WebRTC peer down at the same moment as
+// session.close made the server end the old session as connection_lost /
+// remote_hangup instead of close_requested (e2e, 2026-09-23).
+const SWITCH_CLOSE_WAIT_MS = 2000;
 const RESULT_SOURCES = new Set(["voice_result", "typed_result", "permission", "question", "attention", "background_voice", "background_result", "voice_notice", "mirror_result"]);
 const ASK_TOOLS = new Set(["AskUserQuestion", "ExitPlanMode"]);
 // States in which a Live session exists or is being created right now.
@@ -134,6 +140,7 @@ export class Voice {
     this.lastSessionCreateAt = 0;
     // Voice chosen while live: the replacement session greets with "Switched to <voice>".
     this.voiceSwitch = null;
+    this.switchGen = 0;
     this.config.voice = resolveVoice({ prefs: readPrefs(this.paths), configVoice: this.config.voice });
     // Per-bind nonce in the voice marker ("[sotto voice <nonce>]"), so a
     // peer message or typed text that merely contains the marker is not taken
@@ -149,6 +156,20 @@ export class Voice {
     // spoken although no session is open (they wake one).
     this.governor = new WakeGovernor({ clock: this.clock });
     this.wakeQueue = [];
+
+    // Voice samples for the picker (preview.js): one small Live session per
+    // voice, then a cached WAV. Never touches the live session.
+    this.previews = new PreviewCache({
+      dir: this.paths.previews, log: this.log,
+      record: (voice) => recordPreview({
+        base: this.base, apiKey: this.getApiKey(), voice, WebSocketImpl: this.WebSocketImpl, clock: this.clock, log: this.log,
+        // Billed like any Live session (per second, no minimum on a WebSocket): today's usage.
+        onClosed: ({ live_id, seconds }) => {
+          this.log.info("preview.closed", { voice, live_id, seconds });
+          if (Number.isFinite(seconds)) this.onUsage(live_id, seconds, { persist: true });
+        },
+      }),
+    });
 
     this.transcript = new Transcript({ clock: this.clock });
     // Every commentary goes through the speech queue, so a spoken update never
@@ -286,6 +307,10 @@ export class Voice {
     if (this.state === s) return;
     this.log.info("state", { from: this.state, to: s });
     this.state = s;
+    // The speech queue waits (suspended) only across a session swap; if the
+    // swap ends in anything but a new session, release what it holds (to
+    // pendingResult / backlog, as without a swap).
+    if (this.speech?.paused && !["reconnecting", "connecting", "live"].includes(s)) this.speech.resume();
     this.changed();
   }
 
@@ -731,6 +756,25 @@ export class Voice {
   }
 
   /**
+   * A short sample of `name` for GET /api/voice-preview. Returns
+   * {status, wav} or {status, body:{error}}. The first request per voice
+   * records it (about 4 s, billed about 4 s and booked to today's usage);
+   * later ones read the cached file.
+   */
+  async voicePreview(name) {
+    const v = normalizeVoice(name);
+    if (!v) return { status: 400, body: { error: { code: "bad_voice", message: unknownVoiceMessage(name) } } };
+    if (!this.previews.has(v)) {
+      if (!this.getApiKey()) return { status: 503, body: { error: { code: "no_api_key", message: "OPENAI_API_KEY was not found." } } };
+      if (this.capReached()) return { status: 429, body: { error: { code: "daily_cap", message: `Daily voice cap reached (${this.config.daily_cap_minutes} min).` } } };
+    }
+    const r = await this.previews.get(v);
+    this.log.info("preview.serve", { voice: v, ok: r.ok, cached: !!r.cached, bytes: r.wav ? r.wav.length : 0 });
+    if (!r.ok) return { status: 502, body: { error: { code: r.code || "preview_failed", message: r.message || "The voice sample failed." } } };
+    return { status: 200, wav: r.wav };
+  }
+
+  /**
    * Persist a voice choice (prefs.json) and apply it. gpt-live-1's
    * audio.output.voice cannot change after startup (ref-live-*: "Voice and
    * format are immutable after startup"), so a live session is re-created:
@@ -769,12 +813,24 @@ export class Voice {
     const old = this.sideband;
     this.sideband = null;
     this.stopLiveTimers();
-    if (old) old.close(3000).catch(() => {});
+    this.speech.suspend();
     this.live = null;
     this.voiceSwitch = v;
     this.notice("info", "voice_change", `Switching to the ${v} voice.`);
     this.setState("reconnecting");
-    this.requestReconnect("voice_change");
+    // Close first, reconnect after session.closed (at most SWITCH_CLOSE_WAIT_MS):
+    // the page's reconnect tears down the old peer connection, and a server that
+    // sees the media drop before it has processed session.close ends the
+    // session as connection_lost / remote_hangup.
+    const gen = ++this.switchGen;
+    const t0 = this.clock.now();
+    const go = (confirmed) => {
+      if (gen !== this.switchGen || this.state !== "reconnecting" || this.sideband) return;
+      this.log.info("voice.switch_closed", { confirmed, ms: this.clock.now() - t0 });
+      this.requestReconnect("voice_change");
+    };
+    if (!old) { go(false); return; }
+    old.close(SWITCH_CLOSE_WAIT_MS).then((r) => go(!!r?.confirmed), () => go(false));
   }
 
   // ---- owner liveness / SessionEnd --------------------------------------------------------
@@ -1048,12 +1104,16 @@ export class Voice {
     }
     // Queued messages are spoken right after the session is ready (flushed as
     // commentary), so the pending result is not seeded a second time.
-    const seed = buildSeed({
+    // The voice history goes in as assistant/user messages (already spoken);
+    // a pending result the voice already said is not handed over again.
+    const pending = this.pendingResult && !this.wakeQueue.length && !this.speech.wasSpoken(this.pendingResult.text) ? this.pendingResult.text : null;
+    const seed = buildSeedInput({
       project: owner.project, cwd: owner.cwd, branch, reason: why, exchanges,
       voiceHistory: this.transcript.recentLines(30),
-      pendingResult: this.pendingResult && !this.wakeQueue.length ? this.pendingResult.text : null,
+      pendingResult: pending,
       backlog: this.backlog,
       awaiting: this.awaiting ? this.awaiting.text : null,
+      estTokens,
     });
     this.vocab = vocab;
     const instructions = renderForPolicy(owner.project, this.policy, vocab.text);
@@ -1175,12 +1235,15 @@ export class Voice {
       this.updateCue = false;
       const g = switched ? voiceSwitchGreeting(this.live.voice) : updated ? updateGreeting() : greeting(reason, this.policy, this.owner?.project);
       if (g) this.deliver({ kind: "instructions", content: g, delegationId: null });
+      // Held and carried commentary follows the greeting.
+      this.speech.resume({ prerollMs: g ? COMMENTARY_PREROLL_MS : 0 });
       if (reason === "wake") {
         // The page posts the wake clip once it sees session.started; if that
         // never comes, still tell the model so it is not left waiting.
         this.timer("wakeNote", () => this.injectWakeText(sb, null, "timeout"), WAKE_NOTE_MS);
       }
     }
+    this.speech.resume();
     this.flushWakeQueue();
     this.interval("idle", () => this.idleTick(), IDLE_TICK_MS);
     this.scheduleExpiry();
@@ -1418,6 +1481,7 @@ export class Voice {
 
   async expiryReconnect() {
     this.log.info("reconnect", { reason: "expiry" });
+    this.speech.suspend();
     this.setState("reconnecting");
     await this.closeLive(3000);
     if (this.state !== "reconnecting") return;
@@ -1469,6 +1533,7 @@ export class Voice {
     }
     this.reconnects.push(now);
     this.log.info("reconnect", { reason, attempt: this.reconnects.length });
+    this.speech.suspend();
     this.setState("reconnecting");
     this.requestReconnect(reason);
   }

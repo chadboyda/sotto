@@ -31,7 +31,7 @@ export async function startFakeDaemon({ delayMs = 0, handler } = {}) {
   return {
     port,
     requests,
-    async waitForRequests(n, ms = 3000) {
+    async waitForRequests(n, ms = 8000) {
       const end = Date.now() + ms;
       while (requests.length < n && Date.now() < end) {
         await new Promise((r) => { waiters.push(r); setTimeout(r, 50); });

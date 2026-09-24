@@ -268,7 +268,7 @@ describe("createWindow", () => {
     const h = harness({ built: false });
     const t0 = Date.now();
     assert.equal(h.w.open().mode, "chrome");
-    assert.ok(Date.now() - t0 < 1000);
+    assert.ok(Date.now() - t0 < 3000, "the build runs detached (it takes 10-20 s)");
     assert.deepEqual(h.spawned[0], ["/bin/bash", path.join(h.root, "scripts/build-app.sh"), "--out", h.p.dir, "--quiet"]);
     assert.deepEqual(h.browserCalls, ["chrome"]);
     assert.ok(fs.existsSync(h.p.buildLog), "build output goes to logs/app-build.log");

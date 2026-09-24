@@ -157,3 +157,60 @@ test("drain returns held actions in arrival order and stops the timer", async ()
   assert.equal(sent.length, 0);
   assert.equal(clock.pending(), 0);
 });
+
+// ---- session swaps (voice switch, reconnect, expiry) ------------------------------------
+
+test("swap: a commentary the old session already spoke is not queued again", async () => {
+  const { clock, q, sent } = makeQ();
+  q.enqueue(c("voice_result", "Claude Code's answer: the branch is banana."));
+  assert.equal(sent.length, 1);
+  await clock.advance(600);
+  await speak(clock, q, "You're on the banana branch.", 1600); // the old session said it
+  q.suspend();
+  q.enqueue(c("voice_result", "Claude Code's answer: the branch is  banana.")); // same text again (e.g. re-routed)
+  q.resume();
+  await clock.advance(5000);
+  assert.equal(sent.length, 1, "not re-spoken by the new session");
+  assert.equal(q.size, 0);
+});
+
+test("swap: the last commentary is carried when the old session never spoke it", async () => {
+  const { clock, q, sent } = makeQ();
+  q.enqueue(c("voice_result", "Claude Code's answer: done."));
+  assert.equal(sent.length, 1);
+  await clock.advance(300); // session closed before any output
+  q.suspend();
+  assert.equal(q.size, 1, "carried");
+  await clock.advance(3000);
+  assert.equal(sent.length, 1, "held while suspended");
+  q.resume({ prerollMs: COMMENTARY_PREROLL_MS }); // the greeting goes first
+  assert.equal(sent.length, 1);
+  await clock.advance(COMMENTARY_PREROLL_MS + 300);
+  assert.equal(sent.length, 2);
+  assert.equal(sent[1].content, "Claude Code's answer: done.");
+});
+
+test("swap: items queued while suspended wait for the new session, in order, once each", async () => {
+  const { clock, q, sent, demoted } = makeQ();
+  q.suspend();
+  q.enqueue(c("typed_result", "Claude finished: tests pass."));
+  q.enqueue(c("typed_result", "Claude finished: tests pass."));
+  q.enqueue(c("question", "Claude's asking: red or blue?"));
+  await clock.advance(HOLD_MAX_MS + 1000); // no demotion while waiting for a session
+  assert.equal(sent.length + demoted.length, 0);
+  assert.equal(q.size, 2, "the duplicate was dropped");
+  q.resume();
+  assert.equal(sent[0].content, "Claude's asking: red or blue?");
+  await clock.advance(COMMENTARY_PREROLL_MS + 300);
+  assert.deepEqual(sent.map((a) => a.content), ["Claude's asking: red or blue?", "Claude finished: tests pass."]);
+});
+
+test("outside a swap, a repeated text is a new event and is spoken again", async () => {
+  const { clock, q, sent } = makeQ();
+  q.enqueue(c("permission", "Claude needs approval to run npm test."));
+  await clock.advance(600);
+  await speak(clock, q, "Claude needs approval.", 1000);
+  await clock.advance(30000);
+  q.enqueue(c("permission", "Claude needs approval to run npm test."));
+  assert.equal(sent.length, 2);
+});

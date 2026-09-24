@@ -18,6 +18,14 @@
 //  - answers to voice requests are never demoted (that would lose the answer
 //    the user asked for): after HOLD_MAX_MS they go out at the next boundary.
 // Thinking and instructions appends never pass through here (they are silent).
+//
+// Session swaps (voice switch, reconnect, expiry): the queue is suspended while
+// no Live session is open, so held items wait for the replacement instead of
+// falling into pendingResult (where the seed would hand them to the new session
+// AND the queue would lose all but the last). The commentary sent last is
+// carried over only if no output speech followed it (the user never heard it).
+// Anything already spoken (output speech observed after its append) is never
+// queued again: observed live, a replacement session re-spoke the last update.
 
 export const PRIORITY = Object.freeze({ low: 1, normal: 2, high: 3 });
 
@@ -30,6 +38,16 @@ export const HOLD_MAX_MS = 20000;
 /** An urgent item waits at most this long for a sentence boundary. */
 export const URGENT_WAIT_MS = 3000;
 export const PUMP_MS = 250;
+/** Around a session swap, a commentary whose text was spoken this recently is not queued again. */
+export const DEDUPE_MS = 120000;
+/** "Around a swap": while suspended and this long after resume. Outside it a
+ *  repeated text is a new event (a second approval prompt) and is spoken. */
+export const SWAP_WINDOW_MS = 20000;
+/** At a session swap, the last commentary is carried if sent this recently and never heard. */
+export const CARRY_MS = 30000;
+
+/** Content key for de-duplication: case and whitespace do not matter. */
+export const speechKey = (content) => String(content ?? "").toLowerCase().replace(/\s+/g, " ").trim();
 
 // Sources whose commentary is an answer or something the user must act on.
 const HIGH = new Set(["voice_result", "background_voice", "question", "permission", "attention", "voice_notice"]);
@@ -66,6 +84,10 @@ export class SpeechQueue {
     this.prerollUntil = 0; // after our own commentary append
     this.burst = null; // {wall, startMs}: first delta of the current utterance
     this.tail = ""; // last output text, for sentence boundaries
+    this.paused = false; // suspended between Live sessions (swap)
+    this.lastSent = null; // {action, key, priority, urgent, at, heard}
+    this.spoken = new Map(); // key → wall time its speech was observed
+    this.resumedAt = -Infinity; // end of the last swap
   }
 
   /** Output transcript delta from the Live session (the assistant is talking). */
@@ -80,6 +102,11 @@ export class SpeechQueue {
     }
     this.speakingUntil = Math.max(this.speakingUntil, until);
     this.prerollUntil = 0; // speech has started: the delta timing takes over
+    // Output after our last commentary: the user heard (at least the start of) it.
+    if (this.lastSent && !this.lastSent.heard) {
+      this.lastSent.heard = true;
+      this.spoken.set(this.lastSent.key, now);
+    }
     if (typeof delta === "string" && delta) this.tail = (this.tail + delta).slice(-200);
     this.schedule();
   }
@@ -94,18 +121,83 @@ export class SpeechQueue {
 
   get size() { return this.items.length; }
 
+  /** True when this text was spoken within DEDUPE_MS. */
+  wasSpoken(content, now = this.clock.now()) {
+    const at = this.spoken.get(speechKey(content));
+    return at != null && now - at < DEDUPE_MS;
+  }
+
+  /**
+   * Why an item with this content must not be queued, or null: an identical
+   * item is already waiting, was just sent (in flight), or was spoken recently.
+   */
+  duplicateOf(key, now) {
+    if (!key) return null;
+    if (this.items.some((it) => it.key === key)) return "queued";
+    if (!this.paused && !(now - this.resumedAt < SWAP_WINDOW_MS)) return null;
+    if (this.lastSent && this.lastSent.key === key && !this.lastSent.heard && now - this.lastSent.at < CARRY_MS) return "in_flight";
+    const at = this.spoken.get(key);
+    if (at != null && now - at < DEDUPE_MS) return "spoken";
+    return null;
+  }
+
   /** Queue one commentary action ({kind, content, delegationId, source, priority?, urgent?}). */
   enqueue(action) {
+    const now = this.clock.now();
+    const key = speechKey(action.content);
+    const dup = this.duplicateOf(key, now);
+    if (dup) {
+      this.log.info("speech.duplicate", { source: action.source || null, why: dup });
+      return;
+    }
     const priority = action.priority ?? priorityOf(action.source);
     const urgent = action.urgent ?? isUrgent(action.source);
-    this.items.push({ action, priority, urgent, at: this.clock.now(), seq: this.seq++ });
+    this.items.push({ action, key, priority, urgent, at: now, seq: this.seq++ });
+    this.pump();
+  }
+
+  /**
+   * No Live session until resume(): hold everything. The last commentary goes
+   * back to the front of the queue if no speech followed it (the closing
+   * session never said it). Speaking state belongs to the old session.
+   */
+  suspend() {
+    const now = this.clock.now();
+    this.clearTimer();
+    this.paused = true;
+    const last = this.lastSent;
+    this.lastSent = null;
+    if (last && !last.heard && now - last.at < CARRY_MS && !this.items.some((it) => it.key === last.key)) {
+      this.items.push({ action: last.action, key: last.key, priority: last.priority, urgent: last.urgent, at: now, seq: -1 - this.seq++ });
+      this.log.info("speech.carried", { source: last.action.source || null, sent_ms_ago: now - last.at });
+    }
+    this.speakingUntil = 0;
+    this.prerollUntil = 0;
+    this.burst = null;
+    this.tail = "";
+  }
+
+  /**
+   * A session is ready again. `prerollMs`: something (the greeting) was just
+   * sent and will be spoken first, so held items wait for it.
+   */
+  resume({ prerollMs = 0 } = {}) {
+    if (!this.paused) return;
+    this.paused = false;
+    const now = this.clock.now();
+    this.resumedAt = now;
+    // Hold times restart: waiting for a session is not waiting for silence.
+    for (const it of this.items) it.at = now;
+    if (prerollMs > 0) this.prerollUntil = now + prerollMs;
     this.pump();
   }
 
   /** Release what may be released now; re-arm the poll timer while items wait. */
   pump() {
     this.clearTimer();
+    if (this.paused) return;
     const now = this.clock.now();
+    for (const [k, at] of this.spoken) if (now - at >= DEDUPE_MS) this.spoken.delete(k);
     // Demote stale low/normal items first (answers and urgent items never are).
     for (const it of [...this.items]) {
       if (it.priority < PRIORITY.high && !it.urgent && now - it.at >= HOLD_MAX_MS) {
@@ -127,13 +219,14 @@ export class SpeechQueue {
       else if (now > head.at) this.log.info("speech.released", { source: head.action.source || null, held_ms: now - head.at });
       this.prerollUntil = now + COMMENTARY_PREROLL_MS;
       this.tail = "";
+      this.lastSent = { action: head.action, key: head.key, priority: head.priority, urgent: head.urgent, at: now, heard: false };
       this.send(head.action);
     }
     this.schedule();
   }
 
   schedule() {
-    if (this.timer || !this.items.length) return;
+    if (this.timer || !this.items.length || this.paused) return;
     this.timer = this.clock.setTimeout(() => { this.timer = null; this.pump(); }, PUMP_MS);
   }
 
@@ -151,6 +244,8 @@ export class SpeechQueue {
     this.prerollUntil = 0;
     this.burst = null;
     this.tail = "";
+    this.paused = false;
+    this.lastSent = null;
     return out;
   }
 }

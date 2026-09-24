@@ -8,7 +8,7 @@ import http from "node:http";
 import { readPrefs, writePrefs, resolveVoice, normalizeVoice, voiceListMessage, unknownVoiceMessage } from "../../daemon/prefs.js";
 import { dataPaths } from "../../daemon/paths.js";
 import { VOICES } from "../../daemon/config.js";
-import { voiceSwitchGreeting, TEMPLATE } from "../../daemon/prompt.js";
+import { voiceSwitchGreeting, TEMPLATE, VOICE_HISTORY_END } from "../../daemon/prompt.js";
 import { makeHarness, SESSION } from "../helpers/daemon-harness.js";
 
 const appends = (ws, kind) => ws.sent.filter((e) => e.type === `session.${kind}.append`);
@@ -118,7 +118,9 @@ test("live switch: closes the old session, asks the page to reconnect, seeds con
   assert.equal(r.message, "sotto: voice set to cedar. Switching the live session now.");
   assert.equal(h.voice.state, "reconnecting");
   assert.equal(ws.sentOfType("session.close").length, 1, "old session closed");
-  assert.deepEqual(h.commands(), ["reconnect:voice_change"]);
+  // The page is asked to reconnect only after session.closed: tearing down the
+  // peer at the same moment made the server end the session as connection_lost.
+  assert.deepEqual(h.commands(), [], "no reconnect before the old session has closed");
   assert.ok(h.sse.some((m) => m.type === "notice" && m.code === "voice_change"));
   // The old session's session.closed books usage but does not trigger the loss path.
   h.closeReply(ws, "close_requested", 7);
@@ -132,7 +134,14 @@ test("live switch: closes the old session, asks the page to reconnect, seeds con
   assert.equal(c.status, 201);
   const body = h.fetchCalls[1].body.session;
   assert.deepEqual(body.audio, { output: { voice: "cedar" } });
-  assert.match(body.input[0].content[0].text, /Voice session: reconnected\.[\s\S]*The user said: we were talking about the parser[\s\S]*You said: right, the parser/);
+  // Background first; the voice history follows as real user/assistant messages
+  // (already spoken), then an end marker.
+  assert.match(body.input[0].content[0].text, /Voice session: reconnected\./);
+  assert.deepEqual(body.input.slice(1).map((m) => [m.role, m.content[0].type, m.content[0].text]), [
+    ["user", "input_text", "we were talking about the parser"],
+    ["assistant", "output_text", "right, the parser"],
+    ["developer", "input_text", VOICE_HISTORY_END],
+  ]);
   const ws2 = h.WS.last();
   ws2.open();
   ws2.receive({ type: "session.started", session: {} });
@@ -173,7 +182,23 @@ test("voice chosen while the session is still connecting: switches once it is re
   assert.equal(h.voice.state, "reconnecting");
   assert.equal(appends(ws, "instructions").length, 0, "no start greeting in marin");
   assert.equal(ws.sentOfType("session.close").length, 1);
+  assert.deepEqual(h.commands(), [], "waits for session.closed");
+  h.closeReply(ws, "close_requested", 1);
+  await h.clock.advance(0);
   assert.deepEqual(h.commands(), ["reconnect:voice_change"]);
+});
+
+test("live switch: no session.closed within 2 s still reconnects", async (t) => {
+  const h = await makeHarness();
+  t.after(() => h.cleanup());
+  const ws = await h.goLive({ config: { voice: "marin" } });
+  h.voice.control({ action: "voice", voice: "cedar" });
+  assert.equal(ws.sentOfType("session.close").length, 1);
+  await h.clock.advance(1900);
+  assert.deepEqual(h.commands(), []);
+  await h.clock.advance(200);
+  assert.deepEqual(h.commands(), ["reconnect:voice_change"]);
+  assert.equal(h.voice.state, "reconnecting");
 });
 
 test("paused: a voice change just applies to the next session", async (t) => {
@@ -260,4 +285,38 @@ test("POST /control action voice answers in hook format as one line", async (t) 
   const r = await request(h.port, { method: "POST", path: "/control?format=hook", headers: { "X-Sotto-Key": h.d.daemonKey }, body: { action: "voice", voice: "coral" } });
   assert.equal(r.status, 200);
   assert.deepEqual(r.json, { continue: false, stopReason: "sotto: voice set to coral. It applies to the next voice session." });
+});
+
+test("live switch: the new session does not re-speak the last update; an unheard one is carried once", async (t) => {
+  const h = await makeHarness();
+  t.after(() => h.cleanup());
+  const ws = await h.goLive({ config: { voice: "marin" } });
+  // An update the old session spoke.
+  h.voice.deliver({ kind: "commentary", content: "Claude Code's answer: you're on the banana branch.", delegationId: null, source: "voice_result" });
+  assert.equal(appends(ws, "commentary").length, 1);
+  await h.clock.advance(500);
+  ws.receive({ type: "session.output_transcript.delta", delta: " You're on the banana branch.", start_ms: 100, end_ms: 1500 });
+  await h.clock.advance(3000);
+  // A second update sent just before the switch, never spoken.
+  h.voice.deliver({ kind: "commentary", content: "Claude finished: the tests pass.", delegationId: null, source: "typed_result" });
+  assert.equal(appends(ws, "commentary").length, 2);
+  h.voice.control({ action: "voice", voice: "cedar" });
+  // While switching, the same spoken update is routed again: dropped.
+  h.voice.deliver({ kind: "commentary", content: "Claude Code's answer: you're on the banana branch.", delegationId: null, source: "voice_result" });
+  h.closeReply(ws, "close_requested", 5);
+  await h.clock.advance(0);
+  assert.equal(h.voice.pendingResult, null, "nothing fell into pendingResult during the swap");
+  await h.voice.createSession({ sdp: "v=0 offer 2", reason: "reconnect" });
+  const input = h.fetchCalls[1].body.session.input;
+  assert.ok(!/Result that arrived while voice was paused/.test(input[0].content[0].text));
+  assert.ok(input.some((m) => m.role === "assistant" && /banana branch/.test(m.content[0].text)), "the spoken update is assistant history");
+  const ws2 = h.WS.last();
+  ws2.open();
+  ws2.receive({ type: "session.started", session: {} });
+  assert.equal(appends(ws2, "instructions")[0].content, voiceSwitchGreeting("cedar"));
+  assert.equal(appends(ws2, "commentary").length, 0, "carried update waits for the greeting");
+  await h.clock.advance(3000);
+  assert.deepEqual(appends(ws2, "commentary").map((a) => a.content), ["Claude finished: the tests pass."]);
+  await h.clock.advance(30000);
+  assert.equal(appends(ws2, "commentary").length, 1, "each update once");
 });
