@@ -162,7 +162,10 @@ export function route(source, policy, payload = {}, ctx = {}) {
       const n = payload.count || 1;
       const said = n === 1 ? "A background agent finished." : `${n} background agents finished.`;
       const note = BG + said + (payload.details?.length ? ` ${payload.details.map((d) => clip(d, 300)).join(" ")}` : "");
-      if (payload.speak && p !== "quiet") return [act("commentary", null, said), act("thinking", null, note)];
+      // Hotfix: a bare count ("2 background agents finished") told the user
+      // nothing and repeated for nested/workflow agents, so it is never spoken;
+      // the voice keeps it as silent context. A content-bearing announcement
+      // (what finished, and the result) replaces this in fix/agent-finished-spam.
       return [act("thinking", null, note)];
     }
     case "tool_milestone": {
