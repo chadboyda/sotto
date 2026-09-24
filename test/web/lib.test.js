@@ -283,11 +283,93 @@ test("stableUsage holds the reading for 10 s unless the minute or the day change
   assert.deepEqual(lib.stableUsage(r, 4, 500), { seconds: 4, at: 500 }, "day rolled over: updates at once");
 });
 
-test("sessionText", () => {
-  assert.equal(lib.sessionText(0), "session just started");
-  assert.equal(lib.sessionText(42_000), "session just started");
-  assert.equal(lib.sessionText(60_000), "1 min this session");
-  assert.equal(lib.sessionText(3_900_000), "1 hr 5 min this session");
+test("formatClock: live timers as m:ss, h:mm:ss past an hour", () => {
+  assert.equal(lib.formatClock(0), "0:00");
+  assert.equal(lib.formatClock(-3), "0:00");
+  assert.equal(lib.formatClock(NaN), "0:00");
+  assert.equal(lib.formatClock(5.9), "0:05");
+  assert.equal(lib.formatClock(842), "14:02");
+  assert.equal(lib.formatClock(3599), "59:59");
+  assert.equal(lib.formatClock(3600), "1:00:00");
+  assert.equal(lib.formatClock(3909), "1:05:09");
+  // Prose keeps the words.
+  assert.equal(lib.formatDuration(842), "14 min");
+});
+
+test("tickingToday: advances with wall time while live, bounded, never backwards within a day", () => {
+  const r = { seconds: 100, at: 0 };
+  assert.equal(lib.tickingToday(null, 0), 0);
+  assert.equal(lib.tickingToday(r, 5000, { live: true }), 105);
+  assert.equal(lib.tickingToday(r, 60_000, { live: true }), 115, "at most 15 s past the reading");
+  assert.equal(lib.tickingToday(r, 5000, { live: false }), 100);
+  assert.equal(lib.tickingToday({ seconds: 104, at: 6000 }, 6000, { live: true, shown: 106 }), 106, "a reading behind the clock holds it");
+  assert.equal(lib.tickingToday({ seconds: 3, at: 0 }, 0, { live: true, shown: 5000 }), 3, "a new day resets");
+});
+
+test("createWordHold: a new floor shows only after it held for holdMs", () => {
+  const h = lib.createWordHold({ holdMs: 1300 });
+  assert.equal(h.update(null, 0), null);
+  assert.equal(h.update("you", 100), null);
+  assert.equal(h.update(null, 600), null, "a pause between words");
+  assert.equal(h.update("you", 700), null);
+  assert.equal(h.update("you", 1999), null);
+  assert.equal(h.update("you", 2000), "you");
+  assert.equal(h.update("voice", 2100), "you");
+  assert.equal(h.update("you", 2200), "you", "back to the shown floor: the pending switch is dropped");
+  assert.equal(h.update("voice", 2300), "you");
+  assert.equal(h.update("voice", 3600), "voice");
+  h.reset(null);
+  assert.equal(h.update("you", 4000), null);
+});
+
+test("renderMarkdown: bold, italic, code, lists, safe links; code blocks omitted in the short view", () => {
+  assert.equal(lib.renderMarkdown("Fixed **two** bugs in `voice.js`, *quickly*."),
+    "<p>Fixed <strong>two</strong> bugs in <code>voice.js</code>, <em>quickly</em>.</p>");
+  assert.equal(lib.renderMarkdown("Done:\n\n- one\n- two\n\n1. a\n2. b"),
+    "<p>Done:</p><ul><li>one</li><li>two</li></ul><ol><li>a</li><li>b</li></ol>");
+  assert.equal(lib.renderMarkdown("## Result\nAll good"), "<p><strong>Result</strong></p><p>All good</p>");
+  assert.equal(lib.renderMarkdown("x\n```js\nconst a = 1 < 2;\n```"), '<p>x</p><p class="md-omitted">(code)</p>');
+  assert.equal(lib.renderMarkdown("```js\nconst a = 1 < 2;\n```", { code: "block" }), "<pre><code>const a = 1 &lt; 2;</code></pre>");
+  assert.equal(lib.renderMarkdown("See [the PR](https://github.com/a/b/pull/1)."),
+    '<p>See <a href="https://github.com/a/b/pull/1" target="_blank" rel="noopener noreferrer">the PR</a>.</p>');
+  assert.equal(lib.renderMarkdown("`**not bold**`"), "<p><code>**not bold**</code></p>");
+});
+
+test("renderMarkdown: XSS never reaches the DOM", () => {
+  const cases = [
+    "<script>alert(1)</script>",
+    "<img src=x onerror=alert(1)>",
+    "[click](javascript:alert(1))",
+    "[click](javascript:alert`1`)",
+    "[click](JaVaScRiPt:void(0))",
+    "[x](data:text/html;base64,PHNjcmlwdD4=)",
+    '[x](https://ok.com/"onmouseover="alert(1))',
+    "[x](https://ok.com/' onmouseover='alert(1))",
+    "**<b onclick=alert(1)>bold</b>**",
+    "`<svg onload=alert(1)>`",
+    "```\n</code></pre><script>alert(1)</script>\n```",
+    "- <iframe src=javascript:alert(1)>",
+    "\u00000\u0000<x>",
+    "&lt;script&gt; already escaped",
+  ];
+  for (const md of cases) {
+    for (const code of ["omit", "block"]) {
+      const html = lib.renderMarkdown(md, { code });
+      assert.ok(!/<(?!\/?(?:p|strong|em|code|pre|ul|ol|li|a)\b)[a-z]/i.test(html), `unexpected tag in ${html}`);
+      assert.ok(!/<(?:p|strong|em|code|pre|ul|ol|li)\b[^>]*\son\w+=/i.test(html), `handler in ${html}`);
+      for (const m of html.matchAll(/<a\b([^>]*)>/g)) {
+        assert.match(m[1], /^ href="https?:\/\/[^"<>]*" target="_blank" rel="noopener noreferrer"$/, `anchor ${m[0]}`);
+      }
+      assert.ok(!/javascript:|data:text/i.test(html.replace(/&[a-z#0-9]+;/gi, "")) || !/href="(?:javascript|data)/i.test(html), html);
+    }
+  }
+  assert.equal(lib.renderMarkdown("&lt;"), "<p>&amp;lt;</p>", "entities in the text are shown, not decoded");
+  assert.equal(lib.escapeHtml(`<a href="x" onclick='y'>&`), "&lt;a href=&quot;x&quot; onclick=&#39;y&#39;&gt;&amp;");
+});
+
+test("stripMarkdown: one plain line for short views", () => {
+  assert.equal(lib.stripMarkdown("## Done\n**Fixed** the `parser`. See [PR](https://x/1).\n```\ncode\n```\n- item"), "Done Fixed the parser. See PR. item");
+  assert.equal(lib.stripMarkdown(""), "");
 });
 
 test("todaySeconds adds only data-channel usage beyond what the daemon counted", () => {

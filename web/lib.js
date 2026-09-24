@@ -94,10 +94,56 @@ export function stableUsage(prev, seconds, now, everyMs = 10_000) {
   return prev;
 }
 
-/** The session line under the dial: "session just started", "14 min this session". */
-export function sessionText(ms) {
-  const s = Math.max(0, (Number(ms) || 0) / 1000);
-  return s < 60 ? "session just started" : `${formatDuration(s)} this session`;
+/**
+ * A live timer as a clock: "0:05", "14:02", "1:05:09" (whole seconds, rounded
+ * down). Prose keeps formatDuration()'s words ("14 min"); only the header's
+ * ticking timers use this (SPEC-DEVIATIONS "timers").
+ */
+export function formatClock(seconds) {
+  const t = Math.floor(Number.isFinite(seconds) && seconds > 0 ? seconds + 1e-9 : 0);
+  const h = Math.floor(t / 3600);
+  const m = Math.floor((t % 3600) / 60);
+  const sec = String(t % 60).padStart(2, "0");
+  return h ? `${h}:${String(m).padStart(2, "0")}:${sec}` : `${m}:${sec}`;
+}
+
+/**
+ * Today's billed seconds for the ticking header clock: the last daemon/data-channel
+ * reading (`reading` from stableUsage), advanced by wall time while a session is
+ * live, but never more than `maxAheadS` past it (billing is confirmed by the next
+ * reading) and never backwards within a day.
+ */
+export function tickingToday(reading, now, { live = false, shown = null, maxAheadS = 15 } = {}) {
+  if (!reading) return 0;
+  const ahead = live ? Math.min(maxAheadS, Math.max(0, (now - reading.at) / 1000)) : 0;
+  const v = reading.seconds + ahead;
+  // A lower reading by more than a minute is a new day; otherwise hold the clock still.
+  if (shown != null && v < shown && shown - v < 60) return shown;
+  return v;
+}
+
+/**
+ * The status word's slow summary of who has the floor (SPEC-DEVIATIONS
+ * "status word"): a new floor is shown only once it has held for `holdMs`,
+ * so the word does not flip between "Listening", "Hearing you" and "Speaking"
+ * on every pause. update(floor, now) → the floor to show.
+ */
+export function createWordHold({ holdMs = 1300 } = {}) {
+  let shown;
+  let cand;
+  let since = 0;
+  return {
+    update(floor, now) {
+      const f = floor ?? null;
+      if (shown === undefined) { shown = f; cand = f; return shown; }
+      if (f === shown) { cand = f; return shown; }
+      if (f !== cand) { cand = f; since = now; }
+      if (now - since >= holdMs) shown = cand;
+      return shown;
+    },
+    reset(floor = null) { shown = floor; cand = floor; since = 0; },
+    get shown() { return shown ?? null; },
+  };
 }
 
 /**
@@ -377,7 +423,11 @@ export function activityView(ev) {
         tone: "attention",
       };
     case "turn_end":
-      return { text: "Claude finished", busy: false, summary: ev?.text ? truncate(ev.text, 420) : null, tone: "done" };
+      // `summary` is Claude's final message as markdown (the page renders it with
+      // renderMarkdown); an older daemon only sent `text`.
+      return { text: "Claude finished", busy: false, summary: typeof ev?.summary === "string" && ev.summary.trim() ? ev.summary.slice(0, 4000) : ev?.text ? truncate(ev.text, 420) : null, tone: "done" };
+    case "agents":
+      return { text: "", busy: null, summary: null, tone: "info" };
     default:
       return { text: text || "", busy: null, summary: null, tone: "info" };
   }
@@ -881,6 +931,7 @@ export function connectSteps(stage) {
 export function claudeView(s) {
   const text = String(s?.text || "").trim();
   const request = s?.request?.text ? { text: truncate(s.request.text, 140), ...delegationLabel(s.request.status) } : null;
+  const agents = Number(s?.agents) > 0 ? (Number(s.agents) === 1 ? "1 background agent working" : `${Number(s.agents)} background agents working`) : null;
   if (s?.kind === "permission" && s?.busy !== false) {
     return {
       kind: "approval",
@@ -888,16 +939,110 @@ export function claudeView(s) {
       command: text || null,
       note: "Waiting for your approval in the terminal",
       request,
+      agents,
     };
   }
   if (s?.busy) {
-    let step = "";
-    if (s.kind === "tool" || s.kind === "text") step = text;
-    else if (s.kind === "turn_start") step = text ? `Starting: ${text}` : "";
-    return { kind: "working", title: "Claude is working", step: truncate(step, 180) || "Thinking", request };
+    // What Claude says comes first (SPEC-DEVIATIONS "Claude card"); the plain-words
+    // tool line only fills in when Claude has said nothing for a while.
+    const says = stripMarkdown(s.says || "");
+    const fresh = says && (s.now == null || s.saysAt == null || s.now - s.saysAt < CLAUDE_SAYS_FRESH_MS);
+    const tool = stripMarkdown(s.tool || "");
+    let step = "Thinking";
+    let secondary = false;
+    if (fresh) step = says;
+    else if (tool) { step = tool; secondary = true; }
+    else if (says) step = says;
+    return { kind: "working", title: "Claude is working", step: truncate(step, 180), secondary, request, agents };
   }
-  if (s?.summary) return { kind: "finished", title: "Claude finished", summary: String(s.summary), request };
-  return { kind: "idle", title: "Claude is idle", request };
+  if (s?.summary) return { kind: "finished", title: "Claude finished", summary: String(s.summary), request, agents };
+  return { kind: "idle", title: "Claude is idle", request, agents };
+}
+
+/** Claude's words stay the card's line this long before a tool line may replace them. */
+export const CLAUDE_SAYS_FRESH_MS = 20_000;
+
+// ---- Claude's markdown, rendered safely (SPEC-DEVIATIONS "Claude card") -------------
+const ESC = { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" };
+/** HTML-escape every character that could open markup or leave an attribute. */
+export function escapeHtml(t) {
+  return String(t ?? "").replace(/[&<>"']/g, (c) => ESC[c]);
+}
+
+/** Inline markdown on ALREADY ESCAPED text: code, bold, italic, links (http/https only). */
+function inlineMd(t) {
+  const codes = [];
+  // Inline code first; its content is kept verbatim (already escaped).
+  t = t.replace(/`([^`\n]+)`/g, (_, c) => { codes.push(c); return `\u0000${codes.length - 1}\u0000`; });
+  // Links: [text](http…) → an anchor; any other scheme (javascript:, data:, file:) → the text.
+  t = t.replace(/\[([^\]\n]+)\]\(([^()\s]+)\)/g, (_, label, url) =>
+    /^https?:\/\/[^\s]+$/i.test(url) ? `<a href="${url}" target="_blank" rel="noopener noreferrer">${label}</a>` : label);
+  t = t.replace(/(\*\*|__)(?=\S)([^\n]*?\S)\1/g, "<strong>$2</strong>");
+  t = t.replace(/(^|[^\w*])\*(?=\S)([^*\n]*?\S)\*(?!\w)/g, "$1<em>$2</em>");
+  t = t.replace(/(^|[^\w])_(?=\S)([^_\n]*?\S)_(?!\w)/g, "$1<em>$2</em>");
+  t = t.replace(/~~(?=\S)([^\n]*?\S)~~/g, "$1");
+  return t.replace(/\u0000(\d+)\u0000/g, (_, i) => `<code>${codes[Number(i)]}</code>`);
+}
+
+/**
+ * Claude's markdown as a small, safe HTML subset: paragraphs, bold, italic,
+ * inline code, http(s) links, bullet and numbered lists, headings as bold
+ * paragraphs, and code blocks (`code: "block"`) or a "(code)" placeholder
+ * (`code: "omit"`, for the short view). The input is HTML-escaped FIRST and
+ * only whitelisted tags are added afterwards, so no markup in the text can
+ * reach the DOM. No external library, no build step.
+ */
+export function renderMarkdown(md, { code = "omit" } = {}) {
+  const lines = escapeHtml(String(md ?? "").replace(/\r\n?/g, "\n").replace(/\u0000/g, "")).split("\n");
+  const out = [];
+  let para = [];
+  let list = null; // {tag, items}
+  const flushPara = () => { if (para.length) out.push(`<p>${inlineMd(para.join(" "))}</p>`); para = []; };
+  const flushList = () => { if (list) out.push(`<${list.tag}>${list.items.map((i) => `<li>${inlineMd(i)}</li>`).join("")}</${list.tag}>`); list = null; };
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    const fence = /^\s*(```|~~~)/.exec(line);
+    if (fence) {
+      flushPara(); flushList();
+      const body = [];
+      for (i++; i < lines.length && !lines[i].trim().startsWith(fence[1]); i++) body.push(lines[i]);
+      out.push(code === "block" ? `<pre><code>${body.join("\n")}</code></pre>` : `<p class="md-omitted">(code)</p>`);
+      continue;
+    }
+    if (!line.trim()) { flushPara(); flushList(); continue; }
+    const bullet = /^\s*[-*+•]\s+(.*)$/.exec(line);
+    const num = /^\s*\d{1,3}[.)]\s+(.*)$/.exec(line);
+    if (bullet || num) {
+      flushPara();
+      const tag = bullet ? "ul" : "ol";
+      if (list && list.tag !== tag) flushList();
+      list ??= { tag, items: [] };
+      list.items.push((bullet || num)[1]);
+      continue;
+    }
+    if (list && /^\s{2,}\S/.test(line)) { list.items[list.items.length - 1] += ` ${line.trim()}`; continue; }
+    flushList();
+    const h = /^\s{0,3}#{1,6}\s+(.*?)\s*#*\s*$/.exec(line);
+    if (h) { flushPara(); out.push(`<p><strong>${inlineMd(h[1])}</strong></p>`); continue; }
+    if (/^\s*([-*_])(\s*\1){2,}\s*$/.test(line)) { flushPara(); continue; } // horizontal rule
+    para.push(line.replace(/^\s*&gt;\s?/, "").trim());
+  }
+  flushPara(); flushList();
+  return out.join("");
+}
+
+/** Markdown to plain one-line text (for short views): markers, code blocks and link targets dropped. */
+export function stripMarkdown(md) {
+  let t = String(md ?? "").replace(/\r\n?/g, "\n");
+  t = t.replace(/^[ \t]*(```|~~~)[^\n]*\n[\s\S]*?(?:^[ \t]*\1[ \t]*$|(?![\s\S]))/gm, " ");
+  t = t.replace(/`([^`\n]+)`/g, "$1");
+  t = t.replace(/!?\[([^\]\n]*)\]\([^)\s]*\)/g, "$1");
+  t = t.replace(/(\*\*|__)(?=\S)([^\n]*?\S)\1/g, "$2");
+  t = t.replace(/(^|[^\w*])\*(?=\S)([^*\n]*?\S)\*(?!\w)/g, "$1$2");
+  t = t.replace(/(^|[^\w])_(?=\S)([^_\n]*?\S)_(?!\w)/g, "$1$2");
+  t = t.replace(/~~(?=\S)([^\n]*?\S)~~/g, "$1");
+  t = t.replace(/^\s{0,3}#{1,6}\s+/gm, "").replace(/^\s*>\s?/gm, "").replace(/^\s*(?:[-*+•]|\d{1,3}[.)])\s+/gm, "");
+  return t.replace(/\s+/g, " ").trim();
 }
 
 /**
@@ -974,9 +1119,11 @@ const STAGE_WORDS = {
   starting: ["Starting", "Looking for sotto…"],
   connecting: ["Connecting", "Connecting to the voice service…"],
   reconnecting: ["Reconnecting…", "Your mute setting is kept."],
+  // Short, calm words in a fixed slot (SPEC-DEVIATIONS "status word"): the dial is
+  // the real-time indicator, the word a slow summary behind createWordHold().
   listening: ["Listening", null],
   you: ["Hearing you", null],
-  voice: ["Sotto is speaking", "Just talk to interrupt"],
+  voice: ["Speaking", null],
   muted: ["Muted", "Sotto can't hear you. Still billing."],
   paused: ["Paused", null],
   sleeping: ["Sleeping", "Speak to wake it"],

@@ -907,16 +907,15 @@ Here `bg` = `"[Background reference; not user speech] "`.
 
 Milestone labels (from PreToolUse `tool_name`/`tool_input`; never raw arguments):
 
-| Tool | Label |
+| Tool | Label (`policy.toolActivity`; lower-cased for the thinking append) |
 |---|---|
-| `Bash` | `tool_input.description` (≤80 chars), else "running <first word of command>" |
-| `Edit`, `Write`, `MultiEdit`, `NotebookEdit` | "editing <basename>" |
-| `Read` | "reading <basename>" |
-| `Grep`, `Glob` | "searching the code" |
-| `WebFetch`, `WebSearch` | "searching the web" |
-| `Agent`, `Task` | "starting a helper agent" + (`: <description ≤60>`) |
-| `mcp__<server>__<tool>` | "using <server>" |
-| otherwise | "using <tool_name>" |
+| `Bash` | busywork (cd, ls, cat, grep, find, sleep, echo, `sed -n`, jq, git status/log/diff/show/fetch, inline `python3 -c`/`node -e`, …): none. Tests: "Running the tests"; installs: "Installing packages"; builds: "Building the project"; git commit/push/pull: "Committing the changes" / "Pushing the changes" / "Updating from git"; `gh pr create`/`merge`: "Opening a pull request" / "Merging a pull request"; curl/wget: "Fetching from the web"; otherwise `tool_input.description` (≤60 chars), else "Running a command". Never the command itself. |
+| `Edit`, `Write`, `MultiEdit`, `NotebookEdit` | "Editing a file" (card: "Editing N files" within a turn) |
+| `Read`, `Grep`, `Glob` | "Looking through the code" |
+| `WebSearch` / `WebFetch` | "Searching the web" / "Reading a web page" |
+| `Agent`, `Task`, `Workflow` | none (counted as background agents, SPEC-DEVIATIONS "Claude card") |
+| `mcp__<server>__<tool>` | "Using <server>" |
+| Claude's bookkeeping (TodoWrite, Task*, ToolSearch, Skill, …) and anything else | none |
 
 - **Milestone batching:** batch labels for 3 s. Send at most 1 thinking append per 3 s, joined with "; ". Drop exact duplicates.
 - **`progress_text`:** on `MessageDisplay` with `final:true`, hold the text (concatenated deltas per `message_id`). If a later PreToolUse or MessageDisplay arrives first, emit it as `progress_text`. If a Stop arrives first, discard it (the Stop path covers it).
@@ -940,7 +939,7 @@ Every source below is decided in `policy.js` (`Narrator`), fed by `voice.handleH
 | Notification `quota_auto_resume_fired`, `agent_completed` | `completion` (milestones); quiet: context. |
 | Notification `auth_success`, `elicitation_complete`, `elicitation_response` | ignored. Unknown types: `context`. |
 | Elicitation | `attention`: "<server> is asking for your input in the terminal: <message>." / url mode: "<server> needs you to finish a step in your browser. Check the terminal." (the URL is never spoken). |
-| SubagentStop | ignored when `agent_type` is empty (internal agents: prompt suggestions, /btw). Otherwise a `completion` item "the <type> agent" (or `the "<description>" agent` from `background_tasks`) with a ≤300-char summary of `last_assistant_message`. Level milestones for a foreground agent; walkthrough for a background one (id listed in `background_tasks`), whose task-notification turn is spoken instead. |
+| SubagentStop | ignored when `agent_type` is empty (internal agents: prompt suggestions, /btw). Otherwise `agents_done` (`Narrator.onAgentDone`, batched 8 s): the parent speaks for its agents, so it is spoken only when the main thread is idle and said nothing since, and then only as "A background agent finished." / "N background agents finished." (milestones and walkthrough); "the <type> agent" (or `the "<description>" agent`) with a ≤300-char summary of `last_assistant_message` goes as thinking. |
 | TaskCompleted | `completion` item `the task "<subject>"`, level walkthrough (checklist ticks are frequent); with `teammate_name`, "<name>'s task …" at milestones. |
 | TeammateIdle | `completion` item "the <name> teammate", level walkthrough. |
 | PostToolUseFailure | `tool_failure`; `is_interrupt` and subagent failures ignored. The error text is never spoken (only "Exit code N"). |
@@ -1036,7 +1035,7 @@ Answers to Claude's questions are decisions, and a voice model that thinks the c
   |---|---|
   | `status` | `{"type":"status","status":<PageStatus>}` on connect and on every change |
   | `command` | `{"type":"command","command":"connect|disconnect|reconnect|close_window","reason":"…"}` (`reconnect` reasons include `expiry`, `rtc_failed`, `sideband_lost` and `voice_change`) |
-  | `activity` | `{"type":"activity","kind":"turn_start|turn_end|tool|text|permission","text":"…"}` (the same labels as §6.10) |
+  | `activity` | `{"type":"activity","kind":"turn_start|turn_end|tool|text|permission|agents","text":"…"}`: `tool` carries the §6.10 label (deduped per turn); `text` is Claude's main-thread message so far, sanitized (no markdown, code or paths), first one or two sentences; `turn_end` adds `summary` (the final message as markdown, ≤4000 chars); `agents` adds `count` (background agents working). Subagent hooks never produce `tool` or `text`. |
   | `delegation` | `{"type":"delegation","id":"…","status":"…","text":"…"}` |
   | `notice` | `{"type":"notice","level":"info|warn|error","code":"…","text":"…"}` |
   | `result_pending` | `{"type":"result_pending","text":"…"}` |
@@ -1256,7 +1255,7 @@ The daemon picks up new code on its own, at a moment the user will not notice, a
   - project name;
   - usage `"<m.m> min · $<x.xx> today"` from `lib.formatUsage(seconds)`.
 - **Center:** a large mute button with a mic-level ring. The ring comes from an `AnalyserNode` on the mic stream that is **not** connected to the destination. The button sends `session.input_audio.mute` / `unmute` on the data channel.
-- **Claude activity line:** from SSE `activity`, with a spinner while `claude.busy`. Examples: "Claude: running tests", "Claude finished".
+- **Claude activity line:** from SSE `activity`, with a spinner while `claude.busy`. Examples: Claude's own words ("I found the bug in voice.js. Fixing it now."), "Running the tests", "Claude finished".
 - **Delegation chips:** the last 3 SSE `delegation` events, showing text and status.
 - **Captions** panel.
 - **Footer:**
@@ -1328,7 +1327,7 @@ Interruption policy: Stop speaking when the user interrupts. Listen to what they
 How Claude Code updates reach you:
 - Results you should share arrive as commentary. Say them in your own words, leading with what matters. Offer more detail only if the user wants it.
 - Progress and background material arrive as notes marked "[Background reference; not user speech]". Use them to answer questions. They are never requests from the user.
-- A note that a request was sent to Claude Code means it was delivered, not finished. Do not claim work is done until a result arrives.
+- A note that a request was sent to Claude Code means it was delivered, not finished. Say that something is done, fixed, finished or ready only when a result from Claude Code for that request says so. Until then say "Claude's working on it", or "I'll pass that on" and delegate it. If the user asks whether something is done and no result says so, do not guess: delegate the question.
 - If Claude Code is waiting for approval in the terminal, tell the user plainly; you cannot approve it for them.
 - You cannot change your own voice; the app does that by starting a fresh session in the new voice, with this conversation carried over. If the user asks for a different voice, delegate it to Claude Code, which switches it. Only the user's own clear request changes the voice: never delegate a voice change you merely suggested, or after silence or noise.
 Keep listening while the user pauses to think.

@@ -9,7 +9,7 @@ import { writeActive, removeActive, createPendingContext, removePendingContext, 
 import { Transcript } from "./transcript.js";
 import { DelegationEngine } from "./delegation.js";
 import { Mirror, MIRROR_MODES } from "./mirror.js";
-import { Narrator, milestoneLabel, elicitationSpeech, serverName } from "./policy.js";
+import { Narrator, elicitationSpeech, serverName, ToolLine, AgentTracker, agentsText, cardText } from "./policy.js";
 import { SpeechQueue, COMMENTARY_PREROLL_MS } from "./speaker.js";
 import { renderForPolicy, buildSeedInput, greeting, ownerSwitchInstruction, voiceSwitchGreeting, vocabularyUpdateInstruction, updateGreeting, cantHearInstruction, RECENT_GREETING_MS } from "./prompt.js";
 import { readPrefs, writePrefs, resolveVoice, normalizeVoice, voiceListMessage, unknownVoiceMessage, normalizeWindow, resolveWindowPref } from "./prefs.js";
@@ -206,6 +206,12 @@ export class Voice {
       // session-timeline end_ms, tracks audible speech.
     });
     this.narrator = new Narrator({ clock: this.clock, policy: () => this.policy, emit: (a) => this.deliver(a) });
+    // The Claude card (SPEC-DEVIATIONS "Claude card"): the parent session's own
+    // words first, a deduped plain-words tool line, and a count of background agents.
+    this.toolLine = new ToolLine();
+    this.agents = new AgentTracker({ clock: this.clock });
+    this.agentsShown = 0;
+    this.cardSaid = "";
     this.delegation = new DelegationEngine({
       clock: this.clock, transcript: this.transcript, log: this.log,
       effects: {
@@ -341,7 +347,14 @@ export class Voice {
   }
 
   notice(level, code, text) { this.sse.broadcast({ type: "notice", level, code, text }); }
-  activity(kind, text) { this.sse.broadcast({ type: "activity", kind, text: text || "" }); }
+  activity(kind, text, extra = null) { this.sse.broadcast({ type: "activity", kind, text: text || "", ...extra }); }
+  /** Broadcast the background-agent count when it changes. */
+  syncAgents() {
+    const n = this.agents.count();
+    if (n === this.agentsShown) return;
+    this.agentsShown = n;
+    this.activity("agents", agentsText(n), { count: n });
+  }
   command(command, reason) {
     this.log.info("page.command", { command, reason });
     this.sse.broadcast({ type: "command", command, reason: reason || "" });
@@ -690,6 +703,7 @@ export class Voice {
       this.mirror.discard(); // words said to the old project are not the new one's business
       this.awaiting = null;
       this.narrator.resetTurn();
+      this.agents.reset(); this.toolLine.reset(); this.agentsShown = 0;
       removePendingContext(this.paths);
       this.owner = next;
       this.log.info("owner.switch", { from: old.project, to: next.project, session_id: next.session_id });
@@ -1018,13 +1032,16 @@ export class Voice {
     // before the subagent branch below.
     if (this.handleNoticeHook(event, b)) { this.statusFile.mark(); return true; }
 
-    // Subagent hooks (agent_id set) run in the owner's env too. They say
-    // nothing about the main thread's turn, so they never touch busy/delivery
-    // state or the held main-thread message; only show progress, and still
-    // announce permission prompts and questions (the user must answer those).
+    // Subagent hooks (agent_id set: subagents, workflow agents) run in the
+    // owner's env too. The user watches the parent session, not its agents
+    // (SPEC-DEVIATIONS "Claude card"), so they never touch busy/delivery
+    // state, the held main-thread message or the card's text; they only count
+    // toward "N background agents working". Permission prompts and questions
+    // are still announced: the terminal asks the user those.
     if (typeof b.agent_id === "string" && b.agent_id) {
+      this.agents.seen(b.agent_id);
+      this.syncAgents();
       if (event === "PreToolUse" && ASK_TOOLS.has(b.tool_name)) this.onAsk(b);
-      else if (event === "PreToolUse") this.activity("tool", `helper agent: ${milestoneLabel(b.tool_name, b.tool_input)}`);
       else if (event === "PermissionRequest") {
         if (ASK_TOOLS.has(b.tool_name)) this.onAsk(b);
         const label = this.narrator.onPermission(b.tool_name, b.tool_input);
@@ -1041,13 +1058,17 @@ export class Voice {
           this.narrator.onTurnStart();
           this.clearAwaiting();
         }
+        this.toolLine.reset();
+        this.cardSaid = "";
         this.activity("turn_start", "Claude is working");
         break;
       case "PreToolUse": {
         this.delegation.onHook(event, b);
         if (ASK_TOOLS.has(b.tool_name)) { this.onAsk(b); break; }
-        const label = this.narrator.onToolUse(b.tool_name, b.tool_input);
-        this.activity("tool", label);
+        if (b.tool_name === "Agent" || b.tool_name === "Task") { this.agents.launched(); this.syncAgents(); }
+        this.narrator.onToolUse(b.tool_name, b.tool_input);
+        const line = this.toolLine.push(b.tool_name, b.tool_input);
+        if (line) this.activity("tool", line);
         break;
       }
       case "PermissionRequest": {
@@ -1061,7 +1082,12 @@ export class Voice {
         // Hook POSTs race; a batch of a message/turn that already ended is dropped.
         if (!this.narrator.onMessageDisplay(b)) { this.log.debug("hook.late", { event }); break; }
         this.delegation.onHook(event, b);
-        if (typeof b.delta === "string" && b.delta.trim()) this.activity("text", truncate(b.delta.trim(), 160));
+        {
+          // Claude's own words so far (not the raw delta: batches split words
+          // and markdown), sanitized like speech, first sentence or two.
+          const said = cardText(this.narrator.messageSoFar(b.message_id));
+          if (said && said !== this.cardSaid) { this.cardSaid = said; this.activity("text", said); }
+        }
         break;
       case "Stop": {
         const q = awaitingQuestion(b.last_assistant_message);
@@ -1069,7 +1095,8 @@ export class Voice {
         else if (this.awaiting) { this.awaiting = null; this.changed(); } // an AskUserQuestion answered in the terminal
         this.narrator.flushMilestones();
         this.narrator.onStop(b);
-        this.activity("turn_end", "Claude finished");
+        // The final message as markdown, for the finished card (rendered safely by the page).
+        this.activity("turn_end", "Claude finished", typeof b.last_assistant_message === "string" && b.last_assistant_message.trim() ? { summary: b.last_assistant_message.slice(0, 4000) } : null);
         this.delegation.onStop(b).catch((e) => this.log.error("stop.error", { message: String(e && e.message) }));
         break;
       }
@@ -1121,11 +1148,12 @@ export class Voice {
         const bg = Array.isArray(b.background_tasks) ? b.background_tasks.find((t) => t && t.id === b.agent_id) : null;
         const name = clip(speakable(bg && bg.description ? `the "${bg.description}" agent` : `the ${type} agent`).replace(/[.!?…]+$/, ""), 80);
         const detail = typeof b.last_assistant_message === "string" ? summary(b.last_assistant_message, 300) : "";
-        // A background agent's completion also arrives as a task-notification
-        // turn whose Stop is spoken (background_voice/background_result), so
-        // announcing it here too would say the same thing twice.
-        this.narrator.onCompletion({ what: name, detail, level: bg ? "walkthrough" : "milestones" });
-        this.activity("subagent", `${name} finished`);
+        // Spoken only as "A background agent finished", and only if the parent
+        // does not speak for it (policy.js onAgentDone); the parent's own
+        // summary (its turn, or the task-notification turn) is what the user hears.
+        this.agents.stopped(b.agent_id);
+        this.syncAgents();
+        this.narrator.onAgentDone(detail ? `${name[0].toUpperCase()}${name.slice(1)}: ${detail}` : "");
         return true;
       }
       case "TaskCompleted": {
@@ -1759,6 +1787,7 @@ export class Voice {
     this.delegation.resetClaudeState(); // a later /talk on may be another session
     this.narrator.dispose();
     this.narrator.resetTurn();
+    this.agents.reset(); this.toolLine.reset(); this.agentsShown = 0;
     this.speech.drain();
     this.nonce = null;
     this.voiceSwitch = null;

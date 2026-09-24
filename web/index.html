@@ -37,14 +37,15 @@
         <div class="status-text">
           <span class="status-word" id="status-label">Starting</span>
           <!-- Priority when the header is short of room (app.js fitHeader): the word and
-               the money always stay; the project goes first, then the detail, then "today". -->
+               the money always stay; the project goes first, then the detail, then "Today",
+               then "Session". -->
           <span class="status-sub">
             <span class="status-detail" id="status-detail" hidden></span>
             <span class="project" id="project" title=""></span>
           </span>
         </div>
       </div>
-      <span class="usage" id="usage" title="Voice time billed today at $0.05 per minute" hidden></span>
+      <span class="usage" id="usage" title="This voice session, the voice time billed today, and its cost at $0.05 per minute" hidden></span>
       <button type="button" class="icon-btn gear" id="settings-btn" aria-label="Settings" aria-haspopup="dialog" aria-controls="settings">
         <svg aria-hidden="true"><use href="#i-gear"/></svg>
       </button>
@@ -73,7 +74,7 @@
           <p class="word" id="stage-word" data-tone="" tabindex="-1">Starting</p>
           <p class="sub" id="stage-sub" hidden></p>
           <ol class="steps" id="connect-steps" aria-label="Connecting" hidden></ol>
-          <p class="hint" id="key-hint" hidden><span class="keys"><kbd>M</kbd><span id="key-hint-space"> or <kbd>Space</kbd></span> <span id="key-hint-verb">to mute</span></span><span class="clock" id="clock" title="Time in this voice session"></span></p>
+          <p class="hint" id="key-hint" hidden><span class="keys"><kbd>M</kbd><span id="key-hint-space"> or <kbd>Space</kbd></span> <span id="key-hint-verb">to mute</span></span></p>
         </div>
       </section>
 
@@ -114,12 +115,14 @@
         <div class="claude-head">
           <span class="claude-icon" aria-hidden="true"></span>
           <span class="claude-title" id="claude-title">Claude is idle</span>
+          <!-- Background agents are counted, never narrated: the user watches the parent session. -->
+          <span class="claude-agents" id="claude-agents" hidden></span>
           <span class="claude-time" id="claude-time"></span>
         </div>
         <p class="claude-step" id="claude-step" hidden></p>
         <pre class="claude-command" id="claude-command" hidden></pre>
         <p class="claude-note" id="claude-note" hidden><span class="note-full">Waiting for your approval in the terminal. Approve or deny it there; Sotto can't approve for you.</span><span class="note-short">Approve or deny it in the terminal.</span></p>
-        <p class="claude-summary" id="summary" hidden></p>
+        <div class="claude-summary" id="summary" hidden></div>
         <button type="button" class="more" id="more-btn" aria-expanded="false" aria-controls="summary" hidden>More</button>
         <p class="claude-request" id="claude-request" hidden></p>
       </section>

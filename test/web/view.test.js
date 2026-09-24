@@ -108,11 +108,12 @@ test("connectSteps marks done / active / pending", () => {
 });
 
 test("claudeView: idle, working, approval (full command), finished", () => {
-  assert.deepEqual(lib.claudeView({ busy: false }), { kind: "idle", title: "Claude is idle", request: null });
-  const w = lib.claudeView({ busy: true, kind: "tool", text: "Running tests npm test" });
+  assert.deepEqual(lib.claudeView({ busy: false }), { kind: "idle", title: "Claude is idle", request: null, agents: null });
+  const w = lib.claudeView({ busy: true, kind: "tool", tool: "Running the tests" });
   assert.equal(w.kind, "working");
   assert.equal(w.title, "Claude is working");
-  assert.equal(w.step, "Running tests npm test");
+  assert.equal(w.step, "Running the tests");
+  assert.equal(w.secondary, true, "a tool line is the quiet secondary line");
   assert.equal(lib.claudeView({ busy: true, kind: "turn_start" }).step, "Thinking");
   const cmd = "Bash(rm -rf test/fixtures/tmp && npm test -- --update-snapshots --reporter=verbose --coverage)";
   const a = lib.claudeView({ busy: true, kind: "permission", text: cmd });
@@ -126,14 +127,29 @@ test("claudeView: idle, working, approval (full command), finished", () => {
   assert.deepEqual(r.request, { text: "check the tests", label: "Couldn't reach Claude", tone: "error" });
 });
 
+test("claudeView: Claude's own words first; a tool line only when it has been quiet; agents as a count", () => {
+  const base = { busy: true, kind: "tool", tool: "Editing 3 files", says: "I found the **bug** in `voice.js`. Fixing it now.", saysAt: 1000 };
+  const fresh = lib.claudeView({ ...base, now: 5000 });
+  assert.equal(fresh.step, "I found the bug in voice.js. Fixing it now.", "markdown stripped in the one-line view");
+  assert.equal(fresh.secondary, false);
+  const stale = lib.claudeView({ ...base, now: 1000 + lib.CLAUDE_SAYS_FRESH_MS });
+  assert.equal(stale.step, "Editing 3 files");
+  assert.equal(stale.secondary, true);
+  assert.equal(lib.claudeView({ ...base, tool: "", now: 99_000 }).step, "I found the bug in voice.js. Fixing it now.", "no tool line: keep the words");
+  assert.equal(lib.claudeView({ ...base, agents: 3, now: 5000 }).agents, "3 background agents working");
+  assert.equal(lib.claudeView({ ...base, agents: 1, now: 5000 }).agents, "1 background agent working");
+  assert.equal(lib.claudeView({ busy: false, agents: 2 }).agents, "2 background agents working");
+  for (const v of [fresh, stale]) assert.ok(!/helper agent|running cd/.test(v.step));
+});
+
 test("pageView: live floors, muted header, approval header", () => {
   assert.equal(live().floor, "listening");
   assert.equal(live().word, "Listening");
   assert.equal(live().view, "live");
   assert.equal(live({ floor: "you" }).word, "Hearing you");
   const v = live({ floor: "voice" });
-  assert.equal(v.word, "Sotto is speaking");
-  assert.equal(v.sub, "Just talk to interrupt");
+  assert.equal(v.word, "Speaking");
+  assert.equal(v.sub, null, "no extra hint line while the voice speaks");
   const m = live({ muted: true, floor: "you" });
   assert.equal(m.floor, "muted", "muted wins over the floor");
   assert.deepEqual(m.header, { key: "muted", label: "Muted", detail: "Still billing" });

@@ -158,6 +158,13 @@ export function route(source, policy, payload = {}, ctx = {}) {
       if (p === "walkthrough" && ctx.canSpeakFailure) return [act("commentary", null, said), act("thinking", null, note)];
       return [act("thinking", null, note)];
     }
+    case "agents_done": {
+      const n = payload.count || 1;
+      const said = n === 1 ? "A background agent finished." : `${n} background agents finished.`;
+      const note = BG + said + (payload.details?.length ? ` ${payload.details.map((d) => clip(d, 300)).join(" ")}` : "");
+      if (payload.speak && p !== "quiet") return [act("commentary", null, said), act("thinking", null, note)];
+      return [act("thinking", null, note)];
+    }
     case "tool_milestone": {
       const labels = (payload.labels || []).filter(Boolean);
       return labels.length ? [act("thinking", null, `${BG}Claude progress: ${labels.join("; ")}`)] : [];
@@ -174,28 +181,131 @@ export function route(source, policy, payload = {}, ctx = {}) {
 // ---- milestone labels --------------------------------------------------------
 const base = (p) => String(p || "").replace(/\/+$/, "").split("/").pop() || "a file";
 
-/** Progress label (gerund) for a PreToolUse event. Never includes raw arguments. */
-export function milestoneLabel(toolName, input = {}) {
+// What the user cares about while Claude works is what Claude says, not its tool
+// calls (voice window redesign, SPEC-DEVIATIONS "Claude card"). Tool calls get a
+// plain-words label, and the busywork a terminal user never reads (cd, ls, cat,
+// grep, git status, sleep …) gets none at all.
+const TRIVIAL_CMDS = new Set(("cd ls ll la cat head tail less more grep egrep fgrep rg ag ack find fd sleep echo printf pwd which whereis type " +
+  "command wc sort uniq cut tr true false test [ file stat tree diff cmp date env printenv export set unset source . jq yq awk sed " +
+  "mkdir touch basename dirname realpath readlink du df ps pgrep lsof whoami id uname sw_vers xxd od hexdump md5 shasum sha256sum " +
+  "cp mv ln chmod open wait kill pkill tee xargs time nohup clear history alias read").split(" "));
+const TRIVIAL_GIT = new Set("status log diff show branch rev-parse remote config ls-files blame stash describe shortlog reflog tag fetch worktree".split(" "));
+// Tools that are Claude's own bookkeeping (its plan, its task list, tool loading)
+// or that are shown another way (agents: counted; questions: spoken).
+const SILENT_TOOLS = new Set(["Agent", "Task", "Workflow", "TodoWrite", "TaskCreate", "TaskUpdate", "TaskList", "TaskGet", "TaskOutput", "TaskStop",
+  "ToolSearch", "Skill", "EnterPlanMode", "ExitPlanMode", "AskUserQuestion", "BashOutput", "KillShell", "KillBash", "Monitor", "SendMessage",
+  "ListMcpResourcesTool", "ReadMcpResourceTool", "EnterWorktree", "ExitWorktree", "SubagentHandback", "LSP"]);
+
+/** The command words of a shell line, without leading `cd … &&`, env assignments and sudo. */
+function commandWords(command) {
+  const parts = String(command || "").split(/&&|\|\||;|\n/).map((x) => x.trim()).filter(Boolean);
+  for (const part of parts) {
+    const words = part.split(/\s+/).filter((w) => !/^[A-Za-z_][A-Za-z0-9_]*=/.test(w) && w !== "sudo" && w !== "command" && w !== "exec");
+    if (!words.length) continue;
+    const w0 = base(words[0]).replace(/^["'(]+/, "");
+    if (w0 === "cd" || w0 === "pushd" || w0 === "popd" || w0 === "export" || w0 === "set" || w0 === "source") continue;
+    return [w0, ...words.slice(1)];
+  }
+  return [];
+}
+
+/** Plain-words label for a shell command, or null for busywork. */
+function bashActivity(command, description) {
+  const words = commandWords(command);
+  const line = words.join(" ");
+  const [w0 = "", w1 = ""] = words;
+  if (!w0) return null;
+  if (/\b(?:(?:npm|pnpm|yarn|bun)\s+(?:run\s+)?(?:test|e2e)[\w:-]*|node\s+--test|pytest|jest|vitest|mocha|rspec|go\s+test|cargo\s+test|swift\s+test|make\s+(?:test|check)|xcodebuild\s+test)\b/.test(line)) return "Running the tests";
+  if (/^(?:npm|pnpm|yarn|bun)\s+(?:i|ci|install|add)\b|^(?:pip3?|uv|brew|gem|cargo)\s+(?:install|add)\b|^uv\s+pip\s+install\b/.test(line)) return "Installing packages";
+  if (/^(?:npm|pnpm|yarn|bun)\s+run\s+(?:build|compile)|^(?:make|tsc|swiftc|xcodebuild|webpack|vite\s+build)\b|^(?:cargo|go|swift)\s+build\b|build[\w-]*\.sh\b/.test(line)) return "Building the project";
+  if (/^(?:npm|pnpm|yarn|bun)\s+run\s+lint|^(?:eslint|prettier|ruff|black|swiftlint|shellcheck)\b/.test(line)) return "Checking the code";
+  if (/claude\s+plugin\s+validate/.test(line)) return "Validating the plugin";
+  if (w0 === "git") {
+    if (w1 === "commit") return "Committing the changes";
+    if (w1 === "push") return "Pushing the changes";
+    if (w1 === "pull" || w1 === "rebase" || w1 === "merge" || w1 === "cherry-pick") return "Updating from git";
+    if (w1 === "clone") return "Downloading a repository";
+    if (w1 === "add" || w1 === "rm" || w1 === "mv" || w1 === "checkout" || w1 === "switch" || w1 === "restore" || w1 === "reset" || TRIVIAL_GIT.has(w1) || !w1) return null;
+    return null;
+  }
+  if (w0 === "gh") {
+    if (w1 === "pr" && words[2] === "create") return "Opening a pull request";
+    if (w1 === "pr" && words[2] === "merge") return "Merging a pull request";
+    return "Checking GitHub";
+  }
+  if (w0 === "curl" || w0 === "wget") return "Fetching from the web";
+  if (w0 === "sed" && words.includes("-i")) return "Editing a file";
+  if (TRIVIAL_CMDS.has(w0)) return null;
+  // Inline one-off scripts (python3 -c, node -e) are busywork too.
+  if (/^(?:python3?|node|bun|ruby|perl)$/.test(w0) && /^-(?:c|e|p)$/.test(w1)) return null;
+  if (typeof description === "string" && description.trim()) {
+    const d = clip(speakable(description.trim()).replace(/[.;:,]+$/, ""), 60);
+    if (d && !/^(?:cd|ls|cat|grep|echo)\b/i.test(d)) return cap(d);
+  }
+  return "Running a command";
+}
+
+/**
+ * Plain-words activity for a main-thread PreToolUse ("Running the tests",
+ * "Editing a file", "Using Slack"), or null when the call is busywork the user
+ * does not care about. Never includes raw arguments or paths.
+ */
+export function toolActivity(toolName, input = {}) {
   const i = input && typeof input === "object" ? input : {};
+  if (SILENT_TOOLS.has(toolName)) return null;
   switch (toolName) {
-    case "Bash": {
-      if (typeof i.description === "string" && i.description.trim()) return clip(i.description.trim(), 80);
-      const first = String(i.command || "").trim().split(/\s+/)[0] || "a command";
-      return `running ${base(first)}`;
-    }
-    case "Edit": case "Write": case "MultiEdit": case "NotebookEdit":
-      return `editing ${base(i.file_path || i.notebook_path)}`;
-    case "Read": return `reading ${base(i.file_path)}`;
-    case "Grep": case "Glob": return "searching the code";
-    case "WebFetch": case "WebSearch": return "searching the web";
-    case "Agent": case "Task":
-      return "starting a helper agent" + (typeof i.description === "string" && i.description.trim() ? `: ${clip(i.description.trim(), 60)}` : "");
+    case "Bash": return bashActivity(i.command, i.description);
+    case "Edit": case "Write": case "MultiEdit": case "NotebookEdit": return "Editing a file";
+    case "Read": case "Grep": case "Glob": return "Looking through the code";
+    case "WebSearch": return "Searching the web";
+    case "WebFetch": return "Reading a web page";
     default: {
       const m = /^mcp__(.+?)__/.exec(toolName || "");
-      if (m) return `using ${m[1].replace(/^plugin_/, "").replace(/_/g, " ")}`;
-      return `using ${toolName || "a tool"}`;
+      if (m) return `Using ${serverName(m[1])}`;
+      return null;
     }
   }
+}
+
+/** Progress label (lower-case, for "Claude progress: …") for a PreToolUse event, or null. */
+export function milestoneLabel(toolName, input = {}) {
+  const a = toolActivity(toolName, input);
+  return a ? a[0].toLowerCase() + a.slice(1) : null;
+}
+
+/**
+ * The Claude card's tool line (SPEC-DEVIATIONS "Claude card"): deduped and
+ * collapsed within a turn. push() returns the new line to show, or null when
+ * it should not change ("Editing a file" twice in a row; busywork).
+ * Edits to different files collapse to "Editing 3 files".
+ */
+export class ToolLine {
+  constructor() { this.reset(); }
+  reset() { this.line = null; this.files = new Set(); }
+  push(toolName, input = {}) {
+    let label = toolActivity(toolName, input);
+    if (!label) return null;
+    if (label === "Editing a file") {
+      const f = input && typeof input === "object" ? input.file_path || input.notebook_path || "" : "";
+      if (f) this.files.add(f);
+      if (this.files.size > 1) label = `Editing ${this.files.size} files`;
+    }
+    if (label === this.line) return null;
+    this.line = label;
+    return label;
+  }
+}
+
+/** Background agents at work (subagents, workflow agents), for the card's quiet chip. */
+export function agentsText(n) {
+  if (!(n > 0)) return "";
+  return n === 1 ? "1 background agent working" : `${n} background agents working`;
+}
+
+/** Card text for Claude's own words: speakable (no markdown, code or paths), 1-2 sentences. */
+export function cardText(md, max = 220) {
+  const t = speakable(md).replace(/\s*\((?:code|table) omitted\)\.?/g, "").trim();
+  return clip(firstSentences(t, 2), max);
 }
 
 /** Permission label (infinitive) for "…waiting for your approval … to <label>". */
@@ -320,6 +430,9 @@ export const ATTENTION_DEDUPE_MS = 120000;
 /** The same question (tool_use_id or text) is announced once in this window. */
 export const QUESTION_DEDUPE_MS = 10 * 60_000;
 const ASKS = new Set(["AskUserQuestion", "ExitPlanMode"]);
+const FAILURE_LABEL = { Read: "reading a file", Grep: "searching the code", Glob: "searching the code" };
+/** A background agent's completion waits this long for the parent to speak for it. */
+export const AGENT_DONE_MS = 8000;
 const RESULT_SOURCES = new Set(["voice_result", "typed_result", "other_result", "background_result", "background_voice", "mirror_result"]);
 
 export class Narrator {
@@ -348,6 +461,9 @@ export class Narrator {
     this.stoppedPrompts = new BoundedSet(50); // prompt_ids whose Stop has been seen
     this.held = null; // final intermediate message waiting to see if a Stop follows
     this.completions = []; // pending completion items {what, detail, level}
+    this.agentDone = []; // pending background agent completions {detail, at}
+    this.agentTimer = null;
+    this.parentSaidAt = -Infinity; // last main-thread message or result (it speaks for its agents)
     this.completionTimer = null;
     this.turnStartedAt = null; // main-thread turn start (UserPromptSubmit), for long-running progress
     this.lastLongProgressAt = -Infinity;
@@ -386,6 +502,7 @@ export class Narrator {
     if (source === "tool_failure" && spoke) this.lastFailureSpokenAt = now;
     // A mirror turn (§6.18) nobody asked for out loud must not be followed by
     // "Claude Code is waiting for you" once Claude goes idle.
+    if (RESULT_SOURCES.has(source) || source === "progress_text") this.parentSaidAt = now;
     if (RESULT_SOURCES.has(source)) { this.turnStartedAt = null; this.resultSpoken = spoke || source === "mirror_result"; this.idleSaid = false; }
     this.emit(actions);
     return actions;
@@ -396,6 +513,7 @@ export class Narrator {
     this.releaseHeld();
     if (ASKS.has(toolName)) return null; // spoken by onQuestion, not a milestone
     const label = milestoneLabel(toolName, toolInput);
+    if (!label) return null; // busywork (cd, ls, git status …) and agent launches: not progress
     if (label === this.lastLabel || this.batch.includes(label)) return label;
     this.batch.push(label);
     if (!this.batchTimer) this.batchTimer = this.clock.setTimeout(() => this.flushMilestones(), MILESTONE_BATCH_MS);
@@ -526,9 +644,36 @@ export class Narrator {
     this.route("completion", { items });
   }
 
+  /**
+   * A background agent (subagent, workflow agent) finished. The user sees what
+   * the parent session says, not its agents, so this is spoken only as "A
+   * background agent finished." (milestones and up), and only when the parent
+   * is not mid-turn and says nothing about it within AGENT_DONE_MS (a
+   * foreground agent's result is summarized by its parent turn; a background
+   * one's by the task-notification turn that follows). Its summary goes to
+   * the voice model as silent context either way.
+   */
+  onAgentDone(detail = "") {
+    this.agentDone.push({ detail: String(detail || ""), at: this.clock.now() });
+    if (!this.agentTimer) this.agentTimer = this.clock.setTimeout(() => this.flushAgents(), AGENT_DONE_MS);
+  }
+
+  flushAgents() {
+    if (this.agentTimer) this.clock.clearTimeout(this.agentTimer);
+    this.agentTimer = null;
+    if (!this.agentDone.length) return;
+    const items = this.agentDone;
+    this.agentDone = [];
+    const covered = this.turnStartedAt !== null || this.held !== null || this.msgs.size > 0 || this.parentSaidAt >= items[0].at;
+    this.route("agents_done", { count: items.length, details: items.map((it) => it.detail).filter(Boolean), speak: !covered });
+  }
+
   /** PostToolUseFailure (main thread): context always, spoken only in walkthrough. */
   onToolFailure(toolName, toolInput, error) {
-    const label = milestoneLabel(toolName, toolInput);
+    // A failed step is worth naming even when its start was busywork: the
+    // command's own description first ("Run tests failed …"), never the command.
+    const desc = toolName === "Bash" && typeof toolInput?.description === "string" ? clip(speakable(toolInput.description.trim()).replace(/[.;:,]+$/, ""), 80) : "";
+    const label = desc || FAILURE_LABEL[toolName] || milestoneLabel(toolName, toolInput) || (toolName === "Bash" ? "a command" : "a step");
     const first = String(error || "").split("\n")[0];
     const m = /^Exit code (\d+)/.exec(first);
     const detail = m ? "" : clip(speakable(first), 160);
@@ -603,6 +748,23 @@ export class Narrator {
     if (this.completionTimer) this.clock.clearTimeout(this.completionTimer);
     this.completionTimer = null;
     this.completions = [];
+    if (this.agentTimer) this.clock.clearTimeout(this.agentTimer);
+    this.agentTimer = null;
+    this.agentDone = [];
+  }
+
+  /**
+   * The text of a main-thread message so far: its batches from index 0 up to
+   * the first gap, or the whole message once assembled (for the Claude card).
+   */
+  messageSoFar(messageId) {
+    const id = messageId || "_";
+    if (this.held && this.held.id === id) return this.held.text;
+    const m = this.msgs.get(id);
+    if (!m) return "";
+    let t = "";
+    for (let i = 0; m.parts.has(i); i++) t += m.parts.get(i);
+    return t;
   }
 }
 
@@ -614,5 +776,37 @@ class BoundedSet extends Set {
     super.add(v);
     while (this.size > this.max) super.delete(this.values().next().value);
     return this;
+  }
+}
+
+/**
+ * Background agents at work, for the card's "3 background agents working"
+ * chip. There is no SubagentStart hook here, so an agent counts from its
+ * launch (a main-thread Agent/Task call) or from its first own hook (agent_id,
+ * which also covers workflow agents) until its SubagentStop. Entries silent
+ * for AGENT_STALE_MS are dropped, so a lost SubagentStop cannot pin the count.
+ */
+export const AGENT_STALE_MS = 15 * 60_000;
+export class AgentTracker {
+  constructor({ clock }) { this.clock = clock; this.reset(); }
+  reset() { this.agents = new Map(); this.pending = []; }
+  /** A main-thread Agent/Task launch whose agent has not reported yet. */
+  launched() { this.pending.push(this.clock.now()); }
+  /** A hook from agent `id`. */
+  seen(id) {
+    if (!id) return;
+    if (!this.agents.has(id) && this.pending.length) this.pending.shift();
+    this.agents.set(id, this.clock.now());
+  }
+  /** SubagentStop for agent `id`. */
+  stopped(id) {
+    if (id && this.agents.has(id)) this.agents.delete(id);
+    else if (this.pending.length) this.pending.shift();
+  }
+  count() {
+    const now = this.clock.now();
+    for (const [id, at] of this.agents) if (now - at > AGENT_STALE_MS) this.agents.delete(id);
+    this.pending = this.pending.filter((at) => now - at <= AGENT_STALE_MS);
+    return this.agents.size + this.pending.length;
   }
 }

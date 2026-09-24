@@ -26,6 +26,20 @@ test("instructions: six verbatim headings in order, closing lines, no placeholde
   }
 });
 
+test("instructions: 'done' only on a Claude result for that request; otherwise working on it / pass it on", () => {
+  // Observed live (2026-09-24): asked about the app's title bar, the voice said
+  // "That one's done" with no result saying so.
+  for (const policy of ["quiet", "milestones", "walkthrough"]) {
+    const t = renderForPolicy("sotto", policy);
+    assert.ok(t.includes("Say that something is done, fixed, finished or ready only when a result from Claude Code for that request says so."));
+    assert.ok(t.includes(`Until then say "Claude's working on it", or "I'll pass that on" and delegate it.`));
+    assert.ok(t.includes("If the user asks whether something is done and no result says so, do not guess: delegate the question."));
+  }
+  // SPEC §8.1 carries the same template text.
+  const spec = fs.readFileSync(new URL("../../docs/SPEC.md", import.meta.url), "utf8");
+  assert.ok(spec.includes("Say that something is done, fixed, finished or ready only when a result from Claude Code for that request says so."));
+});
+
 test("render sanitizes quotes in the project name", () => {
   const t = render({ project: 'we"ird\nname', policyText: "X" });
   assert.ok(t.includes('project "we ird name"'));
