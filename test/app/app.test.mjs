@@ -1,11 +1,14 @@
-// Desktop app (SPEC §6.16): build smoke test + automated launch checks.
+// Native desktop app (SPEC §6.16, docs/NATIVE.md §5): build + bundle checks,
+// the app's pure self-tests, and silent launches against a temp daemon.
 // Run with `npm run test:app` (macOS with Xcode or the Command Line Tools).
-// Not part of `npm test`: the first build takes about 20 s of swiftc.
+// Not part of `npm test`: the first release build takes a minute of swift.
 //
-// The launches use --test / SOTTO_APP_TEST=1: an invisible panel, no
-// global hotkeys, WebKit's mock microphone (so no microphone permission
-// prompt), and a separate defaults suite and web storage. A temp daemon on a
-// spare port serves the real web/ page; the user's daemon is never touched.
+// Every launch is in test mode (--test / SOTTO_APP_TEST=1): fake audio (no
+// CoreAudio unit, no microphone prompt, nothing played on the speakers), no
+// status item, no global hotkeys, a hidden panel and the separate defaults
+// suite com.chadboyda.sotto.test. LaunchServices launches use a copy with the
+// bundle id com.chadboyda.sotto.apptest, so a URL never reaches the user's
+// own Sotto. The user's daemon and installed app are never touched.
 import { test, describe, before, after } from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
@@ -15,15 +18,22 @@ import path from "node:path";
 import { spawn, spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { createDaemon } from "../../daemon/index.js";
-import { APP_BUNDLE, APP_EXE } from "../../daemon/window.js";
+import { APP_BUNDLE, APP_EXE, appPaths, appSourceHash } from "../../daemon/window.js";
+import { startFakeLiveServer } from "../helpers/fake-live-server.js";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 const SKIP = process.platform !== "darwin" ? "macOS only"
   : spawnSync("xcode-select", ["-p"]).status !== 0 ? "no Xcode or Command Line Tools" : false;
-// A stable cache dir makes reruns incremental (build-app.sh hash check).
-const OUT = path.join(os.tmpdir(), "sotto-app-test-build");
+// A stable cache dir makes reruns incremental (build-app.sh hash check + SwiftPM scratch).
+const OUT = path.join(os.tmpdir(), "sotto-native-app-test-build");
 const BUNDLE = path.join(OUT, APP_BUNDLE);
 const EXE = path.join(BUNDLE, "Contents", "MacOS", APP_EXE);
+// Unique per run: LaunchServices hands `open -a <path> sotto://…` to an already
+// running app with the same bundle id, so two concurrent test runs sharing one
+// id steal each other's app (seen in integration). Never the user's own id.
+const LS_ID = `com.chadboyda.sotto.apptest.${process.pid}`;
+const TEST_SUITE = "com.chadboyda.sotto.test";
+const LSREGISTER = "/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister";
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const freePort = () => new Promise((resolve, reject) => {
@@ -41,80 +51,109 @@ const readLog = (file) => {
 async function waitFor(fn, ms, what) {
   const end = Date.now() + ms;
   for (;;) {
-    const v = fn();
+    const v = await fn();
     if (v) return v;
     if (Date.now() > end) throw new Error(`timed out waiting for ${what}`);
     await sleep(100);
   }
 }
 const pidAlive = (pid) => { try { process.kill(pid, 0); return true; } catch { return false; } };
+/** Peak |sample| of a PCM16 WAV's data chunk (0 while the file is still being written). */
+function wavPeak(file) {
+  let b;
+  try { b = fs.readFileSync(file); } catch { return 0; }
+  let off = 12;
+  while (off + 8 <= b.length) {
+    const size = b.readUInt32LE(off + 4);
+    if (b.toString("ascii", off, off + 4) === "data") {
+      let peak = 0;
+      for (let i = off + 8; i + 1 < Math.min(b.length, off + 8 + size); i += 2) peak = Math.max(peak, Math.abs(b.readInt16LE(i)));
+      return peak;
+    }
+    off += 8 + size + (size & 1);
+  }
+  return 0;
+}
+const selftest = (name, arg, exe = EXE) => {
+  const r = spawnSync(exe, ["--selftest", name, ...(arg === undefined ? [] : [JSON.stringify(arg)])], { encoding: "utf8", timeout: 10_000 });
+  assert.equal(r.status, 0, `${name}: ${r.stderr}`);
+  return JSON.parse(r.stdout);
+};
+const plistKey = (bundle, k) => spawnSync("plutil", ["-extract", k, "raw", "-o", "-", path.join(bundle, "Contents/Info.plist")], { encoding: "utf8" }).stdout.trim();
 
-// LaunchServices launches (`open -a <bundle> sotto://…`) use a copy of the
-// test build under its own bundle identifier. The app is single-instance
-// (LSMultipleInstancesProhibited), so LaunchServices hands a URL for
-// com.chadboyda.sotto to an ALREADY RUNNING Sotto, whatever bundle path `-a`
-// names: with the user's app open, the test URL (a real temp daemon and data
-// dir, so it passes the port check) loaded the test page into the user's live
-// panel and the test never saw its own launch (both tests timed out).
-const LS_ID = "com.chadboyda.sotto.apptest";
-const LSREGISTER = "/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister";
-function makeLaunchServicesCopy(dir) {
-  const copy = path.join(dir, "ls", APP_BUNDLE);
-  fs.mkdirSync(path.dirname(copy), { recursive: true });
+/**
+ * Copy the test build under the test bundle id (LaunchServices routes a
+ * sotto:// URL to a RUNNING app with the same id, whatever bundle path `-a`
+ * names: with the production id, the user's live Sotto would get the test's
+ * URL). `dest` is the bundle path; `stampFrom` also copies build.json so
+ * the daemon's chooser sees a ready app in that dir.
+ */
+function testCopy(dest, { stampFrom } = {}) {
+  fs.mkdirSync(path.dirname(dest), { recursive: true });
   const run = (cmd, args) => {
     const r = spawnSync(cmd, args, { encoding: "utf8" });
     assert.equal(r.status, 0, `${cmd} ${args.join(" ")}: ${r.stderr}`);
   };
-  run("ditto", [BUNDLE, copy]);
-  run("plutil", ["-replace", "CFBundleIdentifier", "-string", LS_ID, path.join(copy, "Contents/Info.plist")]);
-  run("codesign", ["--force", "--sign", "-", copy]);
-  return copy;
+  run("ditto", [BUNDLE, dest]);
+  run("plutil", ["-replace", "CFBundleIdentifier", "-string", LS_ID, path.join(dest, "Contents/Info.plist")]);
+  run("codesign", ["--force", "--sign", "-", "--identifier", LS_ID, dest]);
+  if (stampFrom) fs.copyFileSync(path.join(stampFrom, "build.json"), path.join(path.dirname(dest), "build.json"));
+  return dest;
 }
 
-describe("desktop app", { skip: SKIP }, () => {
+describe("native desktop app", { skip: SKIP }, () => {
   let tmp;
   let daemon;
   let port;
+  let D;
+  const registered = [];
 
   before(async () => {
-    tmp = fs.mkdtempSync(path.join(os.tmpdir(), "sotto-app-test-"));
+    tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "sotto-native-app-test-")));
+    D = path.join(tmp, "data");
     port = await freePort();
     daemon = createDaemon({
-      dataDir: path.join(tmp, "data"), port, pluginRoot: ROOT,
-      env: { SOTTO_BROWSER: "none" }, daemonKey: "k".repeat(64),
+      dataDir: D, port, pluginRoot: ROOT,
+      env: { SOTTO_BROWSER: "none", SOTTO_KEYCHAIN_SERVICE: `sotto-apptest-${process.pid}` }, daemonKey: "k".repeat(64),
     });
     await daemon.listen();
   });
 
-  let lsBundle;
-  const lsCopy = () => (lsBundle ??= makeLaunchServicesCopy(tmp));
-
   after(async () => {
-    if (lsBundle) spawnSync(LSREGISTER, ["-u", lsBundle]);
+    for (const b of registered) spawnSync(LSREGISTER, ["-u", b]);
     await daemon?.close();
-    if (tmp) fs.rmSync(tmp, { recursive: true, force: true });
+    if (tmp && !process.env.SOTTO_E2E_KEEP) fs.rmSync(tmp, { recursive: true, force: true });
+    else if (tmp) console.log(`# kept ${tmp}`);
   });
 
-  test("build-app.sh builds a signed bundle with the required Info.plist keys", { timeout: 240_000 }, () => {
+  test("build-app.sh builds a signed bundle from app-native with the required Info.plist keys", { timeout: 600_000 }, () => {
     const t0 = Date.now();
     const r = spawnSync("/bin/bash", [path.join(ROOT, "scripts/build-app.sh"), "--out", OUT], { encoding: "utf8" });
     assert.equal(r.status, 0, `${r.stdout}\n${r.stderr}`);
     assert.ok(fs.existsSync(EXE));
-    const key = (k) => spawnSync("plutil", ["-extract", k, "raw", "-o", "-", path.join(BUNDLE, "Contents/Info.plist")], { encoding: "utf8" }).stdout.trim();
-    assert.equal(key("CFBundleIdentifier"), "com.chadboyda.sotto");
-    assert.equal(key("CFBundleExecutable"), APP_EXE);
-    assert.equal(key("LSUIElement"), "true");
-    assert.match(key("NSMicrophoneUsageDescription"), /microphone/i);
-    assert.equal(key("CFBundleURLTypes.0.CFBundleURLSchemes.0"), "sotto");
-    assert.equal(key("NSAppTransportSecurity.NSAllowsLocalNetworking"), "true");
-    assert.ok(fs.existsSync(path.join(BUNDLE, "Contents/Resources/bridge.js")));
+    assert.equal(plistKey(BUNDLE, "CFBundleIdentifier"), "com.chadboyda.sotto");
+    assert.equal(plistKey(BUNDLE, "CFBundleExecutable"), APP_EXE);
+    assert.equal(plistKey(BUNDLE, "LSUIElement"), "true");
+    assert.equal(plistKey(BUNDLE, "LSMultipleInstancesProhibited"), "true");
+    assert.equal(plistKey(BUNDLE, "LSMinimumSystemVersion"), "14.0");
+    assert.match(plistKey(BUNDLE, "NSMicrophoneUsageDescription"), /microphone/i);
+    assert.equal(plistKey(BUNDLE, "CFBundleURLTypes.0.CFBundleURLSchemes.0"), "sotto");
+    assert.equal(plistKey(BUNDLE, "NSAppTransportSecurity.NSAllowsLocalNetworking"), "true");
+    // No web resources any more: the native app hosts no page.
+    assert.ok(!fs.existsSync(path.join(BUNDLE, "Contents/Resources/bridge.js")));
+    const src = JSON.parse(fs.readFileSync(path.join(BUNDLE, "Contents/Resources/sotto-source.json"), "utf8"));
+    assert.equal(src.hash, appSourceHash(ROOT), "the bundle's hash is the daemon's appSourceHash");
+    assert.equal(src.version, plistKey(BUNDLE, "CFBundleShortVersionString"));
     const cs = spawnSync("codesign", ["--verify", "--strict", BUNDLE], { encoding: "utf8" });
     assert.equal(cs.status, 0, cs.stderr);
     const req = spawnSync("codesign", ["-d", "-r-", BUNDLE], { encoding: "utf8" });
     assert.match(req.stdout + req.stderr, /designated => identifier "com\.chadboyda\.sotto"/);
     const stamp = JSON.parse(fs.readFileSync(path.join(OUT, "build.json"), "utf8"));
     assert.equal(stamp.ok, true);
-    console.log(`# build: ${((Date.now() - t0) / 1000).toFixed(1)} s (${stamp.seconds} s swiftc when it last compiled)`);
+    assert.equal(stamp.hash, src.hash);
+    // SwiftPM's scratch dir stays in the output dir, never in the plugin.
+    assert.ok(fs.existsSync(path.join(OUT, ".swiftpm-build")));
+    console.log(`# build: ${((Date.now() - t0) / 1000).toFixed(1)} s (${stamp.seconds} s swift when it last compiled)`);
 
     // Incremental: an unchanged tree is a no-op (no compile, stamp untouched).
     const t1 = Date.now();
@@ -124,47 +163,23 @@ describe("desktop app", { skip: SKIP }, () => {
     assert.deepEqual(JSON.parse(fs.readFileSync(path.join(OUT, "build.json"), "utf8")), stamp);
     console.log(`# no-op rebuild: ${Date.now() - t1} ms`);
     assert.equal(spawnSync("/bin/bash", [path.join(ROOT, "scripts/build-app.sh"), "--out", OUT, "--check"]).status, 0);
+    const printed = spawnSync("/bin/bash", [path.join(ROOT, "scripts/build-app.sh"), "--print-hash"], { encoding: "utf8" }).stdout.trim();
+    assert.equal(printed, src.hash);
   });
 
-  test("--audio-route prints the default devices as JSON", () => {
-    const r = spawnSync(EXE, ["--audio-route"], { encoding: "utf8", timeout: 10_000 });
-    assert.equal(r.status, 0, r.stderr);
-    const j = JSON.parse(r.stdout);
-    assert.ok("input" in j && "output" in j);
-    if (j.input) assert.equal(typeof j.input.bluetooth, "boolean");
+  test("--version and --selftest bundle describe the build", () => {
+    const v = JSON.parse(spawnSync(EXE, ["--version"], { encoding: "utf8", timeout: 10_000 }).stdout);
+    assert.equal(v.protocol, 1);
+    assert.equal(v.version, plistKey(BUNDLE, "CFBundleShortVersionString"));
+    const b = selftest("bundle");
+    assert.deepEqual({ id: b.id, schemes: b.schemes, ui: b.ui_element, mic: b.mic_usage, protocol: b.protocol },
+      { id: "com.chadboyda.sotto", schemes: ["sotto"], ui: true, mic: true, protocol: 1 });
+    assert.equal(b.source_hash, appSourceHash(ROOT));
+    assert.equal(spawnSync(EXE, ["--selftest", "no-such-check"], { timeout: 10_000 }).status, 2);
   });
 
-  test("--audio-route reports what the chooser needs for the native mic", () => {
-    const j = JSON.parse(spawnSync(EXE, ["--audio-route"], { encoding: "utf8", timeout: 10_000 }).stdout);
-    assert.equal(typeof j.builtin_input, "boolean");
-    assert.equal(j.native_mic, true);
-    if (j.output) assert.equal(typeof j.output.headphones, "boolean");
-  });
-
-  test("--mic-plan-eval: native on headphones (built-in mic instead of a Bluetooth default), WebKit on speakers", () => {
-    const plan = (o) => JSON.parse(spawnSync(EXE, ["--mic-plan-eval", JSON.stringify(o)], { encoding: "utf8", timeout: 10_000 }).stdout);
-    const airpods = { name: "AirPods Max", transport: "bluetooth" };
-    const builtin = { name: "MacBook Pro Microphone", transport: "builtin" };
-    const zoom = { name: "ZoomAudioDevice", transport: "virtual" };
-    const hp = { bluetooth: true, headphones: true };
-    const spk = { bluetooth: false, headphones: false };
-    assert.deepEqual(plan({ output: hp, inputs: [airpods, zoom, builtin], default: 0 }), { mode: "native", device: "MacBook Pro Microphone", reason: "headphones" });
-    assert.deepEqual(plan({ output: spk, inputs: [airpods, builtin], default: 1 }), { mode: "webkit", device: "MacBook Pro Microphone", reason: "speakers" });
-    // Wired headphones (built-in jack) count as headphones too.
-    assert.equal(plan({ output: { bluetooth: false, headphones: true }, inputs: [builtin], default: 0 }).mode, "native");
-    // An explicit choice wins, even the headset mic (the user asked for it).
-    assert.equal(plan({ output: hp, inputs: [airpods, builtin], default: 0, requested: "AirPods Max" }).device, "AirPods Max");
-    // Only a Bluetooth mic: it is used (nothing else can hear the user).
-    assert.equal(plan({ output: hp, inputs: [airpods], default: 0 }).device, "AirPods Max");
-    assert.deepEqual(plan({ output: hp, inputs: [builtin], default: 0, requested: "gone" }), { error: "NotFoundError" });
-    assert.equal(plan({ pref: "webkit", output: hp, inputs: [builtin], default: 0 }).mode, "webkit");
-    assert.equal(plan({ pref: "native", output: spk, inputs: [builtin], default: 0 }).mode, "native");
-    assert.equal(plan({ output: hp, inputs: [], default: 0 }).mode, "webkit", "no input: WebKit reports the error");
-  });
-
-  test("--panel-frame-eval: a tiny, missing or off-screen saved frame opens the full 420x640 panel", () => {
-    const ev = (saved, screens = [[0, 77, 1440, 798]]) =>
-      JSON.parse(spawnSync(EXE, ["--panel-frame-eval", JSON.stringify({ saved, screens })], { encoding: "utf8", timeout: 10_000 }).stdout);
+  test("--selftest panel-frame: a tiny, missing or off-screen saved frame opens the full 420x640 panel", () => {
+    const ev = (saved, screens = [[0, 77, 1440, 798]]) => selftest("panel-frame", { saved, screens });
     // First launch: the full default near the top right of the main screen.
     assert.deepEqual(ev(null), { frame: [996, 211, 420, 640], reason: "default" });
     // A pill-sized or squashed frame is clamped up to the default size, keeping its top-right corner.
@@ -177,174 +192,227 @@ describe("desktop app", { skip: SKIP }, () => {
     assert.equal(ev("garbage").reason, "default");
     // Taller than its screen: fitted to it.
     assert.deepEqual(ev("{{0, 0}, {420, 2000}}", [[0, 0, 1440, 875]]), { frame: [0, 0, 420, 875], reason: "fitted" });
+    // A second screen: a frame on it stays there.
+    assert.equal(ev("{{-1500, 100}, {420, 640}}", [[0, 0, 1440, 875], [-1920, 0, 1920, 1080]]).reason, "saved");
+  });
+
+  test("--selftest url: sotto:// parsing and the daemon.port ownership rule", () => {
+    const own = path.join(tmp, "own");
+    fs.mkdirSync(own, { recursive: true, mode: 0o700 });
+    fs.writeFileSync(path.join(own, "daemon.port"), "47123\n");
+    const u = (url) => selftest("url", { url });
+    const k = "a".repeat(32);
+    assert.deepEqual(u(`sotto://open?port=47123&k=${k}&data=${encodeURIComponent(own)}`),
+      { cmd: "open", port: 47123, has_code: true, data: own, owned: true });
+    assert.equal(u(`sotto://open?port=47124&k=${k}&data=${encodeURIComponent(own)}`).owned, false, "another port");
+    assert.equal(u(`sotto://open?port=47123&data=${encodeURIComponent(path.join(tmp, "nope"))}`).owned, false, "no daemon.port");
+    assert.equal(u("sotto://open?port=47123").owned, false, "no data dir");
+    assert.equal(u("sotto://open?port=47123&data=relative/dir").data, null, "relative data dirs are dropped");
+    assert.equal(u("sotto://open?port=80").cmd, null, "privileged port");
+    assert.equal(u("sotto://open?port=47123&k=xyz").has_code, false, "a malformed code is dropped");
+    // A symlinked daemon.port is refused, even with the right content.
+    const sym = path.join(tmp, "sym");
+    fs.mkdirSync(sym, { recursive: true });
+    fs.symlinkSync(path.join(own, "daemon.port"), path.join(sym, "daemon.port"));
+    assert.equal(u(`sotto://open?port=47123&data=${encodeURIComponent(sym)}`).owned, false, "symlink");
+    assert.deepEqual(u("sotto://close?port=47123"), { cmd: "close", port: 47123 });
+    assert.deepEqual(u("sotto://show"), { cmd: "show" });
+    assert.deepEqual(u("https://example.com/"), { cmd: null });
+    assert.deepEqual(u("sotto://format-disk"), { cmd: null });
+  });
+
+  test("--selftest icon: the menu-bar icon follows the voice state", () => {
+    const ic = (o) => selftest("icon", o).icon;
+    assert.equal(ic({ attached: false, state: "live" }), "off", "no daemon yet");
+    assert.equal(ic({ link_up: false, state: "live" }), "connecting", "link down, reconnecting");
+    assert.equal(ic({ link_failed: true, state: "live" }), "error");
+    assert.equal(ic({ state: "off" }), "off");
+    assert.equal(ic({ state: "waiting_page" }), "connecting");
+    assert.equal(ic({ state: "connecting" }), "connecting");
+    assert.equal(ic({ state: "sleeping" }), "sleeping");
+    assert.equal(ic({ state: "paused" }), "paused");
+    assert.equal(ic({ state: "paused", error: "idle" }), "paused", "idle pause is not an error");
+    assert.equal(ic({ state: "paused", error: "key_invalid" }), "error");
+    assert.equal(ic({ state: "live" }), "listening");
+    assert.equal(ic({ state: "live", muted: true, busy: true }), "muted");
+    assert.equal(ic({ state: "live", busy: true }), "working");
+    assert.equal(ic({ state: "live", busy: true, last_assistant: 999.5, now: 1000 }), "assistantSpeaking");
+    assert.equal(ic({ state: "live", last_user: 999.5, now: 1000 }), "userSpeaking");
+    assert.equal(ic({ state: "live", last_user: 998, now: 1000 }), "listening", "speaking decays after 1.2 s");
+    assert.equal(ic({ state: "live", mic_failed: true }), "error");
+    const all = selftest("icon", { state: "live", muted: true });
+    assert.equal(all.label, "Muted");
+    assert.equal(all.symbol, "mic.slash.fill");
+  });
+
+  test("--selftest ui-snapshot renders the SwiftUI panel offscreen (no window)", { timeout: 60_000 }, () => {
+    const dir = path.join(tmp, "ui");
+    const out = selftest("ui-snapshot", undefined, EXE);
+    assert.equal(out.ok, true, out.error);
+    fs.rmSync(out.dir, { recursive: true, force: true });
+    const r = spawnSync(EXE, ["--selftest", "ui-snapshot", dir], { encoding: "utf8", timeout: 60_000 });
+    assert.equal(r.status, 0, r.stderr);
+    const files = fs.readdirSync(dir).filter((f) => f.endsWith(".png"));
+    assert.ok(files.length >= 20, `${files.length} snapshots`);
+    assert.ok(files.some((f) => /listening--dark/.test(f)) && files.some((f) => /listening--light/.test(f)));
+    for (const f of files.slice(0, 3)) assert.ok(fs.statSync(path.join(dir, f)).size > 5000, f);
+  });
+
+  test("--selftest hotkey and options: defaults, test mode from argv or env", () => {
+    assert.deepEqual(selftest("hotkey", { spec: "opt+cmd+m" }), { ok: true, display: "⌥⌘M", key: "m" });
+    assert.deepEqual(selftest("hotkey", { spec: "opt+cmd+t" }), { ok: true, display: "⌥⌘T", key: "t" });
+    assert.equal(selftest("hotkey", { spec: "m" }).ok, false, "a bare letter is never taken system-wide");
+    const o = (argv, env) => selftest("options", { argv, env });
+    const t = o(["--test", "--port", "47000", "--k", "b".repeat(32), "--data-dir", "/tmp/x", "--exit-after", "2"]);
+    assert.deepEqual({ test: t.test, hidden: t.hidden, hotkeys: t.hotkeys, port: t.port, code: t.has_code, data: t.data, exit: t.exit_after },
+      { test: true, hidden: true, hotkeys: false, port: 47000, code: true, data: "/tmp/x", exit: 2 });
+    const e = o([], { SOTTO_APP_TEST: "1", SOTTO_APP_DEBUG_LOG: "/tmp/l.jsonl" });
+    assert.deepEqual({ test: e.test, hidden: e.hidden, hotkeys: e.hotkeys, log: e.debug_log }, { test: true, hidden: true, hotkeys: false, log: "/tmp/l.jsonl" });
+    const prod = o(["-psn_0_123"]);
+    assert.deepEqual({ test: prod.test, hidden: prod.hidden, hotkeys: prod.hotkeys }, { test: false, hidden: false, hotkeys: true });
+    assert.deepEqual(prod.wants_audio, ["connecting", "live", "reconnecting", "sleeping"], "uplink states (docs/NATIVE.md §2.2)");
   });
 
   test("launch with a tiny saved frame opens the full panel and replaces the bad frame", { timeout: 60_000 }, () => {
-    const SUITE = "com.chadboyda.sotto.test";
-    const read = (k) => spawnSync("defaults", ["read", SUITE, k], { encoding: "utf8" });
+    const read = (key) => spawnSync("defaults", ["read", TEST_SUITE, key], { encoding: "utf8" });
     const prevFrame = read("PanelFrame");
     const prevCompact = read("PanelCompact");
-    spawnSync("defaults", ["write", SUITE, "PanelFrame", "-string", "{{200, 300}, {250, 44}}"]);
-    spawnSync("defaults", ["delete", SUITE, "PanelCompact"]);
+    spawnSync("defaults", ["write", TEST_SUITE, "PanelFrame", "-string", "{{200, 300}, {250, 44}}"]);
+    spawnSync("defaults", ["delete", TEST_SUITE, "PanelCompact"]);
     try {
       const log = path.join(tmp, "frame.jsonl");
-      const r = spawnSync(EXE, ["--port", String(port), "--data-dir", path.join(tmp, "data"), "--debug-log", log, "--test", "--exit-after", "2"],
-        { stdio: "ignore", timeout: 30_000 });
+      const r = spawnSync(EXE, ["--test", "--debug-log", log, "--exit-after", "1"], { stdio: "ignore", timeout: 30_000 });
       assert.equal(r.status, 0);
       const f = readLog(log).find((e) => e.ev === "panel_frame");
       assert.ok(f, "panel_frame logged");
       assert.equal(f.compact, false, "never starts compact unless the user left it compact");
       assert.equal(f.reason, "too_small");
       assert.deepEqual(f.frame.slice(2), [420, 640]);
-      assert.ok(f.titlebar_inset > 0 && f.titlebar_inset < 64, `title bar inset ${f.titlebar_inset}`);
       const saved = read("PanelFrame").stdout.trim().match(/\{\{[-\d.]+, [-\d.]+\}, \{([\d.]+), ([\d.]+)\}\}/);
-      assert.deepEqual(saved?.slice(1).map(Number), [420, 640], "the tiny frame is replaced in the defaults");
+      assert.deepEqual(saved?.slice(1).map(Number), [420, 640], "the tiny frame is replaced in the test defaults");
+      assert.ok(!readLog(log).some((e) => e.ev === "hotkeys"), "no global hotkeys in test mode");
     } finally {
-      if (prevFrame.status === 0) spawnSync("defaults", ["write", SUITE, "PanelFrame", "-string", prevFrame.stdout.trim()]);
-      else spawnSync("defaults", ["delete", SUITE, "PanelFrame"]);
-      if (prevCompact.status === 0 && prevCompact.stdout.trim() === "1") spawnSync("defaults", ["write", SUITE, "PanelCompact", "-bool", "YES"]);
+      if (prevFrame.status === 0) spawnSync("defaults", ["write", TEST_SUITE, "PanelFrame", "-string", prevFrame.stdout.trim()]);
+      else spawnSync("defaults", ["delete", TEST_SUITE, "PanelFrame"]);
+      if (prevCompact.status === 0 && prevCompact.stdout.trim() === "1") spawnSync("defaults", ["write", TEST_SUITE, "PanelCompact", "-bool", "YES"]);
     }
   });
 
-  test("native mic launch: the app's capture feeds the page (fixture), WebRTC offer works, no capture leaks", { timeout: 60_000 }, async () => {
-    const log = path.join(tmp, "native.jsonl");
-    const child = spawn(EXE, ["--port", String(port), "--k", daemon.issueLaunchCode(), "--data-dir", path.join(tmp, "data"),
-      "--debug-log", log, "--test", "--probe-media", "--exit-after", "8"], {
-      stdio: "ignore",
-      env: { ...process.env, SOTTO_APP_MIC: "native", SOTTO_APP_MIC_FIXTURE: path.join(ROOT, "test/fixtures/ask-files.wav"), SOTTO_APP_MIC_FIXTURE_LEAD_MS: "0" },
-    });
-    const exited = new Promise((r) => child.on("exit", (c) => r(c)));
-    assert.equal(await Promise.race([exited, sleep(30_000).then(() => "timeout")]), 0);
-    const ev = readLog(log);
-    const find = (name, pred = () => true) => ev.find((e) => e.ev === name && pred(e));
-    assert.equal(find("mic_pref")?.pref, "native");
-    const probe = find("probe")?.result;
-    assert.ok(probe && !probe.error, probe?.error);
-    assert.deepEqual(probe.offer, { opus: true, datachannel: true, audio: true });
-    assert.equal(probe.withAEC.settings.sottoSource, "native");
-    assert.equal(probe.withAEC.settings.echoCancellation, false);
-    assert.equal(probe.withAEC.label, "Test fixture");
-    assert.ok(find("bridge", (e) => e.kind === "mic" && e.ok === true && e.source === "native"), "bridge sees a native mic");
-    assert.ok(!find("media_permission"), "WebKit capture never requested");
-    const hidden = find("probe_hidden")?.result;
-    assert.ok(hidden && !hidden.error, hidden?.error);
-    assert.ok(hidden.peakRms > 0.02, `fixture speech reaches the page (peak RMS ${hidden.peakRms})`);
-    assert.ok(hidden.gumMs < 1000, `${hidden.gumMs} ms`);
-    const starts = ev.filter((e) => e.ev === "native_mic_start").length;
-    const stops = ev.filter((e) => e.ev === "native_mic_stop").length;
-    assert.ok(starts >= 3 && starts === stops, `${starts} starts, ${stops} stops`);
-    const stats = ev.filter((e) => e.ev === "native_mic_stats" && e.transportP95Ms != null);
-    assert.ok(stats.length > 0, "latency stats reported");
-    const p95 = Math.max(...stats.map((e) => e.transportP95Ms));
-    assert.ok(p95 < 60, `app -> page transport p95 ${p95} ms`);
-    console.log(`# native mic: gUM ${hidden.gumMs} ms, transport p95 ${p95} ms, peak RMS ${hidden.peakRms.toFixed(3)}`);
-  });
-
-  test("silent native capture (exact zeros) falls back to WebKit's capture under the same track", { timeout: 60_000 }, async () => {
-    // SOTTO_APP_MIC_FIXTURE=silence: the app's native capture sends only
-    // exact zeros, what a stale app delivers (SPEC §6.16 "Silent mic").
-    // mic.js must switch to WebKit's (mock) capture after 2 s.
-    const log = path.join(tmp, "silent.jsonl");
-    const child = spawn(EXE, ["--port", String(port), "--k", daemon.issueLaunchCode(), "--data-dir", path.join(tmp, "data"),
-      "--debug-log", log, "--test", "--probe-media", "--probe-seconds", "4", "--exit-after", "12"], {
-      stdio: "ignore",
-      env: { ...process.env, SOTTO_APP_MIC: "native", SOTTO_APP_MIC_FIXTURE: "silence" },
-    });
-    const exited = new Promise((r) => child.on("exit", (c) => r(c)));
-    assert.equal(await Promise.race([exited, sleep(40_000).then(() => "timeout")]), 0);
-    const ev = readLog(log);
-    const find = (name, pred = () => true) => ev.find((e) => e.ev === name && pred(e));
-    const hidden = find("probe_hidden")?.result;
-    assert.ok(hidden && !hidden.error, hidden?.error);
-    const silent = find("native_mic_silent");
-    assert.ok(silent, "the app logged why it left the native capture");
-    assert.equal(silent.reason, "zeros");
-    assert.ok(silent.ms >= 2000, `${silent.ms} ms of zeros`);
-    assert.equal(silent.permission, "granted");
-    assert.equal(silent.bundle_replaced, false);
-    assert.ok(find("media_permission", (e) => e.granted === true), "WebKit capture requested for our origin");
-    assert.equal(hidden.source, "webkit_fallback");
-    assert.equal(hidden.trackState, "live", "the page's track never ended");
-    assert.ok(hidden.lastPeakRms > 0, `sound after the fallback (last peak RMS ${hidden.lastPeakRms})`);
-    const starts = ev.filter((e) => e.ev === "native_mic_start").length;
-    const stops = ev.filter((e) => e.ev === "native_mic_stop").length;
-    assert.ok(starts >= 1 && starts === stops, `${starts} starts, ${stops} stops`);
-    console.log(`# silent native mic: fell back after ${silent.ms} ms, last peak RMS ${hidden.lastPeakRms.toFixed(3)}`);
-  });
-
-  test("direct launch: loads the page with the launch code, gets status over SSE, WebRTC works", { timeout: 60_000 }, async () => {
+  test("direct launch: bootstraps with page.secret, connects /api/native, never logs a secret", { timeout: 60_000 }, async () => {
     const log = path.join(tmp, "direct.jsonl");
-    const code = daemon.issueLaunchCode();
-    const child = spawn(EXE, ["--port", String(port), "--k", code, "--data-dir", path.join(tmp, "data"),
-      "--debug-log", log, "--test", "--probe-media", "--exit-after", "8"], { stdio: "ignore" });
+    const child = spawn(EXE, ["--port", String(port), "--data-dir", D, "--debug-log", log, "--test", "--exit-after", "4"], { stdio: "ignore" });
     const exited = new Promise((r) => child.on("exit", (c) => r(c)));
     assert.equal(await Promise.race([exited, sleep(30_000).then(() => "timeout")]), 0);
     const ev = readLog(log);
     const find = (name, pred = () => true) => ev.find((e) => e.ev === name && pred(e));
-    assert.ok(find("load_finish"), "page loaded");
-    assert.equal(find("load_finish").url, `http://127.0.0.1:${port}/`, "fragment (launch code) never logged");
-    assert.ok(find("bridge", (e) => e.kind === "sse" && e.open === true), "event stream open (bootstrap accepted the launch code)");
-    assert.ok(find("bridge", (e) => e.kind === "status" && e.state === "off"), "status from SSE");
-    assert.ok(find("media_permission", (e) => e.granted === true), "mic permission granted for our origin");
-    assert.ok(find("bridge", (e) => e.kind === "silenced" && e.ok === true), "test mode mutes the page's audio (never the speakers)");
-    const probe = find("probe")?.result;
-    assert.ok(probe, "probe ran");
-    assert.equal(probe.error, undefined, probe.error);
-    assert.equal(probe.rtc, "function");
-    assert.equal(probe.secure, true);
-    assert.deepEqual(probe.offer, { opus: true, datachannel: true, audio: true });
-    assert.equal(probe.withAEC.settings.echoCancellation, true);
-    assert.equal(probe.withoutAEC.settings.echoCancellation, false);
-    const hidden = find("probe_hidden")?.result;
-    assert.ok(hidden && !hidden.error, `mic opens while the panel is hidden: ${hidden?.error}`);
-    assert.ok(!fs.readFileSync(log, "utf8").includes(code), "launch code never logged");
+    assert.equal(find("launch")?.test, true);
+    assert.ok(find("open", (e) => e.port === port && e.source === "argv"), "argv launch opens the link");
+    assert.ok(find("link.connect"), "the link starts");
+    if (daemon.native) {
+      // B1's endpoint is wired: the full handshake.
+      assert.ok(find("welcome"), "hello -> welcome over /api/native");
+    }
+    assert.ok(!ev.some((e) => e.ev === "audio_start_failed"), "fake audio never fails");
+    const text = fs.readFileSync(log, "utf8");
+    for (const secret of [daemon.pageToken, daemon.pageSecret, daemon.daemonKey]) {
+      if (secret) assert.ok(!text.includes(secret), "no token, secret or key in the app log");
+    }
   });
 
   test("a sotto://open URL is ignored unless D/daemon.port records its port", { timeout: 60_000 }, async () => {
-    // Any web page can fire this URL; the panel must not load (and grant the
-    // app's microphone to) whatever listens on an arbitrary loopback port.
+    // Any web page can fire this URL; the app must not connect its microphone
+    // to (and send the page secret to) whatever listens on another port.
+    const bundle = testCopy(path.join(tmp, "ls", APP_BUNDLE));
+    registered.push(bundle);
     const log = path.join(tmp, "reject.jsonl");
     const other = await freePort();
     const fakeD = path.join(tmp, "fake-data");
     fs.mkdirSync(fakeD, { recursive: true });
     const url = (p, d) => `sotto://open?port=${p}&k=${"a".repeat(32)}&data=${encodeURIComponent(d)}`;
-    const r = spawnSync("open", ["-g", "-a", lsCopy(), "--env", "SOTTO_APP_TEST=1", "--env", `SOTTO_APP_DEBUG_LOG=${log}`,
-      url(other, path.join(tmp, "data"))], { encoding: "utf8", timeout: 15_000 });
+    const r = spawnSync("open", ["-g", "-a", bundle, "--env", "SOTTO_APP_TEST=1", "--env", `SOTTO_APP_DEBUG_LOG=${log}`,
+      url(other, D)], { encoding: "utf8", timeout: 15_000 });
     assert.equal(r.status, 0, r.stderr);
     const launch = await waitFor(() => readLog(log).find((e) => e.ev === "launch"), 15_000, "launch");
     try {
+      assert.equal(launch.bundle, LS_ID, "the test copy, never the production id");
       await waitFor(() => readLog(log).some((e) => e.ev === "url_rejected" && e.port === other), 10_000, "wrong port rejected");
       // A data dir without daemon.port, and one missing entirely, are rejected too.
-      spawnSync("open", ["-g", "-a", lsCopy(), url(port, fakeD)], { timeout: 15_000 });
-      spawnSync("open", ["-g", "-a", lsCopy(), `sotto://open?port=${port}`], { timeout: 15_000 });
+      spawnSync("open", ["-g", "-a", bundle, url(port, fakeD)], { timeout: 15_000 });
+      spawnSync("open", ["-g", "-a", bundle, `sotto://open?port=${port}`], { timeout: 15_000 });
       await waitFor(() => readLog(log).filter((e) => e.ev === "url_rejected").length >= 3, 10_000, "all three rejected");
-      assert.equal(readLog(log).filter((e) => e.ev === "open" || e.ev === "load_start").length, 0, "no page loaded");
+      assert.equal(readLog(log).filter((e) => e.ev === "open" || e.ev === "link.connect").length, 0, "no link opened");
+      assert.equal(readLog(log).filter((e) => e.ev === "launch").length, 1, "one process for every URL (single instance)");
     } finally {
       if (pidAlive(launch.pid)) process.kill(launch.pid, "SIGTERM");
       await waitFor(() => !pidAlive(launch.pid), 10_000, "app exit");
     }
   });
 
-  test("LaunchServices launch: single instance takes a new launch code, close_window quits", { timeout: 60_000 }, async () => {
-    const log = path.join(tmp, "ls.jsonl");
-    const url = (k) => `sotto://open?port=${port}&k=${k}&data=${encodeURIComponent(path.join(tmp, "data"))}`;
-    const open = (args) => spawnSync("open", args, { encoding: "utf8", timeout: 15_000 });
-    let r = open(["-g", "-a", lsCopy(), "--env", "SOTTO_APP_TEST=1", "--env", `SOTTO_APP_DEBUG_LOG=${log}`, url(daemon.issueLaunchCode())]);
-    assert.equal(r.status, 0, r.stderr);
-    const launch = await waitFor(() => readLog(log).find((e) => e.ev === "launch"), 15_000, "launch");
+  test("chooser -> sotto://open -> link -> welcome -> fake Live session -> output WAV -> mute round trip -> close_window quits", { timeout: 120_000 }, async (t) => {
+    if (!daemon.native) return t.skip("needs the daemon's /api/native endpoint (docs/NATIVE.md B1)");
+    // The model's voice: 1 s of a loud tone from the fake Live server.
+    const greet = Buffer.alloc(24000 * 2);
+    for (let i = 0; i < 24000; i++) greet.writeInt16LE(Math.round(9000 * Math.sin((2 * Math.PI * 220 * i) / 24000)), i * 2);
+    const live = await startFakeLiveServer({ key: "sk-test-key", outputPcm: greet });
+    t.after(() => live.close());
+    // A second daemon that really opens windows: SOTTO_BROWSER=app through the
+    // real chooser (daemon/window.js), with a test-id copy installed at D2/app.
+    const D2 = path.join(tmp, "chooser");
+    const p = appPaths(D2, ROOT);
+    const bundle = testCopy(p.bundle, { stampFrom: OUT });
+    registered.push(bundle);
+    const appLog = path.join(tmp, "chooser.jsonl");
+    const outWav = path.join(tmp, "chooser-out.wav");
+    const port2 = await freePort();
+    const d = createDaemon({
+      dataDir: D2, port: port2, pluginRoot: ROOT, daemonKey: "c".repeat(64),
+      env: {
+        SOTTO_BROWSER: "app", SOTTO_APP_TEST: "1", SOTTO_APP_DEBUG_LOG: appLog, SOTTO_APP_OUT_WAV: outWav,
+        SOTTO_APP_MIC_FIXTURE: path.join(ROOT, "test/fixtures/ask-files.wav"), SOTTO_APP_MIC_FIXTURE_LEAD_MS: "300",
+        SOTTO_APP_TEST_MUTE_AFTER_MS: "2500", SOTTO_APP_DOWNLOAD: "0", SOTTO_VOCAB: "0",
+        OPENAI_API_KEY: "sk-test-key", SOTTO_OPENAI_BASE: live.base, SOTTO_KEYCHAIN_SERVICE: `sotto-apptest-${process.pid}`,
+      },
+    });
+    await d.listen();
+    const ctl = (body) => fetch(`http://127.0.0.1:${port2}/control`, {
+      method: "POST", headers: { "Content-Type": "application/json", "X-Sotto-Key": d.daemonKey }, body: JSON.stringify(body),
+    }).then((r) => r.json());
+    let pid = null;
     try {
-      await waitFor(() => readLog(log).some((e) => e.ev === "bridge" && e.kind === "status"), 15_000, "first page status");
-      r = open(["-g", "-a", lsCopy(), url(daemon.issueLaunchCode())]);
-      assert.equal(r.status, 0, r.stderr);
-      await waitFor(() => readLog(log).filter((e) => e.ev === "load_finish").length >= 2, 15_000, "second page load");
-      assert.equal(readLog(log).filter((e) => e.ev === "launch").length, 1, "one process for both requests");
-      await waitFor(() => daemon.sse.count >= 1, 10_000, "page event stream");
-      // What the daemon does on voice off (SPEC §6.13 step 5).
-      daemon.sse.broadcast({ type: "command", command: "close_window", reason: "user" });
-      await waitFor(() => readLog(log).some((e) => e.ev === "close_window"), 10_000, "close_window handled");
-      await waitFor(() => !pidAlive(launch.pid), 10_000, "app quits after close_window");
+      const on = await ctl({ action: "on", session: { session_id: "apptest", socket: "/tmp/none.sock", token: "t", cwd: ROOT, project_dir: ROOT }, config: { open_browser: true } });
+      assert.equal(on.ok, true, on.message);
+      const launch = await waitFor(() => readLog(appLog).find((e) => e.ev === "launch"), 20_000, "app launch via the chooser");
+      pid = launch.pid;
+      assert.equal(launch.bundle, LS_ID);
+      assert.equal(launch.test, true);
+      await waitFor(() => readLog(appLog).some((e) => e.ev === "open" && e.source === "url" && e.has_code), 10_000, "sotto://open with a launch code");
+      await waitFor(() => readLog(appLog).some((e) => e.ev === "welcome"), 15_000, "welcome");
+      assert.match(fs.readFileSync(path.join(D2, "logs", "daemon.log"), "utf8"), /"ev":"window.choose"[^\n]*"mode":"app"/);
+      await waitFor(() => d.voice.state === "live", 15_000, "live on the fake session");
+      assert.ok(readLog(appLog).some((e) => e.ev === "capture" && e.to === "full"), "capture follows the state");
+      const s1 = live.last();
+      assert.equal(s1.start.audio.format.rate, 24000);
+      await waitFor(() => s1.inputFrames >= 50, 10_000, "continuous mic frames reach the Live session");
+      // The model's voice lands in the app's output WAV (FakeAudioIO writes it every second).
+      await waitFor(() => fs.existsSync(outWav) && wavPeak(outWav) > 1200, 15_000, "speech in the output WAV");
+      // Mute round trip: the app sends cmd mute, the daemon mutes the Live input and answers.
+      await waitFor(() => readLog(appLog).some((e) => e.ev === "cmd_result" && e.name === "mute"), 10_000, "mute result");
+      assert.ok(readLog(appLog).some((e) => e.ev === "cmd_result" && e.name === "mute" && e.ok === true), "mute ok");
+      await waitFor(() => s1.events.some((e) => e.type === "session.input_audio.mute") || live.last().events.some((e) => e.type === "session.input_audio.mute"), 5_000, "Live input muted");
+      await waitFor(() => d.voice.pageStatus?.().live?.muted === true || readLog(appLog).some((e) => e.ev === "icon" && e.state === "muted"), 5_000, "muted state");
+      // Voice off: close_window stops audio and hides the panel, then the app quits.
+      const off = await ctl({ action: "off" });
+      assert.equal(off.ok, true);
+      await waitFor(() => readLog(appLog).some((e) => e.ev === "close_window"), 10_000, "close_window handled");
+      await waitFor(() => !pidAlive(pid), 10_000, "app quits after voice off");
+      const ev = readLog(appLog);
+      assert.ok(ev.some((e) => e.ev === "capture" && e.to === "off"), "audio stopped");
+      assert.ok(!ev.some((e) => e.ev === "audio_start_failed" || e.ev === "audio_error"));
+      assert.ok(!fs.readFileSync(appLog, "utf8").includes("sk-test-key"), "the key never reaches the app log");
     } finally {
-      if (pidAlive(launch.pid)) process.kill(launch.pid, "SIGTERM");
+      if (pid && pidAlive(pid)) process.kill(pid, "SIGTERM");
+      await ctl({ action: "off" }).catch(() => {});
+      await d.close();
     }
   });
 });

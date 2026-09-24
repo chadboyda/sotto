@@ -173,8 +173,9 @@ async function main() {
   const closed1 = readLog().find((e) => e.ev === "session.closed" && e.live_id === id1);
   billed[id1] = closed1?.seconds ?? null;
   // The page is told to disconnect first (it keeps its mic), so the server
-  // often reports the WebRTC hang-up before our close; either way the usage is booked.
-  check("session 1 closed and billed before the swap", ["close_requested", "remote_hangup"].includes(closed1?.reason) && ts(closed1) <= ts(ho) && closed1.seconds > 0, `${closed1?.reason}, ${closed1?.seconds} s billed`);
+  // often reports the WebRTC hang-up before our close (remote_hangup, and
+  // since 2026-09 also connection_lost); either way the usage is booked.
+  check("session 1 closed and billed before the swap", ["close_requested", "remote_hangup", "connection_lost"].includes(closed1?.reason) && ts(closed1) <= ts(ho) && closed1.seconds > 0, `${closed1?.reason}, ${closed1?.seconds} s billed`);
 
   const h2 = await until(async () => { const h = await healthz(); return h.pid !== pid1 ? h : null; }, 5000);
   check("new daemon on the same port", h2 && h2.port === PORT && h2.name === "sotto", h2 ? `pid ${pid1} → ${h2.pid}` : "");

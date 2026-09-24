@@ -16,6 +16,7 @@ import { readPrefs, writePrefs, resolveVoice, normalizeVoice, voiceListMessage, 
 import { loadPersonas, findPersona, resolvePersona, personaSummary, personaListMessage, unknownPersonaMessage } from "./personas.js";
 import { collectVocabulary, renderVocabulary, vocabularyHint, TIER } from "./vocabulary.js";
 import { buildSessionBody, createLiveSession, Sideband } from "./live.js";
+import { PrimarySession, buildPrimaryStart } from "./live-ws.js";
 import { PreviewCache, recordPreview, previewText } from "./preview.js";
 import { readTranscriptTail, readAbsorbed, gitBranch } from "./claude-context.js";
 import { truncate } from "./log.js";
@@ -63,6 +64,10 @@ const LIVE_STATES = new Set(["connecting", "live"]);
 /** Vocabulary: collection deadline (it starts at bind time, off the critical path) and reuse window. */
 const VOCAB_DEADLINE_MS = 1500;
 const VOCAB_REUSE_MS = 5 * 60_000;
+/** Native app (docs/NATIVE.md §4.2): backoff before a replacement primary session, by attempt (1-3). */
+const NATIVE_RECONNECT_BACKOFF_MS = [500, 1000, 2000];
+/** Self-update with the app attached: the successor waits this long for the app's hello (§4.4). */
+const APP_RESTORE_WAIT_MS = 10_000;
 
 export const MSG = {
   noSocket: "sotto: ERROR this session has no inbox socket (CLAUDE_CODE_MESSAGING_SOCKET is unset), so voice cannot reach it.",
@@ -235,7 +240,7 @@ export class Voice {
         setLastError: (code, message) => this.setLastError(code, message),
         notice: (level, code, text) => this.notice(level, code, text),
         checkLiveness: () => this.checkLiveness(),
-        onChange: (r) => { this.sse.broadcast({ type: "delegation", id: r.id, status: r.status, text: r.text || "" }); this.changed(); },
+        onChange: (r) => { this.emitPage({ type: "delegation", id: r.id, status: r.status, text: r.text || "" }); this.changed(); },
         project: () => this.owner?.project,
         ownerSocket: () => this.owner?.socket,
         counters: this.counters,
@@ -270,6 +275,14 @@ export class Voice {
     this.restarting = false;
     this.updateCue = false;
     this.helloNotice = null;
+    // Native app (docs/NATIVE.md §4.2): who carries the audio. "app" = the
+    // native app over /api/native (the daemon owns a primary WebSocket
+    // session); "page" = the Chrome page (WebRTC + sideband); null = none yet.
+    this.audioClient = null;
+    this.native = null; // NativeController (native-session.js), set by setNativeController()
+    this.muteWanted = false; // the app's mute, re-applied to every new primary session
+    this.awaitApp = false; // self-update successor waiting for the app's hello (§4.4)
+    this.nativeGen = 0;
   }
 
   get policy() { return this.runtimePolicy || this.config.speaking_policy; }
@@ -300,6 +313,8 @@ export class Voice {
       wake: { ...this.governor.status(this.config.wake_sensitivity), queued: this.wakeQueue.length },
       api_key: { source: this.keyInfo().source },
       echo: this.echoState ? { ...this.echoState } : null,
+      audio_client: this.pageStatus().audio_client,
+      native: this.native ? this.native.status() : null,
     };
   }
 
@@ -320,7 +335,20 @@ export class Voice {
       claude: { busy: this.delegation.claudeBusy },
       last_error: this.lastError ? { code: this.lastError.code, message: this.lastError.message } : null,
       key: { ...this.keyInfo(), setup: this.keySetup },
+      audio_client: this.appAttached() ? "app" : this.audioClient === "page" ? "page" : null,
     };
+  }
+
+  // ---- native app link (docs/NATIVE.md) ---------------------------------------------------
+  setNativeController(c) { this.native = c; }
+  /** The native app is connected and carries the audio. */
+  appAttached() { return this.audioClient === "app" && !!this.native?.connected; }
+  /** Something that can carry voice is listening: an SSE page or the attached app. */
+  hasListener() { return this.sse.count > 0 || this.appAttached(); }
+  /** Everything the page gets over SSE also goes to the native app (§3.1). */
+  emitPage(msg) {
+    this.sse.broadcast(msg);
+    if (this.native) { try { this.native.onBroadcast(msg); } catch (e) { this.log.error("native.fanout_error", { message: String(e && e.message) }); } }
   }
 
   /** Key facts for the page and /talk key: never the key, at most its last four characters. */
@@ -337,7 +365,7 @@ export class Voice {
   }
 
   changed() {
-    this.sse.broadcast({ type: "status", status: this.pageStatus() });
+    this.emitPage({ type: "status", status: this.pageStatus() });
     this.statusFile.mark();
   }
 
@@ -357,8 +385,8 @@ export class Voice {
     this.changed();
   }
 
-  notice(level, code, text) { this.sse.broadcast({ type: "notice", level, code, text }); }
-  activity(kind, text, extra = null) { this.sse.broadcast({ type: "activity", kind, text: text || "", ...extra }); }
+  notice(level, code, text) { this.emitPage({ type: "notice", level, code, text }); }
+  activity(kind, text, extra = null) { this.emitPage({ type: "activity", kind, text: text || "", ...extra }); }
   /** Broadcast the background-agent count when it changes. */
   syncAgents() {
     const n = this.agents.count();
@@ -368,7 +396,7 @@ export class Voice {
   }
   command(command, reason) {
     this.log.info("page.command", { command, reason });
-    this.sse.broadcast({ type: "command", command, reason: reason || "" });
+    this.emitPage({ type: "command", command, reason: reason || "" });
   }
 
   timer(name, fn, ms) {
@@ -417,7 +445,7 @@ export class Voice {
     }
     if (kind === "commentary" && (RESULT_SOURCES.has(source) || wakeWorthy)) {
       this.pendingResult = { text: content, at: this.clock.now() };
-      this.sse.broadcast({ type: "result_pending", text: content });
+      this.emitPage({ type: "result_pending", text: content });
       this.log.info("result.pending", { source, content: truncate(content, 200) });
     } else if (kind === "thinking") {
       this.backlog.push(content);
@@ -444,10 +472,11 @@ export class Voice {
    * Only from `sleeping` with a page listening and the daily cap not reached.
    */
   requestWake(kind = "notify") {
-    if (this.state !== "sleeping" || !this.owner || this.capReached() || this.sse.count === 0) return false;
+    if (this.state !== "sleeping" || !this.owner || this.capReached() || !this.hasListener()) return false;
     if (this.timers.notifyWatch) return true; // already asked
     this.log.info("wake.request", { kind, queued: this.wakeQueue.length });
-    this.command("connect", kind);
+    if (this.appAttached()) this.startNativeSession(kind === "wake" ? "wake" : "notify");
+    else this.command("connect", kind);
     this.timer("notifyWatch", () => {
       if (this.state !== "sleeping") return;
       this.log.warn("wake.request_timeout", { kind, queued: this.wakeQueue.length });
@@ -770,7 +799,12 @@ export class Voice {
     this.setState("waiting_page");
     this.changed();
     let msg = `sotto: voice ON (${project}).`;
-    if (this.sse.count > 0) {
+    if (this.appAttached()) {
+      // The app is connected (its panel may be hidden after the last off):
+      // the daemon starts the session itself and shows the panel.
+      this.startNativeSession("start");
+      if (this.config.open_browser) this.chrome.showApp?.();
+    } else if (this.sse.count > 0) {
       this.command("connect", "on");
     } else if (this.config.open_browser) {
       const r = this.chrome.open();
@@ -881,7 +915,8 @@ export class Voice {
       // session create failed with no_api_key (the key was removed meanwhile).
       if (this.owner && (this.state === "paused" || this.state === "waiting_page") && !this.capReached()) {
         this.setState("waiting_page");
-        this.command("connect", "key");
+        if (this.appAttached()) this.startNativeSession("start");
+        else this.command("connect", "key");
         this.timer("waitingPage", () => this.onPageTimeout(), WAITING_PAGE_MS);
         connecting = true;
       }
@@ -1008,6 +1043,7 @@ export class Voice {
   recreateLive(reasonCode, text) {
     const old = this.sideband;
     this.sideband = null;
+    this.native?.sessionGone(old, "voice_change");
     this.stopLiveTimers();
     this.speech.suspend();
     this.live = null;
@@ -1410,7 +1446,8 @@ export class Voice {
     this.log.warn("page.mic_silent", { input, source: truncate(String(msg.source || ""), 24), ms: Number.isFinite(Number(msg.ms)) ? Number(msg.ms) : undefined, host: app ? "app" : "browser" });
     this.setLastError("mic_silent", `The microphone (${input || "unknown"}) delivered only silence`);
     const w = this.chrome;
-    if (!app || !w?.appLaunched || typeof w.replaceApp !== "function") return false;
+    // appAttached: the native app may have been opened by the user, not launched by this daemon.
+    if (!app || !(w?.appLaunched || this.appAttached()) || typeof w.replaceApp !== "function") return false;
     const now = this.clock.now();
     if (this.micSilentAt !== undefined && now - this.micSilentAt < MIC_SILENT_SWAP_MS) return false;
     this.micSilentAt = now;
@@ -1437,6 +1474,8 @@ export class Voice {
     } finally {
       this.swapping = false;
     }
+    // To Chrome: the page is the audio client from now on (a native app no longer holds the voice).
+    if (chrome && this.audioClient === "app") this.audioClient = null;
     if (!this.owner || this.state === "off" || this.state === "closing") return true;
     if (LIVE_STATES.has(this.state)) this.reconnect(reason);
     // Open the new window now instead of after RECONNECT_OPEN_MS.
@@ -1465,14 +1504,51 @@ export class Voice {
   /** Returns {status, body}. Never waits for the sideband. */
   async createSession({ sdp, reason, wake } = {}) {
     if (typeof sdp !== "string" || !sdp.trim()) return { status: 400, body: { error: { code: "bad_sdp", message: "Missing SDP offer" } } };
-    if (!this.owner) return { status: 409, body: { error: { code: "not_active", message: "Voice is not on. Run /talk on in Claude Code." } } };
-    if (this.capReached()) return { status: 429, body: { error: { code: "daily_cap", message: `Daily voice cap reached (${this.config.daily_cap_minutes} min).` } } };
+    // One audio client (docs/NATIVE.md §4.2): the attached native app owns the voice.
+    if (this.appAttached()) return { status: 409, body: { error: { code: "app_took_over", message: "Voice is in the Sotto app." } } };
+    const p = await this.prepareSession(reason, wake);
+    if (!p.ok) return { status: p.status, body: p.body };
+    const { why, owner, apiKey, instructions, seed, voice, persona } = p;
+    const body = buildSessionBody({ instructions, seed, voice, sdp });
+    this.lastSessionCreateAt = this.clock.now();
+    const res = await createLiveSession({ base: this.base, apiKey, body, fetchImpl: this.fetchImpl, clock: this.clock });
+    this.log.info("session.create", { ms: res.ms, status: res.status ?? null, ok: res.ok, model: body.session.model, live_id: res.id || null, code: res.code || null, reason: why, voice, persona: persona.id });
+
+    if (!res.ok) {
+      this.setLastError(res.code, res.message);
+      this.notice("error", res.code, res.message);
+      if (this.state === "connecting") this.setState("paused");
+      return { status: res.httpStatus, body: { error: { code: res.code, message: res.message } } };
+    }
+    if (this.owner !== owner || this.state !== "connecting") {
+      // Turned off while the POST was in flight: attach just to close it.
+      this.attachSideband(res.id, why, apiKey).close(15000).catch(() => {});
+      this.sideband = null;
+      return { status: 409, body: { error: { code: "not_active", message: "Voice was turned off." } } };
+    }
+    this.audioClient = "page";
+    this.beginLive(res.id, why, voice, persona);
+    this.attachSideband(res.id, why, apiKey);
+    this.changed();
+    return { status: 201, body: { session_id: res.id, sdp: res.sdp } };
+  }
+
+  /**
+   * The transport-independent part of a session start (docs/NATIVE.md §4.2):
+   * owner/cap/key/restart checks, closing an older session, the seed (voice
+   * history, pending result, backlog), the glossary and the instructions.
+   * Returns {ok:false, status, body} or {ok:true, why, owner, apiKey, instructions, seed, voice}.
+   * `gen` (native path): a newer start supersedes this one while it awaits.
+   */
+  async prepareSession(reason, wake, { gen = null } = {}) {
+    if (!this.owner) return { ok: false, status: 409, body: { error: { code: "not_active", message: "Voice is not on. Run /talk on in Claude Code." } } };
+    if (this.capReached()) return { ok: false, status: 429, body: { error: { code: "daily_cap", message: `Daily voice cap reached (${this.config.daily_cap_minutes} min).` } } };
     const apiKey = this.getApiKey();
     if (!apiKey) {
       this.setLastError("no_api_key", "OPENAI_API_KEY was not found");
-      return { status: 503, body: { error: { code: "no_api_key", message: "OPENAI_API_KEY was not found." } } };
+      return { ok: false, status: 503, body: { error: { code: "no_api_key", message: "OPENAI_API_KEY was not found." } } };
     }
-    if (this.restarting) return { status: 503, body: { error: { code: "restarting", message: "Sotto is updating; the voice comes back in a moment." } } };
+    if (this.restarting) return { ok: false, status: 503, body: { error: { code: "restarting", message: "Sotto is updating; the voice comes back in a moment." } } };
     const why = SESSION_REASONS.includes(reason) ? reason : "start";
     this.clear("waitingPage");
     this.clear("notifyWatch");
@@ -1482,6 +1558,7 @@ export class Voice {
     if (this.sideband) {
       const old = this.sideband;
       this.sideband = null;
+      this.native?.sessionGone(old, "session_end");
       old.close(15000).catch(() => {});
     }
     this.stopLiveTimers();
@@ -1494,8 +1571,8 @@ export class Voice {
       Promise.resolve().then(() => readTranscriptTail(owner.transcript_path)),
       this.vocabularyFor(owner, branchP),
     ]);
-    if (this.owner !== owner || this.state !== "connecting") {
-      return { status: 409, body: { error: { code: "not_active", message: "Voice was turned off." } } };
+    if (this.owner !== owner || this.state !== "connecting" || (gen !== null && gen !== this.nativeGen)) {
+      return { ok: false, status: 409, body: { error: { code: "not_active", message: "Voice was turned off." } } };
     }
     // Queued messages are spoken right after the session is ready (flushed as
     // commentary), so the pending result is not seeded a second time.
@@ -1514,24 +1591,11 @@ export class Voice {
     const persona = this.currentPersona();
     const instructions = renderForPolicy(owner.project, this.policy, vocab.text, persona);
     const voice = this.config.voice;
-    const body = buildSessionBody({ instructions, seed, voice, sdp });
-    this.lastSessionCreateAt = this.clock.now();
-    const res = await createLiveSession({ base: this.base, apiKey, body, fetchImpl: this.fetchImpl, clock: this.clock });
-    this.log.info("session.create", { ms: res.ms, status: res.status ?? null, ok: res.ok, model: body.session.model, live_id: res.id || null, code: res.code || null, reason: why, voice, persona: persona.id });
+    return { ok: true, why, owner, apiKey, instructions, seed, voice, persona };
+  }
 
-    if (!res.ok) {
-      this.setLastError(res.code, res.message);
-      this.notice("error", res.code, res.message);
-      if (this.state === "connecting") this.setState("paused");
-      return { status: res.httpStatus, body: { error: { code: res.code, message: res.message } } };
-    }
-    if (this.owner !== owner || this.state !== "connecting") {
-      // Turned off while the POST was in flight: attach just to close it.
-      this.attachSideband(res.id, why, apiKey).close(15000).catch(() => {});
-      this.sideband = null;
-      return { status: 409, body: { error: { code: "not_active", message: "Voice was turned off." } } };
-    }
-
+  /** Bookkeeping for a new Live session (both transports). `id` is null on the primary socket until session.started. */
+  beginLive(id, why, voice, persona = null) {
     this.counters.sessions_created++;
     // Words of the old session not yet sent anywhere go now: the new session's
     // timeline restarts at 0 (§6.18).
@@ -1540,16 +1604,178 @@ export class Voice {
     this.delegation.resetTimeline();
     this.mirror.resetTimeline();
     const now = this.clock.now();
-    this.live = { id: res.id, started_at: now, expires_at: Math.floor(now / 1000) + 7200, usage_seconds: 0, muted: false, reason: why, greeted: false, voice, persona: persona.id, personaName: persona.name, wakeHandled: false };
+    this.live = { id, started_at: now, expires_at: Math.floor(now / 1000) + 7200, usage_seconds: 0, muted: false, reason: why, greeted: false, voice, persona: persona?.id ?? null, personaName: persona?.name ?? null, wakeHandled: false };
     this.governor.onWake(why === "wake" ? "voice" : why === "notify" ? "notify" : why);
-    this.usageSeen.set(res.id, 0);
+    if (id) this.usageSeen.set(id, 0);
     // pendingResult and backlog were seeded into the new session.
     this.pendingResult = null;
     this.backlog = [];
     if (this.lastError && /^openai_|page_timeout|mic_/.test(this.lastError.code)) this.lastError = null;
-    this.attachSideband(res.id, why, apiKey);
+  }
+
+  /**
+   * Start a Live session on the primary WebSocket for the native app
+   * (docs/NATIVE.md §4.2-§4.3): the daemon's own replacement for the page's
+   * POST /api/session. Never waits for session.started. Returns
+   * {ok:true} or {ok:false, status, body} like prepareSession.
+   */
+  async startNativeSession(reason, { wake } = {}) {
+    const gen = ++this.nativeGen;
+    this.audioClient = "app";
+    this.clear("nativeRetry");
+    const p = await this.prepareSession(reason, wake, { gen });
+    if (!p.ok) {
+      const code = p.body?.error?.code;
+      this.log.info("session.native_skip", { reason, code });
+      if (code === "daily_cap") {
+        this.setLastError("daily_cap", `Daily voice cap reached (${this.config.daily_cap_minutes} min)`);
+        if (this.owner && this.state !== "off" && this.state !== "closing") this.setState("paused");
+      } else if (code === "no_api_key" && this.owner && this.state !== "off" && this.state !== "closing") {
+        this.setState("paused");
+      }
+      return p;
+    }
+    const { why, apiKey, instructions, seed, voice, persona } = p;
+    const start = buildPrimaryStart({ instructions, seed, voice });
+    this.lastSessionCreateAt = this.clock.now();
+    this.log.info("session.create", { transport: "websocket", ok: true, model: start.session.model, reason: why, voice, persona: persona.id });
+    this.beginLive(null, why, voice, persona);
+    const sb = new PrimarySession({
+      url: `${wssBase(this.base)}/live/sessions`, apiKey, start,
+      WebSocketImpl: this.WebSocketImpl, clock: this.clock, log: this.log, counters: this.counters, debug: this.debug,
+    });
+    this.sideband = sb;
+    sb.primary = true;
+    sb.startReason = reason; // native-session.js: a reconnect or wake keeps "heard" (lib.createHearingMonitor)
+    sb.on("ready", (r) => this.onSidebandReady(sb, why, r));
+    sb.on("event", (evt) => this.onLiveEvent(sb, evt));
+    sb.on("session_closed", (r) => this.onSessionClosed(sb, r));
+    sb.on("append_failed", (f) => this.onAppendFailed(sb, f));
+    sb.on("lost", (info) => { this.onPrimaryLost(sb, info).catch((e) => this.log.error("live.lost_error", { message: String(e && e.message) })); });
+    this.native?.bindSession(sb);
+    sb.connect();
     this.changed();
-    return { status: 201, body: { session_id: res.id, sdp: res.sdp } };
+    return { ok: true };
+  }
+
+  /**
+   * The primary socket closed without session.closed. Before session.started
+   * it is a start failure (handshake refused, bad config): the key is checked
+   * once to tell a rejected key from an OpenAI problem, and voice pauses.
+   * After it, the session is lost: reconnect with the usual limiter.
+   */
+  async onPrimaryLost(sb, { code, started, error } = {}) {
+    if (this.sideband !== sb) return;
+    this.sideband = null;
+    this.native?.sessionGone(sb, "session_end");
+    if (started) { this.reconnect("primary_lost"); return; }
+    this.stopLiveTimers();
+    this.live = null;
+    let lastCode = "openai_error";
+    let message = error?.message ? `OpenAI refused the voice session: ${truncate(error.message, 200)}` : `Could not start the voice session with OpenAI (socket closed${code ? ` ${code}` : ""}).`;
+    const apiKey = this.getApiKey();
+    if (apiKey) {
+      const v = await validateKey({ base: this.base, key: apiKey, fetchImpl: this.fetchImpl, clock: this.clock });
+      this.log.info("session.start_failed", { code, key_ok: v.ok, key_code: v.code || null, error_code: error?.code || null });
+      if (!v.ok && (v.code === "invalid_key" || v.code === "key_forbidden" || v.code === "no_model_access")) { lastCode = "openai_auth"; message = v.message; }
+      else if (!v.ok && v.code === "rate_limited") { lastCode = "openai_rate_limit"; message = v.message; }
+    }
+    if (this.sideband || this.state === "off" || this.state === "closing") return;
+    this.setLastError(lastCode, message);
+    this.notice("error", lastCode, message);
+    if (this.owner) this.setState("paused");
+  }
+
+  /** The app is the audio client now (NativeController.attach, after hello). */
+  onAppAttached() {
+    this.audioClient = "app";
+    this.clear("appRestore");
+    const restoring = this.awaitApp;
+    this.awaitApp = false;
+    const sb = this.sideband;
+    if (sb && !sb.primary) {
+      // A page holds the session (WebRTC): it hands the voice to the app.
+      this.log.info("native.took_over", { state: this.state });
+      this.sse.broadcast({ type: "command", command: "disconnect", reason: "app_took_over" });
+      this.sse.broadcast({ type: "notice", level: "info", code: "app_took_over", text: "Voice is in the Sotto app." });
+      this.sideband = null;
+      this.stopLiveTimers();
+      sb.close(3000).catch(() => {});
+      this.live = null;
+      this.speech.suspend();
+      this.setState("reconnecting");
+      this.startNativeSession("reconnect");
+      return;
+    }
+    if (!this.owner) { this.changed(); return; }
+    if (!this.sideband && (this.state === "waiting_page" || this.state === "reconnecting")) {
+      this.startNativeSession(this.state === "reconnecting" || restoring ? "reconnect" : "start");
+      return;
+    }
+    this.changed();
+  }
+
+  /** The app link closed. With a session it keeps running on silence until the grace period ends (pacer). */
+  onAppDetached() { this.changed(); }
+
+  /** The app was gone longer than the grace period (§4.4): pause; a page that connects later works as today. */
+  onAppGone() {
+    this.log.info("native.app_gone", { state: this.state, audio_client: this.audioClient });
+    // The voice already moved to a page (a silent-mic swap to Chrome): nothing to pause.
+    if (this.audioClient !== "app") { this.changed(); return; }
+    this.audioClient = null;
+    if (this.sideband?.primary || this.state === "connecting" || this.state === "live" || this.state === "reconnecting") this.pause("app_gone");
+    else this.changed();
+  }
+
+  /** cmd mute from the app: the primary session's input mute (§3.3). */
+  setMuted(on) {
+    this.muteWanted = !!on;
+    const sb = this.sideband;
+    // Before session.started the new session applies it on ready (onSidebandReady).
+    if (sb && sb.state !== "closed" && sb.ready) {
+      sb.send(on ? "session.input_audio.mute" : "session.input_audio.unmute");
+      if (this.live) this.live.muted = !!on;
+    }
+    this.changed();
+    return { muted: !!on };
+  }
+
+  /** cmd resume / wake (a user tap) from the app. */
+  resumeFromApp(reason = "resume") {
+    if (!this.owner || this.state === "off" || this.state === "closing") return { ok: false, code: "not_active", message: "Voice is not on. Run /talk on in Claude Code." };
+    if (this.capReached()) return { ok: false, code: "daily_cap", message: `Daily voice cap reached (${this.config.daily_cap_minutes} min).` };
+    if (this.sideband || this.state === "connecting" || this.state === "live") return { ok: true };
+    this.startNativeSession(reason);
+    return { ok: true };
+  }
+
+  /** cmd open_browser: drop the app as audio client and open the Chrome page (manual fallback). */
+  openBrowserFromApp() {
+    this.log.info("native.open_browser", { state: this.state });
+    this.audioClient = null;
+    const hadSession = !!this.sideband || this.state === "connecting" || this.state === "live" || this.state === "reconnecting";
+    const done = () => {
+      if (this.owner && this.state !== "off" && this.state !== "closing") {
+        this.setState("waiting_page");
+        this.timer("waitingPage", () => this.onPageTimeout(), WAITING_PAGE_MS);
+      }
+      return this.chrome.open({ want: "chrome" });
+    };
+    if (hadSession) {
+      this.clear("nativeRetry");
+      return this.closeLive(3000, "session_end").then(done);
+    }
+    return Promise.resolve(done());
+  }
+
+  /** Mac sleep (app `system {event:"sleep"}`): a graceful close; sleeping, or paused with wake off (§3.2). */
+  onSystemSleep() {
+    this.log.info("native.system_sleep", { state: this.state });
+    if (!this.owner) return;
+    if (this.sideband || this.state === "live" || this.state === "connecting" || this.state === "reconnecting") {
+      this.pause("mac_sleep", { sleep: this.config.wake_sensitivity !== "off" });
+    }
   }
 
   /**
@@ -1614,6 +1840,12 @@ export class Voice {
   onSidebandReady(sb, reason, { expires_at }) {
     if (this.sideband !== sb || !this.live) return;
     if (expires_at) this.live.expires_at = expires_at;
+    if (sb.primary) {
+      // The primary socket learns its session id from session.started.
+      this.live.id = sb.id;
+      if (sb.id && !this.usageSeen.has(sb.id)) this.usageSeen.set(sb.id, 0);
+      if (this.muteWanted) { sb.send("session.input_audio.mute"); this.live.muted = true; }
+    }
     this.liveStartedAt = this.clock.now();
     this.setState("live");
     // The voice changed while this session was being created: switch again
@@ -1734,10 +1966,11 @@ export class Voice {
   }
 
   /** Graceful close of the current Live session (§6.11). */
-  async closeLive(timeoutMs = 15000) {
+  async closeLive(timeoutMs = 15000, flushReason = "session_end") {
     this.stopLiveTimers();
     const sb = this.sideband;
     this.sideband = null;
+    if (sb) this.native?.sessionGone(sb, flushReason);
     if (sb) {
       const r = await sb.close(timeoutMs);
       if (!r.confirmed) this.log.warn("session.finalization_unconfirmed", { live_id: sb.id });
@@ -1756,7 +1989,8 @@ export class Voice {
     this.log.info(reason === "idle" ? "idle.close" : "pause", { reason, sleep, detail });
     this.pauseReason = reason;
     if (reason !== "idle") this.governor.onEnd();
-    await this.closeLive();
+    this.clear("nativeRetry");
+    await this.closeLive(15000, sleep ? "sleep" : "pause");
     if (this.state === "off" || this.state === "closing" || !this.owner) return;
     if (this.sideband) return; // a new session started meanwhile
     this.setState(sleep ? "sleeping" : "paused");
@@ -1769,7 +2003,7 @@ export class Voice {
    */
   goToSleep(why) {
     this.governor.onSleep(why);
-    const sleep = this.config.wake_sensitivity !== "off" && this.sse.count > 0;
+    const sleep = this.config.wake_sensitivity !== "off" && this.hasListener();
     return this.pause("idle", { sleep, detail: why });
   }
 
@@ -1867,7 +2101,7 @@ export class Voice {
       // Part of the user's turn: the delegation text (built from user
       // fragments) must include these words, ahead of anything heard live.
       this.transcript.prepend("user", text);
-      this.sse.broadcast({ type: "wake_heard", text });
+      this.emitPage({ type: "wake_heard", text });
     }
     this.deliver({ kind: "instructions", content: wakeInstruction(text), delegationId: null });
     this.log.info("wake.inject", { via, chars: text ? text.length : 0 });
@@ -1901,7 +2135,7 @@ export class Voice {
     this.log.info("reconnect", { reason: "expiry" });
     this.speech.suspend();
     this.setState("reconnecting");
-    await this.closeLive(3000);
+    await this.closeLive(3000, "session_end");
     if (this.state !== "reconnecting") return;
     this.requestReconnect("expiry");
   }
@@ -1912,7 +2146,22 @@ export class Voice {
    * "reconnecting" state), and if nothing starts a session within 30 s,
    * pause with a notice instead of sitting in "reconnecting" forever.
    */
-  requestReconnect(reason) {
+  requestReconnect(reason, { delayMs = 0 } = {}) {
+    if (this.audioClient === "app" && (this.native?.connected || this.awaitApp)) {
+      // Native app: the daemon starts the replacement itself (docs/NATIVE.md §4.2).
+      if (this.native?.connected) {
+        const go = () => { if (this.state === "reconnecting" && !this.sideband) this.startNativeSession("reconnect"); };
+        if (delayMs > 0) this.timer("nativeRetry", go, delayMs); else go();
+      }
+      this.timer("reconnectWatch", () => {
+        if (this.state !== "reconnecting" || this.sideband) return;
+        this.log.warn("reconnect.timeout", { reason });
+        this.setLastError("connection_lost", "The voice connection did not come back");
+        this.setState("paused");
+        this.notice("warn", "connection_lost", "The voice connection dropped and did not come back, so voice is paused. Resume when ready.");
+      }, RECONNECT_WATCH_MS);
+      return;
+    }
     this.command("reconnect", reason);
     // A page between event-stream retries comes back within a few seconds and
     // then connects on its own (it sees "reconnecting"); only open a window if
@@ -1938,6 +2187,7 @@ export class Voice {
     this.reconnects = this.reconnects.filter((t) => now - t < RECONNECT_WINDOW_MS);
     const old = this.sideband;
     this.sideband = null;
+    if (old) this.native?.sessionGone(old, "session_end");
     this.stopLiveTimers();
     if (old) old.close(3000).catch(() => {});
     this.live = null;
@@ -1953,7 +2203,7 @@ export class Voice {
     this.log.info("reconnect", { reason, attempt: this.reconnects.length });
     this.speech.suspend();
     this.setState("reconnecting");
-    this.requestReconnect(reason);
+    this.requestReconnect(reason, { delayMs: NATIVE_RECONNECT_BACKOFF_MS[this.reconnects.length - 1] ?? 2000 });
   }
 
   onSessionClosed(sb, { reason, seconds }) {
@@ -1962,6 +2212,7 @@ export class Voice {
     if (this.sideband !== sb || sb.closing) return; // expected (we asked)
     // The server ended the session on its own.
     this.sideband = null;
+    this.native?.sessionGone(sb, "session_end");
     sb.shutdownSocket();
     this.stopLiveTimers();
     const wasLive = this.state === "live";
@@ -1992,7 +2243,10 @@ export class Voice {
     this.clear("exit");
     this.setState("closing");
     if (reason === "shutdown") this.timer("hardExit", () => this.onExit("shutdown_timeout"), 16000);
-    await this.closeLive();
+    this.clear("nativeRetry");
+    this.clear("appRestore");
+    this.awaitApp = false;
+    await this.closeLive(15000, "off");
     if (gen !== this.offGen) return; // re-bound while closing
     this.delegation.orphanAll();
     this.delegation.resetClaudeState(); // a later /talk on may be another session
@@ -2004,6 +2258,7 @@ export class Voice {
     this.voiceSwitch = null;
     this.personaSwitch = null;
     this.awaiting = null;
+    this.muteWanted = false;
     this.mirror.dispose();
     this.wakeQueue = [];
     this.governor.onEnd();
@@ -2082,9 +2337,10 @@ export class Voice {
     this.clear("waitingPage");
     // Unsent words go to Claude now: the successor starts a new timeline (§6.18).
     if (this.owner) this.mirror.flush("restart");
+    this.clear("nativeRetry");
     if (this.sideband || this.live) {
       this.command("disconnect", "update");
-      await this.closeLive(3000);
+      await this.closeLive(3000, "session_end");
     } else {
       this.stopLiveTimers();
     }
@@ -2127,6 +2383,9 @@ export class Voice {
       last_error: this.lastError,
       pause_reason: this.pauseReason || null,
       window_app: !!this.chrome?.appLaunched,
+      // The native app carried the audio (docs/NATIVE.md §4.4): the successor waits for its hello.
+      audio_client: this.appAttached() ? "app" : this.audioClient === "page" ? "page" : null,
+      muted: !!this.muteWanted,
       awaiting: this.awaiting ? { ...this.awaiting } : null,
       // The page shows the key card: a paused first run (no key yet) keeps it.
       key_setup: !!this.keySetup,
@@ -2170,7 +2429,23 @@ export class Voice {
     const manual = snap.reason === "manual";
     this.helloNotice = { level: "info", code: "updated", text: manual ? "Sotto restarted." : "Sotto updated itself to the latest code." };
     this.log.info("update.restore", { resume: snap.resume, reason: snap.reason, project: this.owner.project, history: this.transcript.history.length });
-    if (snap.resume === "live") {
+    this.muteWanted = snap.muted === true;
+    if (snap.audio_client === "app") this.audioClient = "app";
+    if (snap.resume === "live" && snap.audio_client === "app") {
+      // The app reconnects to the successor (close 4005, then re-bootstrap):
+      // its hello starts the session (onAppAttached). No app within 10 s:
+      // fall back to the page path.
+      this.updateCue = true;
+      this.awaitApp = true;
+      this.setState("reconnecting");
+      this.timer("appRestore", () => {
+        if (!this.awaitApp) return;
+        this.awaitApp = false;
+        this.log.warn("update.app_missing", {});
+        this.audioClient = null;
+        if (this.state === "reconnecting" && !this.sideband) this.requestReconnect("update");
+      }, APP_RESTORE_WAIT_MS);
+    } else if (snap.resume === "live") {
       // Spoken only when the user was talking with it (not asleep, not paused).
       this.updateCue = true;
       this.setState("reconnecting");

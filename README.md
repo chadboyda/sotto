@@ -97,14 +97,14 @@ In the voice window: **M** (or Space) mutes and unmutes, **Space** resumes after
 
 ### Desktop app
 
-On macOS the voice window is a small native app, **Sotto**: a menu-bar icon plus a floating panel that shows the same voice page as the Chrome window. It stays on top on every Space without taking focus from your terminal.
+On macOS the voice window is a small native app, **Sotto** (SwiftUI, native Core Audio): a menu-bar icon plus a floating panel with the same states and controls as the Chrome page. It stays on top on every Space without taking focus from your terminal. The app only carries audio and shows state; the daemon holds the Live session, so the Chrome page remains a drop-in fallback (`/talk window chrome`).
 
 - **How it gets installed.** Claude Code installs a plugin as a plain copy of this git repository, and we don't commit compiled apps to git. So the plugin fetches the app itself, the first time you use it:
   - **The first `/talk` starts the install in the background.** It downloads the signed app for this plugin version from the [GitHub releases](https://github.com/chadboyda/sotto/releases): about 350 KB, universal, signed with a Developer ID and notarized by Apple. That takes a few seconds, and the voice window waits for it (up to 15 s), so the first `/talk` normally opens the app already. If the install takes longer, this `/talk` uses Chrome and the next one opens the app.
   - **Or run `/talk app`.** It installs the app if it is missing (or retries a failed install), opens the voice in it, and saves `window` = `app`.
-  - **What gets checked.** The download is installed only if its sha256 matches, it was built from this plugin's `app/` sources, it is code-signed by team 6M6D2W72ZB and Gatekeeper accepts its notarization.
-  - **When the plugin builds it instead.** If you edited `app/`, or there is no release for this version, the plugin builds the app locally. That takes 10 to 20 s and needs Xcode or the Command Line Tools (`xcode-select --install`).
-  - **Where it goes.** The app lives in the plugin data directory (`app/Sotto.app`) and is replaced when the plugin's `app/` sources change. Every step is logged to `logs/app-build.log`.
+  - **What gets checked.** The download is installed only if its sha256 matches, it was built from this plugin's `app-native/` sources, it is code-signed by team 6M6D2W72ZB and Gatekeeper accepts its notarization.
+  - **When the plugin builds it instead.** If you edited `app-native/`, or there is no release for this version, the plugin builds the app locally. That takes 10 to 20 s and needs Xcode or the Command Line Tools (`xcode-select --install`).
+  - **Where it goes.** The app lives in the plugin data directory (`app/Sotto.app`) and is replaced when the plugin's `app-native/` sources change. Every step is logged to `logs/app-build.log`.
   - **If it fails.** `/talk`, `/talk status` and the voice window say "Desktop app couldn't be installed: <reason>", and voice uses Chrome. `SOTTO_APP_DOWNLOAD=0` skips the download and always builds locally.
 - **First app launch:** macOS asks "Sotto would like to access the microphone". Click **Allow** once. If you clicked Don't Allow, turn it on in System Settings → Privacy & Security → Microphone → Sotto.
 - **Menu-bar icon:** shows off, connecting, paused, sleeping, listening, you speaking, Sotto speaking, Claude working, muted, or a warning. Its menu has Show/Hide Panel, Compact Panel (a small pill with a mute button), Mute, Voice Off, Open Logs, and Quit.
@@ -363,7 +363,7 @@ npm run hooks:install  # use .githooks/pre-commit (tests + validate + secret sca
 npm run release:app -- 0.2.0 [--upload]  # maintainers: universal Developer ID build, notarize, staple, zip + sha256 into dist/
 ```
 
-**Releasing the desktop app** (maintainers): bump the version in `package.json`, `.claude-plugin/plugin.json`, `app/Info.plist` and `daemon/config.js` together (a unit test checks they agree), commit, then run `npm run release:app -- <version>`. It needs the Developer ID Application certificate in the login keychain and a notarytool profile named `sotto` (`xcrun notarytool store-credentials sotto --apple-id ... --team-id 6M6D2W72ZB`). It submits the build to Apple and waits (a minute or so), staples the ticket, and leaves `dist/Sotto.zip`, `dist/Sotto.zip.sha256` and `dist/release.json`. Push the tag `v<version>`, then rerun with `--upload` (or `gh release create v<version> dist/Sotto.zip dist/Sotto.zip.sha256`). The release must be built from the tagged commit: the plugin only installs a release whose `app/` sources hash equals its own.
+**Releasing the desktop app** (maintainers): bump the version in `package.json`, `.claude-plugin/plugin.json`, `app-native/Bundle/Info.plist` and `daemon/config.js` together (a unit test checks they agree), commit, then run `npm run release:app -- <version>`. It needs the Developer ID Application certificate in the login keychain and a notarytool profile named `sotto` (`xcrun notarytool store-credentials sotto --apple-id ... --team-id 6M6D2W72ZB`). It submits the build to Apple and waits (a minute or so), staples the ticket, and leaves `dist/Sotto.zip`, `dist/Sotto.zip.sha256` and `dist/release.json`. Push the tag `v<version>`, then rerun with `--upload` (or `gh release create v<version> dist/Sotto.zip dist/Sotto.zip.sha256`). The release must be built from the tagged commit: the plugin only installs a release whose `app-native/` sources hash equals its own.
 
 `npm run e2e` runs the real product with a stand-in for Claude:
 

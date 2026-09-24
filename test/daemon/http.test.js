@@ -46,7 +46,7 @@ test("healthz shape and no-store", async (t) => {
   assert.equal(r.headers["access-control-allow-origin"], undefined);
   assert.equal(r.headers["x-frame-options"], "DENY");
   assert.equal(r.headers["x-content-type-options"], "nosniff");
-  assert.deepEqual(r.json, { ok: true, name: "sotto", version: "0.2.2", pid: process.pid, port: h.port, data_dir: h.dataDir, plugin_root: h.pluginRoot, state: "off", api_key: true });
+  assert.deepEqual(r.json, { ok: true, name: "sotto", version: "0.3.0", pid: process.pid, port: h.port, data_dir: h.dataDir, plugin_root: h.pluginRoot, state: "off", api_key: true });
 });
 
 test("421 on a bad Host header", async (t) => {
@@ -108,7 +108,9 @@ test("/status is the full Status object", async (t) => {
   const h = await server(t);
   await h.req({ method: "POST", path: "/control", body: { action: "on", session: SESSION(), config: {} }, headers: h.key });
   const s = (await h.req({ path: "/status", headers: h.key })).json;
-  assert.deepEqual(Object.keys(s), ["state", "owner", "live", "today", "config", "claude", "page", "delegations", "counters", "last_error", "wake", "api_key", "echo"]);
+  assert.deepEqual(Object.keys(s), ["state", "owner", "live", "today", "config", "claude", "page", "delegations", "counters", "last_error", "wake", "api_key", "echo", "audio_client", "native"]);
+  assert.equal(s.audio_client, null);
+  assert.equal(s.native.connected, false, "the native app link (docs/NATIVE.md)");
   assert.deepEqual(Object.keys(s.counters), ["delegations", "inbox_sent", "inbox_failed", "thinking_sent", "commentary_sent", "instructions_sent", "appends_acked", "appends_failed", "hooks", "sessions_created", "mirror_sent", "mirror_failed", "echo_guard_on", "echo_heard"]);
   assert.equal(s.live, null);
   assert.equal(s.owner.project, "proj-a");
@@ -169,7 +171,7 @@ test("bootstrap returns the page token; SSE requires it and sends status first",
   const h = await server(t);
   const b = (await h.req({ path: "/api/bootstrap", headers: { "X-Sotto-Boot": h.d.pageSecret } })).json;
   assert.equal(b.page_token, h.d.pageToken);
-  assert.equal(b.version, "0.2.2");
+  assert.equal(b.version, "0.3.0");
   assert.match(b.build, /^[0-9a-f]{16}$/, "web/ build hash (the page reloads when it changes, §6.17)");
   assert.equal(b.port, h.port);
   assert.equal(b.status.state, "off");

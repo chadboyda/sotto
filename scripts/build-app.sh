@@ -1,6 +1,7 @@
 #!/bin/bash
-# Build the Sotto desktop app (SPEC §6.16) from app/ into the plugin data
-# dir. Incremental: does nothing when the sources hash matches the last build.
+# Build the native Sotto desktop app (SPEC §6.16, docs/NATIVE.md §5.5) from
+# the SwiftPM package app-native/ into the plugin data dir. Incremental: does
+# nothing when the sources hash matches the last build.
 #
 #   scripts/build-app.sh [--out DIR] [--force] [--check] [--quiet] [--universal]
 #
@@ -17,15 +18,20 @@
 # bundle id, so a rebuild keeps the same requirement for the microphone (TCC)
 # grant. SOTTO_SIGN_IDENTITY="Developer ID Application: ..." signs with a real
 # identity instead, with the hardened runtime, a secure timestamp and
-# app/Sotto.entitlements (microphone only), as notarization requires.
+# app-native/Bundle/Sotto.entitlements (microphone only), as notarization requires.
 #
 # The bundle carries Contents/Resources/sotto-source.json ({"hash","version"}):
 # the plugin only adopts a downloaded release whose hash equals its own app
 # sources hash (daemon/appfetch.js, SPEC §6.16 "Release download").
 #
 # The sources hash (also computed by daemon/window.js, keep them in sync):
-# sha256 over, for each file of app/** plus scripts/build-app.sh sorted by
-# path (C locale): "<path relative to the plugin root>\n<sha256 hex>\n".
+# sha256 over, for each file of app-native/** (minus any .build/ and .swiftpm/
+# directory and .DS_Store) plus scripts/build-app.sh sorted by path (C
+# locale): "<path relative to the plugin root>\n<sha256 hex>\n".
+#
+# SwiftPM's scratch directory lives in the output dir (OUT/.swiftpm-build),
+# never in the plugin: an installed plugin stays clean (and may be read-only),
+# and a build never looks like a source change to the self-update (SPEC §6.17).
 set -uo pipefail
 export LC_ALL=C
 
@@ -60,7 +66,7 @@ say() { [[ $QUIET -eq 1 ]] || printf 'build-app: %s\n' "$*"; }
 source_hash() {
   (
     cd "$ROOT" || exit 1
-    { find app -type f ! -name .DS_Store; echo scripts/build-app.sh; } | sort | while IFS= read -r f; do
+    { find app-native \( -name .build -o -name .swiftpm \) -prune -o -type f ! -name .DS_Store -print; echo scripts/build-app.sh; } | sort | while IFS= read -r f; do
       printf '%s\n%s\n' "$f" "$(shasum -a 256 < "$f" | cut -d' ' -f1)"
     done | shasum -a 256 | cut -d' ' -f1
   )
@@ -103,42 +109,43 @@ fail() {
 
 [[ "$(uname -s)" == Darwin ]] || fail "the desktop app needs macOS"
 # `xcode-select -p` fails quietly when no developer tools are installed; the
-# /usr/bin/swiftc shim would instead pop up the install dialog, so check first.
+# /usr/bin/swift shim would instead pop up the install dialog, so check first.
 xcode-select -p >/dev/null 2>&1 || fail "no Xcode or Command Line Tools (xcode-select --install)"
-SWIFTC="$(xcrun --find swiftc 2>/dev/null)" || fail "swiftc not found (xcrun --find swiftc)"
-[[ -x "$SWIFTC" ]] || fail "swiftc not found"
-SWIFT_VERSION="$("$SWIFTC" --version 2>/dev/null | head -n1)"
+SWIFT="$(xcrun --find swift 2>/dev/null)" || fail "swift not found (xcrun --find swift)"
+[[ -x "$SWIFT" ]] || fail "swift not found"
+SWIFT_VERSION="$("$SWIFT" --version 2>/dev/null | grep -m1 -o 'Apple Swift version [^ ]*' || "$SWIFT" --version 2>/dev/null | head -n1)"
+PKG="$ROOT/app-native"
+BUNDLE_SRC="$PKG/Bundle"
+[[ -f "$PKG/Package.swift" ]] || fail "no app-native/Package.swift"
 
 say "building $APP_NAME ($SWIFT_VERSION)"
 T0=$SECONDS
 C="$STAGE/$APP_NAME/Contents"
 mkdir -p "$C/MacOS" "$C/Resources" || fail "cannot create $STAGE"
-SDK="$(xcrun --sdk macosx --show-sdk-path 2>/dev/null)"
-SOURCES=()
-while IFS= read -r f; do SOURCES+=("$f"); done < <(find "$ROOT/app/Sources" -name '*.swift' | sort)
-[[ ${#SOURCES[@]} -gt 0 ]] || fail "no Swift sources in app/Sources"
+SCRATCH="$OUT/.swiftpm-build"
 
 if [[ $UNIVERSAL -eq 1 ]]; then ARCHS=(arm64 x86_64); else ARCHS=("$(uname -m)"); fi
-SLICES=()
-for arch in "${ARCHS[@]}"; do
-  out="$C/MacOS/$EXE_NAME"
-  [[ ${#ARCHS[@]} -gt 1 ]] && out="$STAGE/$EXE_NAME.$arch"
-  if ! "$SWIFTC" -O -swift-version 5 ${SDK:+-sdk "$SDK"} -target "$arch-apple-macos13.0" \
-      -module-name Sotto -framework AppKit -framework WebKit -framework Carbon -framework CoreAudio -framework AudioToolbox -framework AVFoundation \
-      -o "$out" "${SOURCES[@]}" > "$STAGE/swiftc.log" 2>&1; then
-    cat "$STAGE/swiftc.log" >&2
-    fail "swiftc failed for $arch (see the output above)"
-  fi
-  SLICES+=("$out")
-done
-if [[ ${#ARCHS[@]} -gt 1 ]]; then
-  xcrun lipo -create -output "$C/MacOS/$EXE_NAME" "${SLICES[@]}" > "$STAGE/lipo.log" 2>&1 \
-    || { cat "$STAGE/lipo.log" >&2; fail "lipo failed"; }
+ARCH_ARGS=()
+for arch in "${ARCHS[@]}"; do ARCH_ARGS+=(--arch "$arch"); done
+# -Xswiftc -gnone: no debug info in the shipped binary (smaller, no local paths).
+SWIFT_ARGS=(build -c release --package-path "$PKG" --scratch-path "$SCRATCH" --product "$EXE_NAME" "${ARCH_ARGS[@]}" -Xswiftc -gnone)
+if ! "$SWIFT" "${SWIFT_ARGS[@]}" > "$STAGE/swift-build.log" 2>&1; then
+  tail -n 60 "$STAGE/swift-build.log" >&2
+  fail "swift build failed for ${ARCHS[*]} (see the output above)"
 fi
-cp "$ROOT/app/Info.plist" "$C/Info.plist" || fail "Info.plist missing"
+BIN_DIR="$("$SWIFT" "${SWIFT_ARGS[@]}" --show-bin-path 2>/dev/null)"
+[[ -x "$BIN_DIR/$EXE_NAME" ]] || fail "swift build produced no $EXE_NAME in $BIN_DIR"
+cp "$BIN_DIR/$EXE_NAME" "$C/MacOS/$EXE_NAME" || fail "copying the executable failed"
+if [[ ${#ARCHS[@]} -gt 1 ]]; then
+  got="$(xcrun lipo -archs "$C/MacOS/$EXE_NAME" 2>/dev/null)"
+  for arch in "${ARCHS[@]}"; do [[ " $got " == *" $arch "* ]] || fail "the executable lacks $arch (has: $got)"; done
+fi
+cp "$BUNDLE_SRC/Info.plist" "$C/Info.plist" || fail "Info.plist missing"
 printf 'APPL????' > "$C/PkgInfo"
-cp -R "$ROOT/app/Resources/." "$C/Resources/" || fail "copying resources failed"
-APP_VERSION="$(/usr/bin/plutil -extract CFBundleShortVersionString raw -o - "$ROOT/app/Info.plist" 2>/dev/null)"
+if [[ -d "$BUNDLE_SRC/Resources" ]]; then
+  cp -R "$BUNDLE_SRC/Resources/." "$C/Resources/" || fail "copying resources failed"
+fi
+APP_VERSION="$(/usr/bin/plutil -extract CFBundleShortVersionString raw -o - "$BUNDLE_SRC/Info.plist" 2>/dev/null)"
 printf '{"hash":"%s","version":%s}\n' "$HASH" "$(json_str "$APP_VERSION")" > "$C/Resources/sotto-source.json" \
   || fail "cannot write sotto-source.json"
 
@@ -149,7 +156,7 @@ if [[ "$IDENTITY" == "-" ]]; then
     || { cat "$STAGE/codesign.log" >&2; fail "codesign (ad hoc) failed"; }
 else
   codesign --force --sign "$IDENTITY" --identifier "$BUNDLE_ID" --options runtime --timestamp \
-    --entitlements "$ROOT/app/Sotto.entitlements" "$STAGE/$APP_NAME" > "$STAGE/codesign.log" 2>&1 \
+    --entitlements "$BUNDLE_SRC/Sotto.entitlements" "$STAGE/$APP_NAME" > "$STAGE/codesign.log" 2>&1 \
     || { cat "$STAGE/codesign.log" >&2; fail "codesign with $IDENTITY failed"; }
 fi
 
