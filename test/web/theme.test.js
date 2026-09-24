@@ -76,9 +76,9 @@ test("no flash: a stored choice is on <html> before <body> exists; System follow
     assert.equal(await bg(), want, `OS ${os}, stored ${stored}: page background`);
   }
   // System: an OS change applies live, with no reload.
+  // (The emulated OS change reaches the renderer asynchronously: poll briefly.)
   await page.send("Emulation.setEmulatedMedia", { features: [{ name: "prefers-color-scheme", value: "dark" }] });
-  await page.frames();
-  assert.equal(await bg(), DARK);
+  assert.ok(await until(async () => (await bg()) === DARK, 5000), `System follows the OS to dark: ${await bg()}`);
   // A forced Light ignores the OS change.
   await page.eval(`document.documentElement.setAttribute("data-theme", "light"), true`);
   await page.frames();
