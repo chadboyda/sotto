@@ -316,7 +316,7 @@ test("SubagentStop: the parent speaks for its agents; an unexplained finish is o
   hook("SubagentStop", { agent_id: "a2", agent_type: "general-purpose", last_assistant_message: "there are 3 files.", background_tasks: [{ id: "a2", type: "subagent", status: "running", description: "count files" }] });
   await h.clock.advance(AGENT_DONE_MS);
   // The parent is idle and said nothing about them: one short line, no agent details spoken.
-  assert.deepEqual(appends(ws, "commentary").map((e) => e.content), ["2 background agents finished."]);
+  assert.deepEqual(appends(ws, "commentary").map((e) => e.content).filter((c) => /background agents? finished/.test(c)), []); // hotfix: never spoken
   assert.ok(appends(ws, "thinking").some((e) => /The "count files" agent: there are 3 files\./.test(e.content)));
   assert.ok(!appends(ws, "thinking").some((e) => /suggestion/.test(e.content)));
   assert.equal(h.voice.status().claude.busy, false, "subagent stops never mark Claude busy");
@@ -324,7 +324,7 @@ test("SubagentStop: the parent speaks for its agents; an unexplained finish is o
   hook("UserPromptSubmit", { prompt: "typed task", prompt_id: "p9" });
   hook("SubagentStop", { agent_id: "a3", agent_type: "Explore", last_assistant_message: "Done." });
   await h.clock.advance(AGENT_DONE_MS);
-  assert.equal(appends(ws, "commentary").length, 1);
+  assert.equal(appends(ws, "commentary").length, 0); // hotfix: bare agent counts are silent context only
 });
 
 test("subagent events stay out of the card and the voice; they only count as background agents", async (t) => {

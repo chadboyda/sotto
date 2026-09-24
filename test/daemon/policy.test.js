@@ -239,7 +239,7 @@ test("background agent done: 'A background agent finished.' only when the parent
   n.onAgentDone("The Explore agent: Found 12 endpoints.");
   n.onAgentDone("");
   await clock.advance(AGENT_DONE_MS);
-  assert.deepEqual(out.filter((a) => a.kind === "commentary").map((a) => a.content), ["2 background agents finished."]);
+  assert.deepEqual(out.filter((a) => a.kind === "commentary").map((a) => a.content), []); // hotfix: bare counts are never spoken
   assert.ok(out.some((a) => a.kind === "thinking" && a.content.includes("Found 12 endpoints")));
   // The parent is mid-turn (it will summarize): context only.
   ({ clock, out, n } = narrator("milestones"));
