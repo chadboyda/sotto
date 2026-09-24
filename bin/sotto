@@ -1,10 +1,12 @@
 #!/bin/bash
 # sotto CLI (SPEC §5.9). Claude Code adds a plugin's bin/ to the Bash
 # tool's PATH, so Claude can run this when the user asks, by voice, for a
-# different voice (the voice model cannot change its own voice):
+# different voice or persona (the voice model cannot change its own):
 #
 #   sotto voice            list the voices, current one marked
 #   sotto voice <name>     set the voice (switches a live session now)
+#   sotto persona          list the personas, current one marked
+#   sotto persona <name>   set the persona (switches a live session now)
 #   sotto status           same as /talk status
 #   sotto restart          same as /talk restart (reload the daemon's code)
 #   sotto window [mode]    same as /talk window (auto, app or chrome)
@@ -26,12 +28,13 @@ done
 ROOT="$(cd "${SELF%/*}/.." && pwd)"
 
 usage() {
-  printf 'usage: sotto voice [name] | sotto status | sotto restart | sotto window [auto|app|chrome] | sotto app\n' >&2
+  printf 'usage: sotto voice [name] | sotto persona [name] | sotto status | sotto restart | sotto window [auto|app|chrome] | sotto app\n' >&2
   exit 2
 }
 
 case "$1" in
   voice|voices) ARGS="voice${2:+ $2}" ;;
+  persona|personas) ARGS="persona${2:+ $2}" ;;
   status)       ARGS="status" ;;
   restart)      ARGS="restart" ;;
   window|windows) ARGS="window${2:+ $2}" ;;
@@ -40,7 +43,7 @@ case "$1" in
   *) usage ;;
 esac
 # Only plain words reach the JSON below.
-[[ "$ARGS" =~ ^[A-Za-z0-9\ _-]+$ ]] || { printf 'sotto: unknown voice.\n'; exit 1; }
+[[ "$ARGS" =~ ^[A-Za-z0-9\ _-]+$ ]] || { [[ "$1" == persona* ]] && printf 'sotto: unknown persona.\n' || printf 'sotto: unknown voice.\n'; exit 1; }
 
 # --- data dir discovery -----------------------------------------------------------
 CANDS=()
@@ -96,7 +99,10 @@ PORT="${PORT%%[[:space:]]*}"
 # --- run the /talk handler --------------------------------------------------------
 ENVV=(CLAUDE_PLUGIN_DATA="$D" CLAUDE_PLUGIN_ROOT="$ROOT")
 [[ "$PORT" =~ ^[0-9]+$ ]] && ENVV+=(CLAUDE_PLUGIN_OPTION_PORT="$PORT")
-OUT="$(printf '{"hook_event_name":"UserPromptExpansion","command_name":"sotto:talk","command_args":"%s"}' "$ARGS" \
+# The working directory lets /talk persona find the project's own personas
+# (<project>/.claude/sotto-personas) when no voice session names the project.
+CWD_J="${PWD//\\/\\\\}"; CWD_J="${CWD_J//\"/\\\"}"; CWD_J="${CWD_J//[$'\001'-$'\037']/}"
+OUT="$(printf '{"hook_event_name":"UserPromptExpansion","command_name":"sotto:talk","command_args":"%s","cwd":"%s"}' "$ARGS" "$CWD_J" \
   | env "${ENVV[@]}" /bin/bash "$ROOT/scripts/toggle.sh")"
 
 re='"stopReason":"((\\.|[^"\\])*)"'
@@ -109,5 +115,5 @@ else
   MSG="sotto: ERROR no answer from the /talk handler."
 fi
 printf '%s\n' "$MSG"
-[[ "$MSG" == *"ERROR"* || "$MSG" == *"unknown voice"* || "$MSG" == *"usage:"* ]] && exit 1
+[[ "$MSG" == *"ERROR"* || "$MSG" == *"unknown voice"* || "$MSG" == *"unknown persona"* || "$MSG" == *"usage:"* ]] && exit 1
 exit 0

@@ -8,6 +8,7 @@ import { execFileSync } from "node:child_process";
 import { join } from "node:path";
 import { TOGGLE, ROOT, run, tempDir, rmDir, baseEnv, freePort, waitFor, isAlive, sleep, spawnBaseline } from "./helpers/run.js";
 import { startFakeDaemon } from "./helpers/fake-daemon.js";
+import { BUILTIN_PERSONAS, personaListMessage, unknownPersonaMessage, loadPersonas } from "../../daemon/personas.js";
 
 const STUB = join(ROOT, "test/scripts/helpers/stub-daemon.js");
 const SOCK = "/tmp/clv-toggle-test.sock";
@@ -158,7 +159,7 @@ describe("toggle.sh cold start", () => {
   test("bogus argument prints usage and never contacts the daemon", async () => {
     const { D, env } = await setup();
     const out = parseOut(await run(TOGGLE, { env, input: stdinFor("bogus") }));
-    assert.equal(out.stopReason, "sotto: usage: /talk [on|off|status|restart|quiet|milestones|walkthrough|voice [name]|app|window [auto|app|chrome]|key]");
+    assert.equal(out.stopReason, "sotto: usage: /talk [on|off|status|restart|quiet|milestones|walkthrough|voice [name]|persona [name]|app|window [auto|app|chrome]|key]");
     assert.ok(!existsSync(join(D, "daemon.pid")));
   });
 });
@@ -583,6 +584,93 @@ describe("toggle.sh /talk voice (SPEC §4.5)", () => {
     assert.equal(out.stopReason, "stub: voice");
     const bodies = controlBodies(D).slice(1);
     assert.deepEqual(bodies.map((b) => [b.action, b.voice]), [["voice", undefined], ["voice", "echo"]]);
+    assert.ok(!existsSync(join(D, "prefs.json")), "the daemon owns the write when it runs");
+  });
+});
+
+describe("toggle.sh /talk persona (SPEC §4.6)", () => {
+  const builtins = BUILTIN_PERSONAS.map((p) => ({ ...p, source: "builtin" }));
+
+  test("daemon down: the list matches daemon/personas.js exactly (ids, order, descriptions)", async () => {
+    const { D, env } = await setup();
+    for (const arg of ["persona", "PERSONAS"]) {
+      const out = parseOut(await run(TOGGLE, { env, input: stdinFor(arg) }));
+      assert.equal(out.stopReason, personaListMessage("sotto", builtins), arg);
+    }
+    await sleep(100);
+    assert.ok(!existsSync(join(D, "daemon.pid")));
+  });
+
+  test("the bash built-ins mirror the JS ones (id, voice, description)", () => {
+    const sh = readFileSync(TOGGLE, "utf8");
+    assert.equal(/^PERSONAS="([^"]+)"$/m.exec(sh)[1], BUILTIN_PERSONAS.map((p) => p.id).join(" "));
+    for (const p of BUILTIN_PERSONAS) {
+      const line = `${p.id})`.padEnd(6) + ` printf '%s' "${p.voice}|${p.description.replace(/\.$/, "")}" ;;`;
+      assert.ok(sh.includes(line), line);
+    }
+  });
+
+  test("daemon down: set saves persona and its voice; already; persona_voice false keeps the voice; window kept", async () => {
+    const { D, env } = await setup({ CLAUDE_PLUGIN_OPTION_VOICE: "sage" });
+    const prefs = () => JSON.parse(readFileSync(join(D, "prefs.json"), "utf8"));
+    parseOut(await run(TOGGLE, { env, input: stdinFor("window chrome") }));
+    let out = parseOut(await run(TOGGLE, { env, input: stdinFor("persona Moss") }));
+    assert.equal(out.stopReason, "sotto: persona set to moss with the cedar voice. It applies to the next voice session.");
+    assert.deepEqual(prefs(), { voice: "cedar", window: "chrome", persona: "moss" });
+    assert.equal(statSync(join(D, "prefs.json")).mode & 0o777, 0o600);
+    out = parseOut(await run(TOGGLE, { env, input: stdinFor("persona moss") }));
+    assert.equal(out.stopReason, "sotto: persona is already moss.");
+    out = parseOut(await run(TOGGLE, { env, input: stdinFor("persona") }));
+    assert.equal(out.stopReason, personaListMessage("moss", builtins));
+    // A voice or window change keeps the persona.
+    parseOut(await run(TOGGLE, { env, input: stdinFor("voice ballad") }));
+    assert.deepEqual(prefs(), { voice: "ballad", window: "chrome", persona: "moss" });
+    // The "use the persona's voice" toggle off: only the persona changes.
+    writeFileSync(join(D, "prefs.json"), '{"voice":"ballad","persona":"moss","persona_voice":false}\n');
+    out = parseOut(await run(TOGGLE, { env, input: stdinFor("persona tempo") }));
+    assert.equal(out.stopReason, "sotto: persona set to tempo. It applies to the next voice session.");
+    assert.deepEqual(prefs(), { voice: "ballad", persona: "tempo", persona_voice: false });
+    assert.ok(!existsSync(join(D, "daemon.pid")));
+  });
+
+  test("daemon down: custom personas from the data dir and the project, project first", async () => {
+    const proj = tempDir("clv-proj-");
+    const { D, env } = await setup({ CLAUDE_PROJECT_DIR: proj });
+    cleanups.push(() => rmDir(proj));
+    mkdirSync(join(D, "personas"), { recursive: true });
+    mkdirSync(join(proj, ".claude", "sotto-personas"), { recursive: true });
+    writeFileSync(join(D, "personas", "captain.md"), "---\nname: Captain\ndescription: Talks like a ship's captain.\nvoice: stone\n---\nYou are the captain.\n");
+    writeFileSync(join(D, "personas", "zed.md"), "---\ndescription: User zed\n---\nZed body.\n");
+    writeFileSync(join(proj, ".claude", "sotto-personas", "zed.md"), "---\ndescription: \"Project zed\"\nvoice: Willow\n---\nProject zed body.\n");
+    writeFileSync(join(proj, ".claude", "sotto-personas", "Bad Name.md"), "ignored");
+    const list = loadPersonas({ dataDir: D, projectDir: proj });
+    let out = parseOut(await run(TOGGLE, { env, input: stdinFor("persona") }));
+    assert.equal(out.stopReason, personaListMessage("sotto", list));
+    assert.match(out.stopReason, /captain \(Talks like a ship's captain\), zed \(Project zed\)\. Change it/);
+    out = parseOut(await run(TOGGLE, { env, input: stdinFor("persona zed") }));
+    assert.equal(out.stopReason, "sotto: persona set to zed with the willow voice. It applies to the next voice session.");
+    out = parseOut(await run(TOGGLE, { env, input: stdinFor("persona captain") }));
+    assert.equal(out.stopReason, "sotto: persona set to captain with the stone voice. It applies to the next voice session.");
+  });
+
+  test("unknown persona: lists the ids; nothing written", async () => {
+    const { D, env } = await setup();
+    let out = parseOut(await run(TOGGLE, { env, input: stdinFor("persona robot") }));
+    assert.equal(out.stopReason, unknownPersonaMessage("robot", BUILTIN_PERSONAS));
+    out = parseOut(await run(TOGGLE, { env, input: stdinFor('persona rob\\"ot') }));
+    assert.match(out.stopReason, /^sotto: unknown persona "robot"\. Personas: sotto, june, /);
+    assert.ok(!existsSync(join(D, "prefs.json")));
+  });
+
+  test("daemon up: /control gets action persona (+ persona when setting)", async () => {
+    const { D, env } = await setup();
+    parseOut(await run(TOGGLE, { env, input: stdinFor("on") }));
+    let out = parseOut(await run(TOGGLE, { env, input: stdinFor("persona") }));
+    assert.equal(out.stopReason, "stub: persona");
+    out = parseOut(await run(TOGGLE, { env, input: stdinFor("persona Pip") }));
+    assert.equal(out.stopReason, "stub: persona");
+    const bodies = controlBodies(D).slice(1);
+    assert.deepEqual(bodies.map((b) => [b.action, b.persona]), [["persona", undefined], ["persona", "pip"]]);
     assert.ok(!existsSync(join(D, "prefs.json")), "the daemon owns the write when it runs");
   });
 });

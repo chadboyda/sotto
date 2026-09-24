@@ -992,6 +992,10 @@ body[data-card="permission"][data-dial="small"] .stage { padding-top: 52px; }
 .field { display: grid; gap: var(--space-2); }
 .field-label { font-size: var(--text-small); font-weight: 600; color: var(--fg-2); }
 .field-help { font-size: var(--text-small); color: var(--fg-3); text-wrap: pretty; }
+/* Persona: "use the persona's voice" (a plain native checkbox, like the macOS controls). */
+.check-row { display: flex; align-items: center; gap: var(--space-2); font-size: var(--text-small); color: var(--fg-2); cursor: pointer; min-height: 28px; }
+.check-row input { width: 16px; height: 16px; margin: 0; flex: none; cursor: pointer; }
+.check-row input:disabled, .check-row input:disabled + * { cursor: default; }
 /* Pop-up buttons, as on macOS: a push-button surface with a chevron. */
 .field select {
   min-height: var(--hit-min);

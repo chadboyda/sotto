@@ -71,11 +71,13 @@ The symlink loads the plugin in place as `sotto@skills-dir`, so edits to the rep
 | `/talk` | Toggle voice for this session |
 | `/talk on` | Turn voice on here (or move it here from another session) |
 | `/talk off` | Turn voice off, from any session |
-| `/talk status` | State, owner project, minutes and cost today, voice, policy, last error |
+| `/talk status` | State, owner project, minutes and cost today, voice, persona, policy, last error |
 | `/talk restart` | Restart the voice daemon on the latest code at the next pause (see "Updates" below) |
 | `/talk quiet` / `milestones` / `walkthrough` | Change how much the voice narrates (see below) |
 | `/talk voice` | List the 22 voices, with the current one marked |
 | `/talk voice <name>` | Change the voice, for example `/talk voice cedar`. If voice is live, it switches right away (see below). The choice is saved and survives restarts. |
+| `/talk persona` | List the personas (built-in and your own), with the current one marked |
+| `/talk persona <name>` | Change the voice's personality, for example `/talk persona moss`. Switches right away if voice is live, and is saved like the voice (see [Personas](#personas)) |
 | `/talk app` | Use the Sotto desktop app: install it now if it is missing (or retry a failed install), open the voice in it, and remember the choice |
 | `/talk window <auto\|app\|chrome>` | Where the voice window opens, saved like the voice. `/talk window` alone shows the current choice and whether the app is installed |
 | `/talk key` | Which OpenAI API key is in use (its last four characters) and where it comes from; with no key, opens the window to add one |
@@ -173,6 +175,39 @@ What gets said, per event:
 Either way, progress notes reach the voice silently, so "how's it going?" gets a real answer. Nothing spoken reads out code, full paths, URLs or secrets.
 
 Spoken updates never cut the voice off mid-answer: they wait until it has finished speaking. Only a question or an approval Claude is blocked on may break in, and only at the end of a sentence. A low-priority update that has waited more than 20 s becomes a silent note instead.
+
+### Personas
+
+The voice has a personality, and you can pick it. A persona changes *how* the voice talks: its tone, humor, energy, pacing, and whether it offers opinions ("honestly, I'd ship it", "that design's a bit busy") or reacts with feeling (a little celebration at green tests, sympathy when the build breaks). It never changes *what* it relays. Every persona still hands your requests and decisions to Claude, only says something is done when Claude's result says so, answers mic checks itself, never reads secrets aloud and keeps replies short. Those rules come after the persona in the voice model's instructions and are marked as taking precedence.
+
+| Persona | Voice | In one line |
+|---|---|---|
+| `sotto` (default) | marin | Balanced and friendly, with real opinions and a light touch of humor. |
+| `june` | coral | Warm, encouraging partner who celebrates progress and keeps you steady. |
+| `moss` | cedar | Dry-witted senior engineer: understated, seen-it-all, quietly funny. |
+| `tempo` | tempo | High-energy hype buddy: every green test is a small victory. |
+| `koan` | sage | Calm zen mentor: slow, unflappable, finds the lesson in the bug. |
+| `vic` | ash | Blunt no-nonsense reviewer: straight answers, zero fluff. |
+| `pip` | echo | Playful, sarcastic sidekick with a soft spot for the user. |
+| `fern` | verse | Curious explorer who narrates the codebase like a field naturalist. |
+
+Switch with `/talk persona <name>`, the **Persona** picker in the voice window's settings, or just ask out loud ("switch to Moss", "can you be more upbeat?"): the voice hands that to Claude, which runs `sotto persona <name>` (add `Bash(sotto persona:*)` to your allow rules to skip the approval prompt). The choice is saved in `prefs.json`. A persona's instructions are fixed for a Live session, so a switch starts a fresh session with the conversation carried over, like a voice change, and the new persona says hello in one line. By default choosing a persona also switches to its suggested voice; turn off **Switch to the persona's own voice** in settings to keep your voice (a voice you pick afterwards always wins).
+
+**Write your own.** Put a Markdown file in `<data dir>/personas/` (for the symlink install: `~/.claude/plugins/data/sotto-skills-dir/personas/`) or, for one project, in `<project>/.claude/sotto-personas/`. The file name is the persona's name for `/talk persona` (lowercase letters, digits, `-` and `_`). Optional frontmatter sets a display name, a one-line description and a voice; the rest is the personality, written to the voice model in the second person:
+
+```markdown
+---
+name: Captain
+description: A calm ship's captain who treats every deploy like a voyage.
+voice: stone
+---
+You are the Captain: calm, weathered and dryly nautical.
+- Good news: "Fair winds. All tests pass." Bad news: "Rough seas: the build failed in the router."
+- Hold opinions and say them plainly: "I'd not sail with that migration untested."
+- One nautical turn of phrase per reply at most, then the facts. Slow, steady pacing.
+```
+
+Keep it short: tone, humor, what you have opinions about, how you react to good and bad news, pacing, a catchphrase or two to use sparingly. Around 150 to 250 words works well; anything past 2,000 characters is cut. Don't restate the relay rules; they are already there and they win. A project file beats a user file with the same name, and either one replaces a built-in of that name. Edits apply from the next voice session; the settings picker reloads the list each time it opens.
 
 ### Names the voice should recognize (vocabulary)
 

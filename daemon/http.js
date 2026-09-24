@@ -159,6 +159,21 @@ export function createHttpServer({ voice, port, daemonKey, pageToken, pageSecret
       if (!r.ok) return err(res, 400, "bad_voice", r.message);
       return send(res, 200, { ok: true, voice: r.voice, switching: r.switching, message: r.message });
     }
+    // Persona picker (§4.6). {persona} sets it; {use_voice} sets the "use the persona's voice" toggle.
+    if (p === "/api/personas" && method === "GET") {
+      if (!pageOk(req, url)) return err(res, 403, "bad_token");
+      return send(res, 200, voice.personas());
+    }
+    if (p === "/api/persona" && method === "POST") {
+      if (!pageOk(req, url)) return err(res, 403, "bad_token");
+      const hasToggle = typeof body.use_voice === "boolean";
+      if (!hasToggle && typeof body.persona !== "string") return err(res, 400, "bad_persona", "Send persona or use_voice.");
+      if (hasToggle) voice.setPersonaVoice(body.use_voice);
+      if (typeof body.persona !== "string") return send(res, 200, { ok: true, use_voice: body.use_voice });
+      const r = voice.setPersona(body.persona, "page");
+      if (!r.ok) return err(res, 400, "bad_persona", r.message);
+      return send(res, 200, { ok: true, persona: r.persona, voice: r.voice, switching: r.switching, message: r.message });
+    }
     // API key setup (SPEC §4.3). Responses carry at most the key's last four characters.
     if (p === "/api/key" && method === "GET") {
       if (!pageOk(req, url)) return err(res, 403, "bad_token");

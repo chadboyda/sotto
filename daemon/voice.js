@@ -11,8 +11,9 @@ import { DelegationEngine } from "./delegation.js";
 import { Mirror, MIRROR_MODES } from "./mirror.js";
 import { Narrator, elicitationSpeech, serverName, ToolLine, AgentTracker, agentsText, cardText } from "./policy.js";
 import { SpeechQueue, COMMENTARY_PREROLL_MS } from "./speaker.js";
-import { renderForPolicy, buildSeedInput, greeting, ownerSwitchInstruction, voiceSwitchGreeting, vocabularyUpdateInstruction, updateGreeting, cantHearInstruction, RECENT_GREETING_MS } from "./prompt.js";
-import { readPrefs, writePrefs, resolveVoice, normalizeVoice, voiceListMessage, unknownVoiceMessage, normalizeWindow, resolveWindowPref } from "./prefs.js";
+import { renderForPolicy, buildSeedInput, greeting, ownerSwitchInstruction, voiceSwitchGreeting, personaSwitchGreeting, vocabularyUpdateInstruction, updateGreeting, cantHearInstruction, RECENT_GREETING_MS } from "./prompt.js";
+import { readPrefs, writePrefs, resolveVoice, normalizeVoice, voiceListMessage, unknownVoiceMessage, normalizeWindow, resolveWindowPref, personaVoiceOn } from "./prefs.js";
+import { loadPersonas, findPersona, resolvePersona, personaSummary, personaListMessage, unknownPersonaMessage } from "./personas.js";
 import { collectVocabulary, renderVocabulary, vocabularyHint, TIER } from "./vocabulary.js";
 import { buildSessionBody, createLiveSession, Sideband } from "./live.js";
 import { PreviewCache, recordPreview, previewText } from "./preview.js";
@@ -65,7 +66,7 @@ const VOCAB_REUSE_MS = 5 * 60_000;
 
 export const MSG = {
   noSocket: "sotto: ERROR this session has no inbox socket (CLAUDE_CODE_MESSAGING_SOCKET is unset), so voice cannot reach it.",
-  usage: "sotto: usage: /talk [on|off|status|restart|quiet|milestones|walkthrough|voice [name]|app|window [auto|app|chrome]|key]",
+  usage: "sotto: usage: /talk [on|off|status|restart|quiet|milestones|walkthrough|voice [name]|persona [name]|app|window [auto|app|chrome]|key]",
   noKeyNoWindow: "sotto: ERROR OPENAI_API_KEY was not found. Run /talk key to add it, or export it before starting Claude Code.",
 };
 
@@ -151,6 +152,8 @@ export class Voice {
     this.lastSessionCreateAt = 0;
     // Voice chosen while live: the replacement session greets with "Switched to <voice>".
     this.voiceSwitch = null;
+    // Persona chosen while live (SPEC §4.6): the replacement greets in the new personality.
+    this.personaSwitch = null;
     this.switchGen = 0;
     this.config.voice = resolveVoice({ prefs: readPrefs(this.paths), configVoice: this.config.voice });
     // Per-bind nonce in the voice marker ("[sotto voice <nonce>]"), so a
@@ -285,7 +288,7 @@ export class Voice {
       } : null,
       today: { date: today, seconds: Math.round(this.todaySeconds() * 10) / 10, cap_minutes: this.config.daily_cap_minutes },
       config: {
-        voice: this.config.voice, idle_minutes: this.config.idle_minutes, idle_seconds: idleSecondsOf(this.config), speaking_policy: this.policy,
+        voice: this.config.voice, persona: this.personaIdForStatus(), idle_minutes: this.config.idle_minutes, idle_seconds: idleSecondsOf(this.config), speaking_policy: this.policy,
         daily_cap_minutes: this.config.daily_cap_minutes, wake_sensitivity: this.config.wake_sensitivity, mirror: this.mirrorMode(),
         echo_guard: this.echoGuardMode(),
       },
@@ -305,6 +308,7 @@ export class Voice {
       state: this.state,
       owner: this.owner ? { project: this.owner.project, cwd: this.owner.cwd } : null,
       voice: this.config.voice,
+      persona: this.personaIdForStatus(),
       speaking_policy: this.policy,
       idle_minutes: this.config.idle_minutes,
       idle_seconds: idleSecondsOf(this.config),
@@ -590,6 +594,13 @@ export class Voice {
       case "status": r = { ok: true, message: this.statusMessage() }; break;
       case "policy": r = this.setPolicy(req.policy); break;
       case "voice": r = req.voice == null || req.voice === "" ? { ok: true, message: voiceListMessage(this.currentVoice(req.config)) } : this.setVoice(req.voice, "control"); break;
+      case "persona": {
+        if (req.persona == null || req.persona === "") {
+          const list = this.personaList(req.session);
+          r = { ok: true, message: personaListMessage(this.currentPersona(list).id, list) };
+        } else r = this.setPersona(req.persona, "control", { session: req.session });
+        break;
+      }
       case "restart": r = this.manualRestart(); break;
       case "key": r = this.keyControl(req); break;
       case "window": r = this.setWindow(req.window); break;
@@ -611,7 +622,7 @@ export class Voice {
     const app = this.appNote();
     if (this.state === "off" || !this.owner) return `sotto: voice is off. ${u}.${app ? ` ${app}.` : ""}`;
     const st = this.state === "live" ? "ON" : this.state;
-    let m = `sotto: voice ${st} (${this.owner.project}) | ${u} | voice ${this.config.voice} | ${this.policy}`;
+    let m = `sotto: voice ${st} (${this.owner.project}) | ${u} | voice ${this.config.voice} | persona ${this.personaIdForStatus()} | ${this.policy}`;
     if (app) m += ` | ${app}`;
     if (this.lastError) m += ` | last error: ${this.lastError.message}`;
     return m;
@@ -977,13 +988,30 @@ export class Voice {
    */
   switchLiveVoice(v) {
     this.log.info("voice.switch", { voice: v, from: this.live?.voice || null });
+    this.voiceSwitch = v;
+    this.recreateLive("voice_change", `Switching to the ${v} voice.`);
+  }
+
+  /**
+   * Same re-creation for a persona (SPEC §4.6): instructions are immutable per
+   * Live session too. When the persona brought its own voice, that changes in
+   * the same swap; the greeting is the persona line either way.
+   */
+  switchLivePersona(p) {
+    this.log.info("persona.switch", { persona: p.id, from: this.live?.persona || null, voice: this.config.voice });
+    this.personaSwitch = p.id;
+    if (this.live && this.live.voice !== this.config.voice) this.voiceSwitch = this.config.voice;
+    this.recreateLive("persona_change", `Switching to ${p.name}.`);
+  }
+
+  /** Close the live session and have the page re-offer (switches; §6.14 steps 2-3). */
+  recreateLive(reasonCode, text) {
     const old = this.sideband;
     this.sideband = null;
     this.stopLiveTimers();
     this.speech.suspend();
     this.live = null;
-    this.voiceSwitch = v;
-    this.notice("info", "voice_change", `Switching to the ${v} voice.`);
+    this.notice("info", reasonCode, text);
     this.setState("reconnecting");
     // Close first, reconnect after session.closed (at most SWITCH_CLOSE_WAIT_MS):
     // the page's reconnect tears down the old peer connection, and a server that
@@ -993,11 +1021,98 @@ export class Voice {
     const t0 = this.clock.now();
     const go = (confirmed) => {
       if (gen !== this.switchGen || this.state !== "reconnecting" || this.sideband) return;
-      this.log.info("voice.switch_closed", { confirmed, ms: this.clock.now() - t0 });
-      this.requestReconnect("voice_change");
+      this.log.info("voice.switch_closed", { confirmed, ms: this.clock.now() - t0, reason: reasonCode });
+      this.requestReconnect(reasonCode);
     };
     if (!old) { go(false); return; }
     old.close(SWITCH_CLOSE_WAIT_MS).then((r) => go(!!r?.confirmed), () => go(false));
+  }
+
+  // ---- persona (§4.6) -------------------------------------------------------------------------
+  /** Built-in plus custom personas, read fresh (a file edit applies to the next session). */
+  personaList(session = null) {
+    const o = this.owner || (session && typeof session === "object" ? session : null);
+    const projectDir = o ? (o.project_dir || o.cwd || null) : null;
+    // Status reads rescan every few seconds: warn about a bad file once, not on every scan.
+    this.personaWarned ??= new Set();
+    const warn = (ev, f) => {
+      const k = `${ev}|${f.source}|${f.file || f.id}|${f.code}`;
+      if (this.personaWarned.has(k)) return;
+      this.personaWarned.add(k);
+      this.log.warn(ev, f);
+    };
+    const list = loadPersonas({ dataDir: this.paths.dir, projectDir, log: { warn } });
+    this.personaCache = { at: this.clock.now(), projectDir, list };
+    return list;
+  }
+
+  /** The current persona's id for status lines (sent on every change): a directory scan at most every 5 s. */
+  personaIdForStatus() {
+    const c = this.personaCache;
+    const projectDir = this.owner ? (this.owner.project_dir || this.owner.cwd || null) : null;
+    const list = c && c.projectDir === projectDir && this.clock.now() - c.at < 5000 ? c.list : this.personaList();
+    return this.currentPersona(list).id;
+  }
+
+  /** The persona in effect: prefs.json's choice if it (still) exists, else the default. */
+  currentPersona(list = this.personaList()) {
+    return resolvePersona(list, readPrefs(this.paths).persona);
+  }
+
+  /** {personas, current, use_voice, live, live_persona} for GET /api/personas (never the bodies). */
+  personas() {
+    const list = this.personaList();
+    return {
+      personas: list.map(personaSummary),
+      current: this.currentPersona(list).id,
+      use_voice: personaVoiceOn(readPrefs(this.paths)),
+      live: !!(this.live && this.sideband),
+      live_persona: this.live?.persona || null,
+    };
+  }
+
+  /** Whether choosing a persona also switches to its voice (persisted). */
+  setPersonaVoice(on) {
+    try { writePrefs(this.paths, { persona_voice: !!on }); } catch (e) { this.log.error("prefs.write_error", { message: e.message }); }
+    this.log.info("persona.use_voice", { on: !!on });
+    this.changed();
+    return { ok: true, use_voice: !!on };
+  }
+
+  /**
+   * Persist a persona choice and apply it, like setVoice: a live session is
+   * re-created with the new instructions (seeded, no repeat of the last
+   * update). With "use the persona's voice" on (the default), a persona that
+   * names a voice also sets that voice, in the same swap.
+   * Returns {ok, message, persona, voice, switching}.
+   */
+  setPersona(name, source = "control", { session = null } = {}) {
+    const list = this.personaList(session);
+    const p = findPersona(list, name);
+    if (!p) return { ok: false, message: unknownPersonaMessage(name, list), code: "bad_persona" };
+    const prefs = readPrefs(this.paths);
+    const prev = this.currentPersona(list).id;
+    const patch = { persona: p.id };
+    let voice = null;
+    if (personaVoiceOn(prefs) && p.voice && p.voice !== this.currentVoice()) {
+      voice = p.voice;
+      patch.voice = voice;
+    }
+    try { writePrefs(this.paths, patch); } catch (e) { this.log.error("prefs.write_error", { message: e.message }); }
+    if (voice) this.config = { ...this.config, voice };
+    this.log.info("persona.set", { persona: p.id, from: prev, source: p.source, via: source, voice, state: this.state });
+    const live = this.state === "live" && !!this.sideband && !!this.live;
+    const switching = live && (this.live.persona !== p.id || this.live.voice !== this.config.voice);
+    if (switching) this.switchLivePersona(p);
+    else if (this.state === "reconnecting") { this.personaSwitch = p.id; if (voice) this.voiceSwitch = voice; }
+    this.changed();
+    const withVoice = voice ? ` with the ${voice} voice` : "";
+    let message;
+    if (switching) message = `sotto: persona set to ${p.id}${withVoice}. Switching the live session now.`;
+    else if (prev === p.id && !voice && (!this.live || this.live.persona === p.id)) message = `sotto: persona is already ${p.id}.`;
+    else if (LIVE_STATES.has(this.state) || this.state === "reconnecting") message = `sotto: persona set to ${p.id}${withVoice}. The session switches as soon as it is ready.`;
+    else message = `sotto: persona set to ${p.id}${withVoice}. It applies to the next voice session.`;
+    return { ok: true, message, persona: p.id, voice: this.config.voice, switching };
   }
 
   // ---- owner liveness / SessionEnd --------------------------------------------------------
@@ -1396,12 +1511,13 @@ export class Voice {
       estTokens,
     });
     this.vocab = vocab;
-    const instructions = renderForPolicy(owner.project, this.policy, vocab.text);
+    const persona = this.currentPersona();
+    const instructions = renderForPolicy(owner.project, this.policy, vocab.text, persona);
     const voice = this.config.voice;
     const body = buildSessionBody({ instructions, seed, voice, sdp });
     this.lastSessionCreateAt = this.clock.now();
     const res = await createLiveSession({ base: this.base, apiKey, body, fetchImpl: this.fetchImpl, clock: this.clock });
-    this.log.info("session.create", { ms: res.ms, status: res.status ?? null, ok: res.ok, model: body.session.model, live_id: res.id || null, code: res.code || null, reason: why, voice });
+    this.log.info("session.create", { ms: res.ms, status: res.status ?? null, ok: res.ok, model: body.session.model, live_id: res.id || null, code: res.code || null, reason: why, voice, persona: persona.id });
 
     if (!res.ok) {
       this.setLastError(res.code, res.message);
@@ -1424,7 +1540,7 @@ export class Voice {
     this.delegation.resetTimeline();
     this.mirror.resetTimeline();
     const now = this.clock.now();
-    this.live = { id: res.id, started_at: now, expires_at: Math.floor(now / 1000) + 7200, usage_seconds: 0, muted: false, reason: why, greeted: false, voice, wakeHandled: false };
+    this.live = { id: res.id, started_at: now, expires_at: Math.floor(now / 1000) + 7200, usage_seconds: 0, muted: false, reason: why, greeted: false, voice, persona: persona.id, personaName: persona.name, wakeHandled: false };
     this.governor.onWake(why === "wake" ? "voice" : why === "notify" ? "notify" : why);
     this.usageSeen.set(res.id, 0);
     // pendingResult and backlog were seeded into the new session.
@@ -1506,10 +1622,18 @@ export class Voice {
       this.switchLiveVoice(this.config.voice);
       return;
     }
+    // Same for the persona (§4.6).
+    const persona = this.currentPersona();
+    if (this.live.persona !== persona.id) {
+      this.switchLivePersona(persona);
+      return;
+    }
     if (!this.live.greeted) {
       this.live.greeted = true;
       const switched = reason === "reconnect" && this.voiceSwitch === this.live.voice;
+      const personaSwitched = reason === "reconnect" && this.personaSwitch === this.live.persona;
       this.voiceSwitch = null;
+      this.personaSwitch = null;
       // The first session after a self-update (§6.17) says so, once.
       const updated = this.updateCue && (reason === "reconnect" || reason === "resume");
       this.updateCue = false;
@@ -1517,8 +1641,8 @@ export class Voice {
       // with a short, varied line instead of the same full sentence each time.
       const now = this.clock.now();
       this.greetedAt = (this.greetedAt || []).filter((t) => now - t < RECENT_GREETING_MS);
-      const g = switched ? voiceSwitchGreeting(this.live.voice) : updated ? updateGreeting() : greeting(reason, this.policy, this.owner?.project, { recent: this.greetedAt.length });
-      if (g && reason === "start" && !switched && !updated) this.greetedAt.push(now);
+      const g = personaSwitched ? personaSwitchGreeting(this.live.personaName) : switched ? voiceSwitchGreeting(this.live.voice) : updated ? updateGreeting() : greeting(reason, this.policy, this.owner?.project, { recent: this.greetedAt.length });
+      if (g && reason === "start" && !switched && !personaSwitched && !updated) this.greetedAt.push(now);
       if (g) this.deliver({ kind: "instructions", content: g, delegationId: null });
       // Held and carried commentary follows the greeting.
       this.speech.resume({ prerollMs: g ? COMMENTARY_PREROLL_MS : 0 });
@@ -1878,6 +2002,7 @@ export class Voice {
     this.speech.drain();
     this.nonce = null;
     this.voiceSwitch = null;
+    this.personaSwitch = null;
     this.awaiting = null;
     this.mirror.dispose();
     this.wakeQueue = [];

@@ -360,7 +360,7 @@ test("instructions: decisions, feedback and casual requests are delegated; no fa
   assert.match(t, /Never say you have noted, recorded, marked, saved, scheduled or started something, or that you told or asked Claude Code something, unless you delegated it just now\./);
   assert.match(t, /Never promise to tell the user something later unless you delegated it\./);
   assert.match(t, /"I'll pass that to Claude"/);
-  assert.match(t, /never delegate a voice change you merely suggested, or after silence or noise/);
+  assert.match(t, /never delegate a change you merely suggested, or after silence or noise/);
   const dont = t.slice(t.indexOf("Do not delegate to the backend when:"));
   assert.match(dont, /The user only greets you, makes small talk, or thanks you\./);
 });

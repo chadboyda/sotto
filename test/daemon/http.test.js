@@ -90,7 +90,7 @@ test("/control: every action, both response formats, §9.2 messages", async (t) 
   const active = path.join(h.dataDir, "active");
   assert.equal(fs.statSync(active).mode & 0o777, 0o600);
   const st = await ctl({ action: "status" });
-  assert.equal(st.json.message, "sotto: voice waiting_page (proj-a) | 0 min today ($0.00) | voice marin | milestones");
+  assert.equal(st.json.message, "sotto: voice waiting_page (proj-a) | 0 min today ($0.00) | voice marin | persona sotto | milestones");
   assert.equal((await ctl({ action: "policy", policy: "quiet" })).json.message, "sotto: speaking policy is now quiet.");
   const t0 = Date.now();
   const off = await ctl({ action: "off" }, "?format=hook");
