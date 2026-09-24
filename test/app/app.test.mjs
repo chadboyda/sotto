@@ -49,6 +49,28 @@ async function waitFor(fn, ms, what) {
 }
 const pidAlive = (pid) => { try { process.kill(pid, 0); return true; } catch { return false; } };
 
+// LaunchServices launches (`open -a <bundle> sotto://…`) use a copy of the
+// test build under its own bundle identifier. The app is single-instance
+// (LSMultipleInstancesProhibited), so LaunchServices hands a URL for
+// com.chadboyda.sotto to an ALREADY RUNNING Sotto, whatever bundle path `-a`
+// names: with the user's app open, the test URL (a real temp daemon and data
+// dir, so it passes the port check) loaded the test page into the user's live
+// panel and the test never saw its own launch (both tests timed out).
+const LS_ID = "com.chadboyda.sotto.apptest";
+const LSREGISTER = "/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister";
+function makeLaunchServicesCopy(dir) {
+  const copy = path.join(dir, "ls", APP_BUNDLE);
+  fs.mkdirSync(path.dirname(copy), { recursive: true });
+  const run = (cmd, args) => {
+    const r = spawnSync(cmd, args, { encoding: "utf8" });
+    assert.equal(r.status, 0, `${cmd} ${args.join(" ")}: ${r.stderr}`);
+  };
+  run("ditto", [BUNDLE, copy]);
+  run("plutil", ["-replace", "CFBundleIdentifier", "-string", LS_ID, path.join(copy, "Contents/Info.plist")]);
+  run("codesign", ["--force", "--sign", "-", copy]);
+  return copy;
+}
+
 describe("desktop app", { skip: SKIP }, () => {
   let tmp;
   let daemon;
@@ -64,7 +86,11 @@ describe("desktop app", { skip: SKIP }, () => {
     await daemon.listen();
   });
 
+  let lsBundle;
+  const lsCopy = () => (lsBundle ??= makeLaunchServicesCopy(tmp));
+
   after(async () => {
+    if (lsBundle) spawnSync(LSREGISTER, ["-u", lsBundle]);
     await daemon?.close();
     if (tmp) fs.rmSync(tmp, { recursive: true, force: true });
   });
@@ -134,6 +160,50 @@ describe("desktop app", { skip: SKIP }, () => {
     assert.equal(plan({ pref: "webkit", output: hp, inputs: [builtin], default: 0 }).mode, "webkit");
     assert.equal(plan({ pref: "native", output: spk, inputs: [builtin], default: 0 }).mode, "native");
     assert.equal(plan({ output: hp, inputs: [], default: 0 }).mode, "webkit", "no input: WebKit reports the error");
+  });
+
+  test("--panel-frame-eval: a tiny, missing or off-screen saved frame opens the full 420x640 panel", () => {
+    const ev = (saved, screens = [[0, 77, 1440, 798]]) =>
+      JSON.parse(spawnSync(EXE, ["--panel-frame-eval", JSON.stringify({ saved, screens })], { encoding: "utf8", timeout: 10_000 }).stdout);
+    // First launch: the full default near the top right of the main screen.
+    assert.deepEqual(ev(null), { frame: [996, 211, 420, 640], reason: "default" });
+    // A pill-sized or squashed frame is clamped up to the default size, keeping its top-right corner.
+    assert.deepEqual(ev("{{700, 500}, {250, 44}}"), { frame: [530, 77, 420, 640], reason: "too_small" });
+    assert.deepEqual(ev("{{700, 200}, {420, 120}}"), { frame: [700, 77, 420, 640], reason: "too_small" });
+    assert.equal(ev("{{700, 200}, {359, 640}}").reason, "too_small", "narrower than the 360 px minimum");
+    assert.equal(ev("{{700, 200}, {360, 420}}").reason, "saved", "exactly the minimum is kept");
+    assert.equal(ev("{{100, 100}, {500, 700}}").reason, "saved", "a user-resized frame is kept");
+    assert.equal(ev("{{9000, 100}, {420, 640}}").reason, "offscreen");
+    assert.equal(ev("garbage").reason, "default");
+    // Taller than its screen: fitted to it.
+    assert.deepEqual(ev("{{0, 0}, {420, 2000}}", [[0, 0, 1440, 875]]), { frame: [0, 0, 420, 875], reason: "fitted" });
+  });
+
+  test("launch with a tiny saved frame opens the full panel and replaces the bad frame", { timeout: 60_000 }, () => {
+    const SUITE = "com.chadboyda.sotto.test";
+    const read = (k) => spawnSync("defaults", ["read", SUITE, k], { encoding: "utf8" });
+    const prevFrame = read("PanelFrame");
+    const prevCompact = read("PanelCompact");
+    spawnSync("defaults", ["write", SUITE, "PanelFrame", "-string", "{{200, 300}, {250, 44}}"]);
+    spawnSync("defaults", ["delete", SUITE, "PanelCompact"]);
+    try {
+      const log = path.join(tmp, "frame.jsonl");
+      const r = spawnSync(EXE, ["--port", String(port), "--data-dir", path.join(tmp, "data"), "--debug-log", log, "--test", "--exit-after", "2"],
+        { stdio: "ignore", timeout: 30_000 });
+      assert.equal(r.status, 0);
+      const f = readLog(log).find((e) => e.ev === "panel_frame");
+      assert.ok(f, "panel_frame logged");
+      assert.equal(f.compact, false, "never starts compact unless the user left it compact");
+      assert.equal(f.reason, "too_small");
+      assert.deepEqual(f.frame.slice(2), [420, 640]);
+      assert.ok(f.titlebar_inset > 0 && f.titlebar_inset < 64, `title bar inset ${f.titlebar_inset}`);
+      const saved = read("PanelFrame").stdout.trim().match(/\{\{[-\d.]+, [-\d.]+\}, \{([\d.]+), ([\d.]+)\}\}/);
+      assert.deepEqual(saved?.slice(1).map(Number), [420, 640], "the tiny frame is replaced in the defaults");
+    } finally {
+      if (prevFrame.status === 0) spawnSync("defaults", ["write", SUITE, "PanelFrame", "-string", prevFrame.stdout.trim()]);
+      else spawnSync("defaults", ["delete", SUITE, "PanelFrame"]);
+      if (prevCompact.status === 0 && prevCompact.stdout.trim() === "1") spawnSync("defaults", ["write", SUITE, "PanelCompact", "-bool", "YES"]);
+    }
   });
 
   test("native mic launch: the app's capture feeds the page (fixture), WebRTC offer works, no capture leaks", { timeout: 60_000 }, async () => {
@@ -206,15 +276,15 @@ describe("desktop app", { skip: SKIP }, () => {
     const fakeD = path.join(tmp, "fake-data");
     fs.mkdirSync(fakeD, { recursive: true });
     const url = (p, d) => `sotto://open?port=${p}&k=${"a".repeat(32)}&data=${encodeURIComponent(d)}`;
-    const r = spawnSync("open", ["-g", "-a", BUNDLE, "--env", "SOTTO_APP_TEST=1", "--env", `SOTTO_APP_DEBUG_LOG=${log}`,
+    const r = spawnSync("open", ["-g", "-a", lsCopy(), "--env", "SOTTO_APP_TEST=1", "--env", `SOTTO_APP_DEBUG_LOG=${log}`,
       url(other, path.join(tmp, "data"))], { encoding: "utf8", timeout: 15_000 });
     assert.equal(r.status, 0, r.stderr);
     const launch = await waitFor(() => readLog(log).find((e) => e.ev === "launch"), 15_000, "launch");
     try {
       await waitFor(() => readLog(log).some((e) => e.ev === "url_rejected" && e.port === other), 10_000, "wrong port rejected");
       // A data dir without daemon.port, and one missing entirely, are rejected too.
-      spawnSync("open", ["-g", "-a", BUNDLE, url(port, fakeD)], { timeout: 15_000 });
-      spawnSync("open", ["-g", "-a", BUNDLE, `sotto://open?port=${port}`], { timeout: 15_000 });
+      spawnSync("open", ["-g", "-a", lsCopy(), url(port, fakeD)], { timeout: 15_000 });
+      spawnSync("open", ["-g", "-a", lsCopy(), `sotto://open?port=${port}`], { timeout: 15_000 });
       await waitFor(() => readLog(log).filter((e) => e.ev === "url_rejected").length >= 3, 10_000, "all three rejected");
       assert.equal(readLog(log).filter((e) => e.ev === "open" || e.ev === "load_start").length, 0, "no page loaded");
     } finally {
@@ -227,12 +297,12 @@ describe("desktop app", { skip: SKIP }, () => {
     const log = path.join(tmp, "ls.jsonl");
     const url = (k) => `sotto://open?port=${port}&k=${k}&data=${encodeURIComponent(path.join(tmp, "data"))}`;
     const open = (args) => spawnSync("open", args, { encoding: "utf8", timeout: 15_000 });
-    let r = open(["-g", "-a", BUNDLE, "--env", "SOTTO_APP_TEST=1", "--env", `SOTTO_APP_DEBUG_LOG=${log}`, url(daemon.issueLaunchCode())]);
+    let r = open(["-g", "-a", lsCopy(), "--env", "SOTTO_APP_TEST=1", "--env", `SOTTO_APP_DEBUG_LOG=${log}`, url(daemon.issueLaunchCode())]);
     assert.equal(r.status, 0, r.stderr);
     const launch = await waitFor(() => readLog(log).find((e) => e.ev === "launch"), 15_000, "launch");
     try {
       await waitFor(() => readLog(log).some((e) => e.ev === "bridge" && e.kind === "status"), 15_000, "first page status");
-      r = open(["-g", "-a", BUNDLE, url(daemon.issueLaunchCode())]);
+      r = open(["-g", "-a", lsCopy(), url(daemon.issueLaunchCode())]);
       assert.equal(r.status, 0, r.stderr);
       await waitFor(() => readLog(log).filter((e) => e.ev === "load_finish").length >= 2, 15_000, "second page load");
       assert.equal(readLog(log).filter((e) => e.ev === "launch").length, 1, "one process for both requests");

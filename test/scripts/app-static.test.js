@@ -284,3 +284,11 @@ test("mic.js: an exact device the app does not have is OverconstrainedError (the
   const { win } = loadMic({ plan: { error: "NotFoundError" } });
   await assert.rejects(win.navigator.mediaDevices.getUserMedia({ audio: { deviceId: { exact: "gone" } } }), { name: "OverconstrainedError" });
 });
+
+test("the page's header clears the app's title bar (host-app inset)", () => {
+  const css = fs.readFileSync(path.join(ROOT, "web/styles.css"), "utf8");
+  assert.match(css, /html\.host-app \.top \{[^}]*padding-top:[^;]*var\(--host-inset-top/);
+  const panel = fs.readFileSync(path.join(ROOT, "app/Sources/Panel.swift"), "utf8");
+  assert.match(panel, /classList\.add\("host-app"\)/);
+  assert.match(panel, /--host-inset-top/);
+});

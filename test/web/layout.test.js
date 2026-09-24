@@ -116,6 +116,10 @@ test("live view: the Claude card and the captions never move when the status wor
   await until(() => page.eval(`document.readyState === "complete"`), 10000);
   for (const [w, h] of [[420, 760], [360, 640], [560, 900]]) {
     await page.send("Emulation.setDeviceMetricsOverride", { width: w, height: h, deviceScaleFactor: 1, mobile: false });
+    // The override lands asynchronously; on a slow runner (CI) the first state
+    // was measured at the previous size. Wait for the new viewport and a layout.
+    await until(() => page.eval(`window.innerWidth === ${w} && window.innerHeight === ${h}`), 10000);
+    await page.eval(`new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(() => r(true))))`);
     const m = await page.eval(MEASURE);
     const rows = Object.values(m);
     assert.equal(rows.length, 6);
