@@ -1,0 +1,806 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="dark light">
+<title>Sotto - Direction C: Ambient companion</title>
+<style>
+/* sotto — Direction C "Ambient companion" design tokens.
+ *
+ * Plain CSS custom properties. No build step, no web fonts (SPEC §7.1).
+ * Dark is the default; light follows the system, and either can be forced
+ * with data-theme="dark" | "light" on any element (used by the mockup frames).
+ *
+ * Contrast (WCAG 2.x, measured against --bg / --surface-1 / --surface-2):
+ *   dark   text 16.8 / t2 9.9 / t3 6.5 / edge 4.1 (3.5 on surface-2)
+ *          live 10.2  voice 8.0  work 8.6  attn 10.7  err 7.6  muted 8.4
+ *   light  text 17.5 / t2 7.5 / t3 5.5 / edge 3.7 (3.3 on surface-2)
+ *          live 5.2   voice 6.1  work 5.5  attn 5.5   err 5.3  muted 6.0
+ * Tinted state fields: --field-a is 16% in dark, 10% in light, which keeps
+ * t3 >= 4.6:1 and colored text >= 4.5:1 on the tint.
+ */
+
+:root,
+[data-theme="dark"] {
+  color-scheme: dark;
+
+  /* Neutrals: cool slate, no warm cast. */
+  --bg:         #0d1015;
+  --surface-1:  #151920;   /* cards */
+  --surface-2:  #1c212a;   /* raised: drawer, inputs, buttons */
+  --scrim:      rgb(4 6 9 / 0.62);
+  --text:       #eef1f5;
+  --text-2:     #b3bcc8;   /* secondary: previous caption, meta */
+  --text-3:     #8d97a6;   /* tertiary: hints, kbd labels (still AA) */
+  --edge:       #6b7686;   /* control borders, >= 3:1 */
+  --hairline:   #262c36;   /* decorative dividers only, never a control edge */
+
+  /* One color per meaning, same hue family in both themes. */
+  --live:   #2fd3c4;   /* heard / listening / you speaking */
+  --voice:  #a99bff;   /* Sotto (the voice) speaking */
+  --work:   #6cb2ff;   /* Claude Code working */
+  --attn:   #f5b83d;   /* needs approval, notices */
+  --err:    #ff7a7a;   /* errors, End voice */
+  --muted:  #f28bc0;   /* mic muted (billing continues) */
+
+  --field-a: 16%;                 /* strength of the ambient color field */
+  --on-solid: #0d1015;            /* text on a solid state-color fill */
+  --focus:  #9fd0ff;
+  --shadow-2: 0 12px 32px rgb(0 0 0 / 0.45), 0 2px 6px rgb(0 0 0 / 0.35);
+}
+
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme="dark"]) {
+    color-scheme: light;
+    --bg:         #f7f9fb;
+    --surface-1:  #ffffff;
+    --surface-2:  #eef2f6;
+    --scrim:      rgb(15 20 27 / 0.36);
+    --text:       #0f141b;
+    --text-2:     #465262;
+    --text-3:     #5b6676;
+    --edge:       #7a8596;
+    --hairline:   #dde3ea;
+    --live:   #0a7169;
+    --voice:  #5b45d6;
+    --work:   #1b61c9;
+    --attn:   #8f5a00;
+    --err:    #c42b33;
+    --muted:  #b0246e;
+    --field-a: 10%;
+    --on-solid: #ffffff;
+    --focus:  #1b61c9;
+    --shadow-2: 0 12px 32px rgb(15 20 27 / 0.14), 0 2px 6px rgb(15 20 27 / 0.08);
+  }
+}
+
+[data-theme="light"] {
+  color-scheme: light;
+  --bg:         #f7f9fb;
+  --surface-1:  #ffffff;
+  --surface-2:  #eef2f6;
+  --scrim:      rgb(15 20 27 / 0.36);
+  --text:       #0f141b;
+  --text-2:     #465262;
+  --text-3:     #5b6676;
+  --edge:       #7a8596;
+  --hairline:   #dde3ea;
+  --live:   #0a7169;
+  --voice:  #5b45d6;
+  --work:   #1b61c9;
+  --attn:   #8f5a00;
+  --err:    #c42b33;
+  --muted:  #b0246e;
+  --field-a: 10%;
+  --on-solid: #ffffff;
+  --focus:  #1b61c9;
+  --shadow-2: 0 12px 32px rgb(15 20 27 / 0.14), 0 2px 6px rgb(15 20 27 / 0.08);
+}
+
+:root {
+  /* Type: system stacks only. */
+  --font-ui:   system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", sans-serif;
+  --font-mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+
+  /* Scale (px / line-height). The state word is the only display size. */
+  --fs-state:   34px;  --lh-state:   40px;  /* "Listening" — read from across the room */
+  --fs-title:   20px;  --lh-title:   28px;  /* card/overlay headlines */
+  --fs-caption: 17px;  --lh-caption: 24px;  /* latest caption line */
+  --fs-body:    15px;  --lh-body:    22px;  /* Claude card, buttons */
+  --fs-meta:    13px;  --lh-meta:    18px;  /* header, previous caption, hints */
+  --fs-label:   12px;  --lh-label:   16px;  /* uppercase-free speaker labels */
+  --fw-regular: 400; --fw-medium: 500; --fw-semibold: 600;
+  --tracking-state: -0.02em;
+
+  /* Spacing: 4/8 grid. 8 between controls, 16+ between groups. */
+  --sp-1: 4px;  --sp-2: 8px;  --sp-3: 12px; --sp-4: 16px;
+  --sp-5: 20px; --sp-6: 24px; --sp-8: 32px; --sp-10: 40px; --sp-12: 48px;
+  --gutter: 16px;
+
+  /* Sizing */
+  --hit:      44px;    /* minimum target for every control */
+  --hit-lg:   48px;    /* bottom-bar buttons */
+  --orb:      136px;   /* mute / floor indicator at default size */
+  --orb-mini: 88px;    /* collapsed size (<= 480px tall), still >= 64px */
+  --bar-h:    64px;    /* bottom action bar */
+  --header-h: 44px;
+
+  /* Radii */
+  --r-sm: 8px;  --r-md: 12px;  --r-lg: 16px;  --r-xl: 24px;  --r-pill: 999px;
+
+  /* Motion: calm, signal-driven. Nothing loops while idle. */
+  --dur-fast:  150ms;   /* hover, press */
+  --dur-base:  200ms;   /* state changes, color field crossfade */
+  --dur-slow:  250ms;   /* drawer, overlay */
+  --dur-level: 90ms;    /* audio-level follow (per-frame smoothing target) */
+  --ease-out:  cubic-bezier(0.2, 0.8, 0.2, 1);
+  --ease-in-out: cubic-bezier(0.4, 0, 0.2, 1);
+
+  /* Layers */
+  --z-banner: 20; --z-drawer: 30; --z-scrim: 29;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --dur-fast: 0ms; --dur-base: 0ms; --dur-slow: 0ms; --dur-level: 0ms;
+  }
+}
+
+
+/* ---------- Mockup board (not part of the product) ---------- */
+* { box-sizing: border-box; }
+html, body { margin: 0; }
+body.board {
+  background: #07090c; color: #d7dde6; font-family: var(--font-ui);
+  padding: 48px; -webkit-font-smoothing: antialiased;
+}
+.board-head { display: flex; justify-content: space-between; align-items: flex-end; gap: 48px; margin-bottom: 40px; max-width: 1800px; }
+.board-head h1 { margin: 0 0 8px; font-size: 32px; letter-spacing: -0.02em; color: #fff; font-weight: 600; }
+.board-head p { margin: 0; max-width: 760px; font-size: 15px; line-height: 22px; color: #aab3c0; }
+.legend { display: grid; grid-template-columns: repeat(6, auto); gap: 8px 20px; font-size: 13px; color: #aab3c0; }
+.legend span { display: inline-flex; align-items: center; gap: 8px; }
+.legend i { width: 14px; height: 14px; border-radius: 4px; display: inline-block; }
+.grid { display: grid; grid-template-columns: repeat(4, 420px); gap: 48px 40px; align-items: start; }
+figure { margin: 0; }
+figcaption { margin-top: 12px; font-size: 13px; line-height: 18px; color: #aab3c0; }
+figcaption b { color: #eef1f5; font-weight: 600; margin-right: 6px; }
+.frame { border-radius: 14px; overflow: hidden; box-shadow: 0 0 0 1px #2a313c, 0 20px 50px rgb(0 0 0 / .5); }
+
+/* ---------- The window ---------- */
+.win {
+  --state: var(--text-3);
+  position: relative; isolation: isolate;
+  width: 420px; height: 640px;
+  display: flex; flex-direction: column;
+  background: var(--bg); color: var(--text);
+  font-family: var(--font-ui); font-size: var(--fs-body); line-height: var(--lh-body);
+  -webkit-font-smoothing: antialiased;
+  overflow: hidden;
+}
+.win.mini { width: 360px; height: 420px; --orb: var(--orb-mini); }
+/* Ambient color field: the whole window takes on the state's hue. */
+.win::before {
+  content: ""; position: absolute; inset: 0; z-index: -1; pointer-events: none;
+  background:
+    radial-gradient(120% 70% at 50% 28%, color-mix(in srgb, var(--state) var(--field-a), transparent) 0%, transparent 72%);
+  transition: background var(--dur-base) var(--ease-out);
+}
+.win[data-floor="live"], .win[data-floor="you"] { --state: var(--live); }
+.win[data-floor="voice"]  { --state: var(--voice); }
+.win[data-floor="muted"]  { --state: var(--muted); }
+.win[data-floor="attn"]   { --state: var(--attn); }
+.win[data-floor="err"]    { --state: var(--err); }
+.win[data-floor="work"]   { --state: var(--work); }
+.win[data-floor="idle"]   { --state: var(--text-3); }
+
+/* Header: quiet, one line */
+.hdr {
+  height: var(--header-h); flex: none;
+  display: flex; align-items: center; gap: var(--sp-3);
+  padding: 0 var(--gutter);
+  font-size: var(--fs-meta); line-height: var(--lh-meta); color: var(--text-2);
+}
+.hdr .st { display: inline-flex; align-items: center; gap: var(--sp-2); color: var(--text); font-weight: var(--fw-semibold); }
+.hdr .st svg { width: 12px; height: 12px; color: var(--state); }
+.hdr .proj { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.hdr .use { margin-left: auto; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.hdr .sep { color: var(--text-3); }
+.hdr .warn { color: var(--muted); font-weight: var(--fw-medium); }
+
+/* Stage: the floor indicator + the state word */
+.stage {
+  flex: 1 1 auto; min-height: 0;
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: var(--sp-4); padding: var(--sp-2) var(--gutter);
+  text-align: center;
+}
+.word {
+  margin: 0; font-size: var(--fs-state); line-height: var(--lh-state);
+  font-weight: var(--fw-semibold); letter-spacing: var(--tracking-state); color: var(--text);
+}
+.sub { margin: calc(var(--sp-1) * -2) 0 0; font-size: var(--fs-meta); line-height: var(--lh-meta); color: var(--text-2); }
+kbd {
+  font-family: var(--font-ui); font-size: 12px; line-height: 16px; font-weight: var(--fw-medium);
+  padding: 1px 6px; border-radius: 5px; border: 1px solid var(--edge); color: var(--text); background: var(--surface-2);
+}
+
+/* The orb = mute button = floor indicator. Shape carries the state, not only color. */
+.orb-wrap { position: relative; width: calc(var(--orb) + 56px); height: calc(var(--orb) + 56px); display: grid; place-items: center; flex: none; }
+.orb {
+  position: relative; width: var(--orb); height: var(--orb); border-radius: 50%;
+  display: grid; place-items: center; cursor: pointer;
+  background: var(--surface-2); color: var(--text);
+  border: 2px solid var(--edge);
+  transition: background var(--dur-base) var(--ease-out), border-color var(--dur-base) var(--ease-out), transform var(--dur-fast) var(--ease-out);
+  font: inherit;
+}
+.orb svg.ic { width: calc(var(--orb) * 0.3); height: calc(var(--orb) * 0.3); }
+.orb:focus-visible, .btn:focus-visible { outline: 3px solid var(--focus); outline-offset: 3px; }
+.halo, .ticks { position: absolute; inset: 0; pointer-events: none; }
+.halo { border-radius: 50%; margin: auto; }
+
+/* listening: thin solid ring in live */
+[data-floor="live"] .orb { border-color: var(--live); border-width: 3px; }
+/* you: filled live disk + level halo */
+[data-floor="you"] .orb { background: var(--live); border-color: var(--live); color: var(--on-solid); }
+[data-floor="you"] .halo {
+  width: calc(var(--orb) + 2 * var(--lvl, 0) * 26px); height: calc(var(--orb) + 2 * var(--lvl, 0) * 26px);
+  background: color-mix(in srgb, var(--live) 26%, transparent);
+  box-shadow: 0 0 0 calc(var(--lvl, 0) * 10px) color-mix(in srgb, var(--live) 12%, transparent);
+}
+/* voice: radial sunburst of bars around the orb, in voice color */
+[data-floor="voice"] .orb { border-color: var(--voice); background: color-mix(in srgb, var(--voice) 14%, var(--surface-2)); }
+.ticks { color: var(--voice); }
+/* muted: dashed ring, slashed mic, muted fill */
+[data-floor="muted"] .orb {
+  border: 3px dashed var(--muted); color: var(--muted);
+  background: color-mix(in srgb, var(--muted) 14%, var(--surface-2));
+}
+/* connecting: dotted neutral ring */
+.orb.connecting { border: 3px dotted var(--edge); color: var(--text-3); cursor: default; }
+.orb.paused { border-color: var(--edge); }
+
+/* Claude Code card */
+.cc { flex: none; margin: 0 var(--gutter); }
+.cc-quiet {
+  display: flex; align-items: center; gap: var(--sp-2); min-height: var(--hit);
+  color: var(--text-2); font-size: var(--fs-meta);
+  border-top: 1px solid var(--hairline);
+}
+.cc-quiet svg { width: 14px; height: 14px; color: var(--text-3); }
+.card {
+  background: var(--surface-1); border: 1px solid var(--hairline); border-radius: var(--r-lg);
+  padding: var(--sp-3) var(--sp-4); display: grid; gap: var(--sp-1);
+}
+.card-top { display: flex; align-items: center; gap: var(--sp-2); font-size: var(--fs-meta); line-height: var(--lh-meta); color: var(--text-2); }
+.card-top .lab { font-weight: var(--fw-semibold); color: var(--text); }
+.card-top .t { margin-left: auto; font-variant-numeric: tabular-nums; }
+.card-top svg { width: 16px; height: 16px; flex: none; }
+.card .step { font-size: var(--fs-body); line-height: var(--lh-body); color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.card .step code, .cmd { font-family: var(--font-mono); font-size: 13px; }
+.card .req { font-size: var(--fs-meta); line-height: var(--lh-meta); color: var(--text-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.card.work .card-top svg { color: var(--work); }
+.progress { height: 4px; border-radius: 2px; background: var(--hairline); overflow: hidden; margin-top: var(--sp-1); }
+.progress i { display: block; height: 100%; width: 38%; background: var(--work); border-radius: 2px; }
+.card.done .card-top svg { color: var(--work); }
+.summary { margin: 0; font-size: var(--fs-body); line-height: var(--lh-body); color: var(--text); display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+.more { justify-self: start; margin: 0 calc(-1 * var(--sp-2)) calc(-1 * var(--sp-2)); }
+.card.attn {
+  background: color-mix(in srgb, var(--attn) 12%, var(--surface-1));
+  border: 2px solid var(--attn);
+}
+.card.attn .card-top { color: var(--text); }
+.card.attn .card-top svg { color: var(--attn); width: 20px; height: 20px; }
+.card.attn .lab { font-size: var(--fs-body); }
+.cmd {
+  display: block; padding: var(--sp-2) var(--sp-3); border-radius: var(--r-sm);
+  background: var(--bg); border: 1px solid var(--edge); color: var(--text);
+  white-space: pre-wrap; word-break: break-all; line-height: 20px; margin: var(--sp-1) 0;
+}
+.card.attn .how { font-size: var(--fs-meta); line-height: var(--lh-meta); color: var(--text); }
+
+/* Captions: latest line large; previous dim; history is the first to go */
+.caps { flex: none; padding: var(--sp-3) var(--gutter) var(--sp-2); display: grid; gap: var(--sp-2); }
+.cap { display: grid; gap: 2px; }
+.who { display: inline-flex; align-items: center; gap: 6px; font-size: var(--fs-label); line-height: var(--lh-label); font-weight: var(--fw-semibold); color: var(--text-2); }
+.who svg { width: 10px; height: 10px; }
+.who.you svg { color: var(--live); }
+.who.cl svg { color: var(--voice); }
+.cap.prev p { margin: 0; font-size: var(--fs-meta); line-height: var(--lh-meta); color: var(--text-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.cap.last p { margin: 0; font-size: var(--fs-caption); line-height: var(--lh-caption); color: var(--text); display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.cap.last p .typing { color: var(--text-2); }
+
+/* Bottom bar: Pause left, settings, End voice isolated right */
+.bar {
+  height: var(--bar-h); flex: none; display: flex; align-items: center; gap: var(--sp-2);
+  padding: 0 var(--gutter); border-top: 1px solid var(--hairline);
+}
+.btn {
+  min-height: var(--hit-lg); min-width: var(--hit-lg); padding: 0 var(--sp-4);
+  display: inline-flex; align-items: center; justify-content: center; gap: var(--sp-2);
+  border-radius: var(--r-md); border: 1px solid var(--edge);
+  background: var(--surface-2); color: var(--text);
+  font: inherit; font-size: var(--fs-body); font-weight: var(--fw-medium); cursor: pointer;
+  transition: background var(--dur-fast) var(--ease-out), border-color var(--dur-fast) var(--ease-out);
+}
+.btn svg { width: 18px; height: 18px; flex: none; }
+.btn.icon { padding: 0; width: var(--hit-lg); }
+.btn.ghost { background: transparent; border-color: transparent; color: var(--text-2); }
+.btn.link { min-height: var(--hit); background: transparent; border-color: transparent; color: var(--work); padding: 0 var(--sp-2); font-size: var(--fs-meta); }
+.btn.danger { margin-left: auto; background: transparent; border-color: color-mix(in srgb, var(--err) 55%, var(--edge)); color: var(--err); }
+.btn.primary { background: var(--text); color: var(--bg); border-color: var(--text); }
+.btn.wide { width: 100%; }
+.btn[disabled] { opacity: 1; color: var(--text-3); border-color: var(--hairline); background: transparent; cursor: default; }
+.bar .spacer { flex: 1; }
+
+/* Overlay content inside the stage (permission, paused, errors) */
+.ov { display: grid; gap: var(--sp-3); justify-items: center; text-align: center; max-width: 360px; }
+.ov h2 { margin: 0; font-size: 26px; line-height: 32px; font-weight: var(--fw-semibold); letter-spacing: -0.015em; }
+.ov p { margin: 0; color: var(--text-2); font-size: var(--fs-body); line-height: var(--lh-body); }
+.ov .glyph { width: 96px; height: 96px; border-radius: 50%; display: grid; place-items: center; border: 3px solid var(--state); color: var(--state); background: color-mix(in srgb, var(--state) 12%, var(--surface-2)); }
+.ov .glyph svg { width: 40px; height: 40px; }
+.ov .actions { display: grid; gap: var(--sp-2); width: 100%; margin-top: var(--sp-2); }
+.ov .steps { text-align: left; margin: 0; padding: var(--sp-3) var(--sp-4) var(--sp-3) calc(var(--sp-4) + 18px); background: var(--surface-1); border: 1px solid var(--hairline); border-radius: var(--r-md); color: var(--text); font-size: var(--fs-meta); line-height: 20px; width: 100%; }
+.ov .steps li + li { margin-top: var(--sp-1); }
+.pending { text-align: left; width: 100%; }
+
+/* Permission pointer toward Chrome's prompt (top-left of the app window) */
+.pointer { position: absolute; top: 8px; left: 14px; display: flex; align-items: flex-start; gap: 6px; color: var(--attn); font-size: var(--fs-meta); line-height: var(--lh-meta); font-weight: var(--fw-semibold); }
+.pointer svg { width: 56px; height: 56px; flex: none; }
+.pointer span { margin-top: 30px; color: var(--text); background: color-mix(in srgb, var(--attn) 18%, var(--surface-1)); border: 1px solid var(--attn); padding: 4px 10px; border-radius: var(--r-pill); }
+
+/* Single banner */
+.banner {
+  margin: 0 var(--gutter) var(--sp-2); display: flex; align-items: center; gap: var(--sp-3);
+  padding: var(--sp-2) var(--sp-2) var(--sp-2) var(--sp-4); border-radius: var(--r-md);
+  background: color-mix(in srgb, var(--attn) 12%, var(--surface-1)); border: 1px solid var(--attn);
+  font-size: var(--fs-meta); line-height: var(--lh-meta); color: var(--text);
+}
+.banner svg { width: 18px; height: 18px; color: var(--attn); flex: none; }
+.banner .btn { margin-left: auto; min-height: var(--hit); font-size: var(--fs-meta); padding: 0 var(--sp-3); }
+
+/* Settings drawer */
+.scrim { position: absolute; inset: 0; background: var(--scrim); z-index: var(--z-scrim); }
+.drawer {
+  position: absolute; left: 0; right: 0; bottom: 0; z-index: var(--z-drawer);
+  background: var(--surface-1); border-top: 1px solid var(--edge); border-radius: var(--r-xl) var(--r-xl) 0 0;
+  box-shadow: var(--shadow-2); padding: var(--sp-2) var(--gutter) var(--sp-4);
+  display: grid; gap: var(--sp-4);
+}
+.drawer-top { display: flex; align-items: center; justify-content: space-between; }
+.drawer-top h2 { margin: 0; font-size: var(--fs-title); line-height: var(--lh-title); font-weight: var(--fw-semibold); }
+.field { display: grid; gap: var(--sp-2); }
+.field > .lbl { font-size: var(--fs-meta); line-height: var(--lh-meta); font-weight: var(--fw-semibold); color: var(--text); }
+.field > .help { font-size: var(--fs-meta); line-height: var(--lh-meta); color: var(--text-2); margin: 0; }
+.seg { display: grid; grid-template-columns: repeat(3, 1fr); gap: var(--sp-1); padding: var(--sp-1); background: var(--surface-2); border: 1px solid var(--edge); border-radius: var(--r-md); }
+.seg button { min-height: var(--hit); border: 0; border-radius: var(--r-sm); background: transparent; color: var(--text-2); font: inherit; font-size: var(--fs-meta); font-weight: var(--fw-medium); cursor: pointer; }
+.seg button[aria-checked="true"] { background: var(--text); color: var(--bg); }
+.select {
+  min-height: var(--hit-lg); display: flex; align-items: center; gap: var(--sp-3); padding: 0 var(--sp-3) 0 var(--sp-4);
+  border-radius: var(--r-md); border: 1px solid var(--edge); background: var(--surface-2); color: var(--text);
+}
+.select svg { width: 18px; height: 18px; color: var(--text-2); flex: none; }
+.select .v { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.select .chev { margin-left: auto; }
+.note { display: flex; gap: var(--sp-2); font-size: var(--fs-meta); line-height: var(--lh-meta); color: var(--text-2); margin: 0; }
+.note svg { width: 16px; height: 16px; flex: none; margin-top: 1px; color: var(--attn); }
+.esc { font-size: var(--fs-meta); color: var(--text-2); text-align: center; margin: 0; }
+
+.sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+
+/* Mini (<= 480px tall): captions -> 1 line, Claude card -> 1 line, word smaller */
+.win.mini .stage { gap: var(--sp-2); }
+.win.mini .orb-wrap { width: calc(var(--orb) + 32px); height: calc(var(--orb) + 32px); }
+.win.mini .word { font-size: 28px; line-height: 34px; }
+.win.mini .card { padding: var(--sp-2) var(--sp-3); }
+.win.mini .caps { padding-top: var(--sp-2); }
+
+@media (prefers-reduced-motion: reduce) {
+  .win *, .win::before { transition: none !important; animation: none !important; }
+}
+
+/* Hero-only mode (?frame=id): the single window, no board chrome */
+body.hero { padding: 0; background: var(--bg); }
+body.hero .board-head, body.hero figcaption { display: none; }
+body.hero .grid { display: block; }
+body.hero figure:not(.pick) { display: none; }
+body.hero .frame { border-radius: 0; box-shadow: none; }
+</style>
+</head>
+<body class="board">
+
+<!-- Icon sprite (inline, no external requests) -->
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <defs>
+    <symbol id="i-mic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5.5 11a6.5 6.5 0 0 0 13 0M12 17.5V21"/></symbol>
+    <symbol id="i-mic-off" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5.5 11a6.5 6.5 0 0 0 13 0M12 17.5V21"/><path d="M3.5 3.5l17 17" stroke-width="2.4"/></symbol>
+    <symbol id="i-pause" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M9 6v12M15 6v12"/></symbol>
+    <symbol id="i-play" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5.5v13a1 1 0 0 0 1.5.86l10.5-6.5a1 1 0 0 0 0-1.72L9.5 4.64A1 1 0 0 0 8 5.5Z"/></symbol>
+    <symbol id="i-gear" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .34 1.87l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.7 1.7 0 0 0-1.87-.34 1.7 1.7 0 0 0-1 1.54V21a2 2 0 1 1-4 0v-.09a1.7 1.7 0 0 0-1.1-1.54 1.7 1.7 0 0 0-1.87.34l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.7 1.7 0 0 0 4.6 15a1.7 1.7 0 0 0-1.54-1H3a2 2 0 1 1 0-4h.09A1.7 1.7 0 0 0 4.6 9a1.7 1.7 0 0 0-.34-1.87l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.7 1.7 0 0 0 9 4.6a1.7 1.7 0 0 0 1-1.54V3a2 2 0 1 1 4 0v.09a1.7 1.7 0 0 0 1 1.54 1.7 1.7 0 0 0 1.87-.34l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.7 1.7 0 0 0 19.4 9a1.7 1.7 0 0 0 1.54 1H21a2 2 0 1 1 0 4h-.09a1.7 1.7 0 0 0-1.54 1Z"/></symbol>
+    <symbol id="i-x" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></symbol>
+    <symbol id="i-power" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 3v8"/><path d="M6.3 7.3a8 8 0 1 0 11.4 0"/></symbol>
+    <symbol id="i-alert" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0Z"/><path d="M12 9v4M12 17h.01"/></symbol>
+    <symbol id="i-check" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="m8 12 3 3 5-6"/></symbol>
+    <symbol id="i-spin" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><circle cx="12" cy="12" r="9" opacity=".25"/><path d="M21 12a9 9 0 0 0-9-9"/></symbol>
+    <symbol id="i-moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="8"/></symbol>
+    <symbol id="i-chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m7 10 5 5 5-5"/></symbol>
+    <symbol id="i-speaker" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 5 6 9H3v6h3l5 4V5Z"/><path d="M15.5 8.5a5 5 0 0 1 0 7M18.5 5.5a9 9 0 0 1 0 13"/></symbol>
+    <symbol id="i-lock" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="10" width="16" height="11" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/></symbol>
+    <symbol id="i-refresh" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 11a8 8 0 0 0-14.9-3.9L4 8.5M4 4v4.5h4.5"/><path d="M4 13a8 8 0 0 0 14.9 3.9l1.1-1.4M20 20v-4.5h-4.5"/></symbol>
+    <!-- state shapes for the header and caption speaker labels -->
+    <symbol id="s-ring" viewBox="0 0 12 12"><circle cx="6" cy="6" r="4.5" fill="none" stroke="currentColor" stroke-width="2"/></symbol>
+    <symbol id="s-dot" viewBox="0 0 12 12"><circle cx="6" cy="6" r="5.5" fill="currentColor"/></symbol>
+    <symbol id="s-bars" viewBox="0 0 12 12" fill="currentColor"><rect x="0.5" y="4" width="2.4" height="4" rx="1.2"/><rect x="4.8" y="1" width="2.4" height="10" rx="1.2"/><rect x="9.1" y="3" width="2.4" height="6" rx="1.2"/></symbol>
+    <symbol id="s-dash" viewBox="0 0 12 12"><circle cx="6" cy="6" r="4.5" fill="none" stroke="currentColor" stroke-width="2" stroke-dasharray="3 2.2"/></symbol>
+    <symbol id="s-diamond" viewBox="0 0 12 12"><path d="M6 .8 11.2 6 6 11.2.8 6Z" fill="currentColor"/></symbol>
+    <symbol id="s-square" viewBox="0 0 12 12"><rect x="1.5" y="1.5" width="9" height="9" rx="2" fill="none" stroke="currentColor" stroke-width="2"/></symbol>
+  </defs>
+</svg>
+
+<header class="board-head">
+  <div>
+    <h1>Direction C: Ambient companion</h1>
+    <p>The window is a mood light with a word in it. The whole field takes on the colour of whoever holds the floor, the orb changes <em>shape</em> (ring, filled disk, sunburst, dashed ring), and one big word says it plainly. Everything else stays small and quiet until Claude needs you. Default 420x640, plus the collapsed 360x420 size and a light-theme pair.</p>
+  </div>
+  <div class="legend" data-theme="dark">
+    <span><i style="background:var(--live)"></i>Live / heard</span>
+    <span><i style="background:var(--voice)"></i>Sotto speaking</span>
+    <span><i style="background:var(--work)"></i>Claude working</span>
+    <span><i style="background:var(--attn)"></i>Attention</span>
+    <span><i style="background:var(--err)"></i>Error</span>
+    <span><i style="background:var(--muted)"></i>Muted</span>
+  </div>
+</header>
+
+<main class="grid">
+
+<!-- 1. Allow microphone (first launch) -->
+<figure id="allow-mic"><div class="frame">
+<div class="win" data-theme="dark" data-floor="attn">
+  <div class="pointer" aria-hidden="true">
+    <svg viewBox="0 0 56 56" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M48 50C30 48 14 38 10 12"/><path d="M4 18l6-8 7 7"/></svg>
+    <span>Chrome is asking here</span>
+  </div>
+  <div class="stage" style="padding-top:64px">
+    <div class="ov">
+      <div class="glyph"><svg><use href="#i-mic"/></svg></div>
+      <h2>Allow microphone access</h2>
+      <p>Chrome's prompt is at the top-left of this window. Click <b style="color:var(--text)">Allow</b> so Sotto can hear you.</p>
+      <div class="actions">
+        <button class="btn" type="button"><svg><use href="#i-refresh"/></svg>I don't see a prompt</button>
+      </div>
+      <p style="font-size:13px;line-height:18px">Nothing is recorded until the voice connects.</p>
+    </div>
+  </div>
+  <div class="bar"><span class="spacer"></span><button class="btn danger" type="button"><svg><use href="#i-power"/></svg>End voice</button></div>
+</div></div>
+<figcaption><b>Allow microphone</b>Permission is <code>prompt</code>: an explicit state points at Chrome's bubble. Pause and mute are gone; only End voice remains.</figcaption></figure>
+
+<!-- 2. Connecting -->
+<figure id="connecting"><div class="frame">
+<div class="win" data-theme="dark" data-floor="idle">
+  <div class="hdr"><span class="st"><svg><use href="#s-dash"/></svg>Connecting</span><span class="sep">·</span><span class="proj">sotto</span><span class="use">0 min · $0.00 today</span></div>
+  <div class="stage">
+    <div class="orb-wrap"><button class="orb connecting" type="button" aria-pressed="false" disabled><svg class="ic"><use href="#i-mic"/></svg><span class="sr-only">Mute</span></button></div>
+    <p class="word">Connecting</p>
+    <p class="sub">Starting the voice session…</p>
+  </div>
+  <div class="cc"><div class="cc-quiet"><svg><use href="#s-ring"/></svg>Claude is idle</div></div>
+  <div class="caps"><div class="cap last"><p style="color:var(--text-2);font-size:15px">What you and Sotto say will appear here.</p></div></div>
+  <div class="bar"><button class="btn" type="button" disabled><svg><use href="#i-pause"/></svg>Pause</button><button class="btn icon ghost" type="button" aria-label="Settings"><svg><use href="#i-gear"/></svg></button><button class="btn danger" type="button"><svg><use href="#i-power"/></svg>End voice</button></div>
+</div></div>
+<figcaption><b>Connecting</b>Dotted ring, neutral field. Mute is visible but inert, so the layout never jumps when it goes live.</figcaption></figure>
+
+<!-- 3. Listening (hero) -->
+<figure id="listening"><div class="frame">
+<div class="win" data-theme="dark" data-floor="live">
+  <div class="hdr"><span class="st"><svg><use href="#s-ring"/></svg>Live</span><span class="sep">·</span><span class="proj">sotto</span><span class="use">4:12 · $0.21 today</span></div>
+  <div class="stage">
+    <div class="orb-wrap"><button class="orb" type="button" aria-pressed="false"><svg class="ic"><use href="#i-mic"/></svg><span class="sr-only">Mute</span></button></div>
+    <p class="word">Listening</p>
+    <p class="sub"><kbd>M</kbd> or <kbd>Space</kbd> to mute</p>
+  </div>
+  <div class="cc"><div class="cc-quiet"><svg><use href="#s-ring"/></svg>Claude is idle</div></div>
+  <div class="caps">
+    <div class="cap prev"><span class="who you"><svg><use href="#s-dot"/></svg>You</span><p>Can you check why the auth test is flaky?</p></div>
+    <div class="cap last"><span class="who cl"><svg><use href="#s-bars"/></svg>Sotto</span><p>Sure. I've asked Claude Code to look at it and I'll tell you what it finds.</p></div>
+  </div>
+  <div class="bar"><button class="btn" type="button"><svg><use href="#i-pause"/></svg>Pause</button><button class="btn icon ghost" type="button" aria-label="Settings"><svg><use href="#i-gear"/></svg></button><button class="btn danger" type="button"><svg><use href="#i-power"/></svg>End voice</button></div>
+</div></div>
+<figcaption><b>Listening</b>Thin live ring, faint teal field, calm and still. Nothing loops while idle.</figcaption></figure>
+
+<!-- 4. You speaking -->
+<figure id="you"><div class="frame">
+<div class="win" data-theme="dark" data-floor="you">
+  <div class="hdr"><span class="st"><svg><use href="#s-dot"/></svg>Live</span><span class="sep">·</span><span class="proj">sotto</span><span class="use">4:18 · $0.22 today</span></div>
+  <div class="stage">
+    <div class="orb-wrap"><span class="halo" style="--lvl:.75"></span><button class="orb" type="button" aria-pressed="false"><svg class="ic"><use href="#i-mic"/></svg><span class="sr-only">Mute</span></button></div>
+    <p class="word">Hearing you</p>
+    <p class="sub"><kbd>M</kbd> or <kbd>Space</kbd> to mute</p>
+  </div>
+  <div class="cc"><div class="cc-quiet"><svg><use href="#s-ring"/></svg>Claude is idle</div></div>
+  <div class="caps">
+    <div class="cap prev"><span class="who cl"><svg><use href="#s-bars"/></svg>Sotto</span><p>Sure. I've asked Claude Code to look at it.</p></div>
+    <div class="cap last"><span class="who you"><svg><use href="#s-dot"/></svg>You</span><p>Also have it run the whole suite once it's done <span class="typing">…</span></p></div>
+  </div>
+  <div class="bar"><button class="btn" type="button"><svg><use href="#i-pause"/></svg>Pause</button><button class="btn icon ghost" type="button" aria-label="Settings"><svg><use href="#i-gear"/></svg></button><button class="btn danger" type="button"><svg><use href="#i-power"/></svg>End voice</button></div>
+</div></div>
+<figcaption><b>You speaking</b>The ring fills solid and a halo breathes with your mic level (transform only, ~90ms follow).</figcaption></figure>
+
+<!-- 5. Sotto speaking -->
+<figure id="voice"><div class="frame">
+<div class="win" data-theme="dark" data-floor="voice">
+  <div class="hdr"><span class="st"><svg style="color:var(--voice)"><use href="#s-bars"/></svg>Live</span><span class="sep">·</span><span class="proj">sotto</span><span class="use">4:31 · $0.23 today</span></div>
+  <div class="stage">
+    <div class="orb-wrap"><svg class="ticks" data-ticks="44" data-seed="3" viewBox="0 0 200 200"></svg><button class="orb" type="button" aria-pressed="false"><svg class="ic"><use href="#i-mic"/></svg><span class="sr-only">Mute</span></button></div>
+    <p class="word">Sotto</p>
+    <p class="sub">is speaking · talk any time to interrupt</p>
+  </div>
+  <div class="cc"><div class="cc-quiet"><svg><use href="#s-ring"/></svg>Claude is idle</div></div>
+  <div class="caps">
+    <div class="cap prev"><span class="who you"><svg><use href="#s-dot"/></svg>You</span><p>What did it find?</p></div>
+    <div class="cap last"><span class="who cl"><svg><use href="#s-bars"/></svg>Sotto</span><p>The test shares a token cache with the login test, so the order they run in matters.</p></div>
+  </div>
+  <div class="bar"><button class="btn" type="button"><svg><use href="#i-pause"/></svg>Pause</button><button class="btn icon ghost" type="button" aria-label="Settings"><svg><use href="#i-gear"/></svg></button><button class="btn danger" type="button"><svg><use href="#i-power"/></svg>End voice</button></div>
+</div></div>
+<figcaption><b>Sotto speaking</b>A violet sunburst driven by an un-played clone of the remote stream; the &lt;audio&gt; element stays the AEC reference.</figcaption></figure>
+
+<!-- 6. Claude working -->
+<figure id="working"><div class="frame">
+<div class="win" data-theme="dark" data-floor="live">
+  <div class="hdr"><span class="st"><svg><use href="#s-ring"/></svg>Live</span><span class="sep">·</span><span class="proj">sotto</span><span class="use">6:02 · $0.30 today</span></div>
+  <div class="stage">
+    <div class="orb-wrap"><button class="orb" type="button" aria-pressed="false"><svg class="ic"><use href="#i-mic"/></svg><span class="sr-only">Mute</span></button></div>
+    <p class="word">Listening</p>
+    <p class="sub"><kbd>M</kbd> or <kbd>Space</kbd> to mute</p>
+  </div>
+  <div class="cc"><div class="card work">
+    <div class="card-top"><svg><use href="#i-spin"/></svg><span class="lab">Claude is working</span><span class="t">1:42</span></div>
+    <div class="step">Running <code>npm test -- auth.spec.ts</code></div>
+    <div class="req">Fix the flaky auth test, then run the full suite</div>
+    <div class="progress" aria-hidden="true"><i></i></div>
+  </div></div>
+  <div class="caps">
+    <div class="cap last"><span class="who cl"><svg><use href="#s-bars"/></svg>Sotto</span><p>It's running the auth tests now.</p></div>
+  </div>
+  <div class="bar"><button class="btn" type="button"><svg><use href="#i-pause"/></svg>Pause</button><button class="btn icon ghost" type="button" aria-label="Settings"><svg><use href="#i-gear"/></svg></button><button class="btn danger" type="button"><svg><use href="#i-power"/></svg>End voice</button></div>
+</div></div>
+<figcaption><b>Claude working</b>One card absorbs the request chip: current step on one line, the request under it, elapsed time. Blue = Claude Code.</figcaption></figure>
+
+<!-- 7. Needs approval -->
+<figure id="approval"><div class="frame">
+<div class="win" data-theme="dark" data-floor="attn">
+  <div class="hdr"><span class="st"><svg style="color:var(--attn)"><use href="#s-diamond"/></svg>Approval needed</span><span class="sep">·</span><span class="proj">sotto</span><span class="use">7:40 · $0.38</span></div>
+  <div class="stage" style="gap:8px">
+    <div class="orb-wrap" style="width:120px;height:120px"><button class="orb" type="button" aria-pressed="false" style="--orb:96px;border-color:var(--live);border-width:3px"><svg class="ic"><use href="#i-mic"/></svg><span class="sr-only">Mute</span></button></div>
+    <p class="word" style="font-size:28px;line-height:34px">Listening</p>
+  </div>
+  <div class="cc"><div class="card attn" role="alert">
+    <div class="card-top"><svg><use href="#i-alert"/></svg><span class="lab">Claude needs your approval</span></div>
+    <code class="cmd">Bash(rm -rf test/fixtures/tmp &amp;&amp; npm run test:all)</code>
+    <div class="how">Waiting for your approval in the terminal. Approve or deny it there.</div>
+  </div></div>
+  <div class="caps">
+    <div class="cap last"><span class="who cl"><svg><use href="#s-bars"/></svg>Sotto</span><p>Claude wants to delete the temp fixtures and rerun everything.</p></div>
+  </div>
+  <div class="bar"><button class="btn" type="button"><svg><use href="#i-pause"/></svg>Pause</button><button class="btn icon ghost" type="button" aria-label="Settings"><svg><use href="#i-gear"/></svg></button><button class="btn danger" type="button"><svg><use href="#i-power"/></svg>End voice</button></div>
+</div></div>
+<figcaption><b>Needs approval</b>The only loud state: amber field, full command unclipped, header word and window title become "Approval needed". The orb shrinks but stays.</figcaption></figure>
+
+<!-- 8. Finished with summary -->
+<figure id="summary"><div class="frame">
+<div class="win" data-theme="dark" data-floor="live">
+  <div class="hdr"><span class="st"><svg><use href="#s-ring"/></svg>Live</span><span class="sep">·</span><span class="proj">sotto</span><span class="use">9:15 · $0.46 today</span></div>
+  <div class="stage">
+    <div class="orb-wrap"><button class="orb" type="button" aria-pressed="false"><svg class="ic"><use href="#i-mic"/></svg><span class="sr-only">Mute</span></button></div>
+    <p class="word">Listening</p>
+    <p class="sub"><kbd>M</kbd> or <kbd>Space</kbd> to mute</p>
+  </div>
+  <div class="cc"><div class="card done">
+    <div class="card-top"><svg><use href="#i-check"/></svg><span class="lab">Claude finished</span><span class="t">2 min ago</span></div>
+    <p class="summary">Fixed the flaky auth test: the login and auth specs shared a module-level token cache. Each spec now builds its own cache in beforeEach. All 214 tests pass, including 3 runs in random order.</p>
+    <button class="btn link more" type="button">More</button>
+  </div></div>
+  <div class="caps">
+    <div class="cap last"><span class="who cl"><svg><use href="#s-bars"/></svg>Sotto</span><p>Done. All 214 tests pass now.</p></div>
+  </div>
+  <div class="bar"><button class="btn" type="button"><svg><use href="#i-pause"/></svg>Pause</button><button class="btn icon ghost" type="button" aria-label="Settings"><svg><use href="#i-gear"/></svg></button><button class="btn danger" type="button"><svg><use href="#i-power"/></svg>End voice</button></div>
+</div></div>
+<figcaption><b>Claude finished</b>A clean 3-line clamp and a 44px "More", never cut mid-line.</figcaption></figure>
+
+<!-- 9. Muted -->
+<figure id="muted"><div class="frame">
+<div class="win" data-theme="dark" data-floor="muted">
+  <div class="hdr"><span class="st"><svg style="color:var(--muted)"><use href="#s-dash"/></svg>Muted</span><span class="sep">·</span><span class="warn">still billing</span><span class="use">5:03 · $0.25 today</span></div>
+  <div class="stage">
+    <div class="orb-wrap"><button class="orb" type="button" aria-pressed="true"><svg class="ic"><use href="#i-mic-off"/></svg><span class="sr-only">Mute</span></button></div>
+    <p class="word">Muted</p>
+    <p class="sub"><kbd>M</kbd> or <kbd>Space</kbd> to unmute · Pause stops billing</p>
+  </div>
+  <div class="cc"><div class="card work">
+    <div class="card-top"><svg><use href="#i-spin"/></svg><span class="lab">Claude is working</span><span class="t">0:24</span></div>
+    <div class="step">Editing <code>test/auth.spec.ts</code></div>
+  </div></div>
+  <div class="caps">
+    <div class="cap last"><span class="who you"><svg><use href="#s-dot"/></svg>You</span><p>Hold on, someone's at the door.</p></div>
+  </div>
+  <div class="bar"><button class="btn" type="button"><svg><use href="#i-pause"/></svg>Pause</button><button class="btn icon ghost" type="button" aria-label="Settings"><svg><use href="#i-gear"/></svg></button><button class="btn danger" type="button"><svg><use href="#i-power"/></svg>End voice</button></div>
+</div></div>
+<figcaption><b>Muted</b>Dashed ring, slashed mic, pink field. The header says billing continues; label stays "Mute", aria-pressed carries on/off.</figcaption></figure>
+
+<!-- 10. Paused (idle) with pending result -->
+<figure id="paused"><div class="frame">
+<div class="win" data-theme="dark" data-floor="idle">
+  <div class="hdr"><span class="st"><svg><use href="#s-square"/></svg>Paused</span><span class="sep">·</span><span class="proj">sotto</span><span class="use">9:40 · $0.48 today</span></div>
+  <div class="stage">
+    <div class="ov">
+      <button class="orb paused" type="button" style="--orb:112px"><svg class="ic" style="margin-left:6px"><use href="#i-play"/></svg><span class="sr-only">Resume</span></button>
+      <h2>Paused after 5 minutes of silence</h2>
+      <p>Resume to keep talking with Claude Code.</p>
+      <div class="card done pending">
+        <div class="card-top"><svg><use href="#i-check"/></svg><span class="lab">Claude finished while you were away</span></div>
+        <p class="summary">Fixed the flaky auth test. Each spec now builds its own token cache; all 214 tests pass.</p>
+      </div>
+      <div class="actions"><button class="btn primary wide" type="button">Resume</button></div>
+      <p class="sub" style="margin:0">or press <kbd>Space</kbd></p>
+    </div>
+  </div>
+  <div class="bar"><span class="spacer"></span><button class="btn icon ghost" type="button" aria-label="Settings"><svg><use href="#i-gear"/></svg></button><button class="btn danger" type="button" style="margin-left:0"><svg><use href="#i-power"/></svg>End voice</button></div>
+</div></div>
+<figcaption><b>Paused (idle)</b>Kept from today: the pending result and the Space hint. The orb becomes a play button; the field goes neutral, since nothing is billing.</figcaption></figure>
+
+<!-- 11. Error: blocked by macOS -->
+<figure id="error"><div class="frame">
+<div class="win" data-theme="dark" data-floor="err">
+  <div class="hdr"><span class="st"><svg style="color:var(--err)"><use href="#s-square"/></svg>Mic blocked</span><span class="sep">·</span><span class="proj">sotto</span><span class="use">0 min · $0.00 today</span></div>
+  <div class="stage">
+    <div class="ov">
+      <div class="glyph"><svg><use href="#i-mic-off"/></svg></div>
+      <h2>macOS is blocking the microphone</h2>
+      <ol class="steps">
+        <li>Open System Settings → Privacy &amp; Security → Microphone.</li>
+        <li>Turn on <b>Google Chrome</b>.</li>
+        <li>Quit and reopen Chrome, then run <code>/talk on</code>.</li>
+      </ol>
+      <div class="actions"><button class="btn primary wide" type="button"><svg><use href="#i-refresh"/></svg>Try again</button></div>
+    </div>
+  </div>
+  <div class="bar"><span class="spacer"></span><button class="btn danger" type="button"><svg><use href="#i-power"/></svg>End voice</button></div>
+</div></div>
+<figcaption><b>Error: mic blocked (macOS)</b>Each cause gets its own copy: dismissed (retry), blocked in Chrome (site settings), blocked in macOS (this), not found, busy.</figcaption></figure>
+
+<!-- 12. Reconnecting + one banner -->
+<figure id="reconnecting"><div class="frame">
+<div class="win" data-theme="dark" data-floor="idle">
+  <div class="hdr"><span class="st"><svg><use href="#s-dash"/></svg>Reconnecting</span><span class="sep">·</span><span class="warn">muted</span><span class="use">5:40 · $0.28 today</span></div>
+  <div class="banner" role="status"><svg><use href="#i-speaker"/></svg><span>Click anywhere in this window to turn on the voice audio.</span></div>
+  <div class="stage">
+    <div class="orb-wrap"><button class="orb connecting" type="button" aria-pressed="true" style="color:var(--muted)"><svg class="ic"><use href="#i-mic-off"/></svg><span class="sr-only">Mute</span></button></div>
+    <p class="word">Reconnecting</p>
+    <p class="sub">Your mute setting is kept.</p>
+  </div>
+  <div class="cc"><div class="card work">
+    <div class="card-top"><svg><use href="#i-spin"/></svg><span class="lab">Claude is working</span><span class="t">3:10</span></div>
+    <div class="step">Reading <code>src/session/cache.ts</code></div>
+  </div></div>
+  <div class="caps"><div class="cap last"><span class="who you"><svg><use href="#s-dot"/></svg>You</span><p>Okay, I'm back.</p></div></div>
+  <div class="bar"><button class="btn" type="button"><svg><use href="#i-pause"/></svg>Pause</button><button class="btn icon ghost" type="button" aria-label="Settings"><svg><use href="#i-gear"/></svg></button><button class="btn danger" type="button"><svg><use href="#i-power"/></svg>End voice</button></div>
+</div></div>
+<figcaption><b>Reconnecting + notice</b>One banner at a time, one action (the click itself). Mute survives the reconnect and stays visible.</figcaption></figure>
+
+<!-- 13. Settings drawer / device picker -->
+<figure id="settings"><div class="frame">
+<div class="win" data-theme="dark" data-floor="live">
+  <div class="hdr"><span class="st"><svg><use href="#s-ring"/></svg>Live</span><span class="sep">·</span><span class="proj">sotto</span><span class="use">4:12 · $0.21 today</span></div>
+  <div class="stage">
+    <div class="orb-wrap"><button class="orb" type="button" aria-pressed="false"><svg class="ic"><use href="#i-mic"/></svg><span class="sr-only">Mute</span></button></div>
+    <p class="word">Listening</p>
+  </div>
+  <div class="scrim"></div>
+  <div class="drawer" role="dialog" aria-label="Settings">
+    <div class="drawer-top"><h2>Settings</h2><button class="btn icon ghost" type="button" aria-label="Close settings"><svg><use href="#i-x"/></svg></button></div>
+    <div class="field">
+      <span class="lbl">Speaking policy</span>
+      <div class="seg" role="radiogroup" aria-label="Speaking policy">
+        <button role="radio" aria-checked="false">Quiet</button>
+        <button role="radio" aria-checked="true">Milestones</button>
+        <button role="radio" aria-checked="false">Walkthrough</button>
+      </div>
+      <p class="help">Mention notable events.</p>
+    </div>
+    <div class="field">
+      <span class="lbl">Microphone</span>
+      <div class="select" role="combobox" aria-expanded="false"><svg><use href="#i-mic"/></svg><span class="v">AirPods Pro</span><svg class="chev"><use href="#i-chev"/></svg></div>
+      <p class="note"><svg><use href="#i-alert"/></svg><span>Bluetooth mics switch your headphones to call quality. The built-in mic sounds better.</span></p>
+    </div>
+    <div class="field">
+      <span class="lbl">Speaker</span>
+      <div class="select" role="combobox" aria-expanded="false"><svg><use href="#i-speaker"/></svg><span class="v">System default</span><svg class="chev"><use href="#i-chev"/></svg></div>
+    </div>
+    <p class="esc"><kbd>Esc</kbd> to close</p>
+  </div>
+</div></div>
+<figcaption><b>Settings drawer</b>Speaking policy, mic, speaker behind the gear: 44-48px targets, labels at full contrast. The orb stays visible above the sheet.</figcaption></figure>
+
+<!-- 14. Light: listening -->
+<figure id="light-listening"><div class="frame">
+<div class="win" data-theme="light" data-floor="live">
+  <div class="hdr"><span class="st"><svg><use href="#s-ring"/></svg>Live</span><span class="sep">·</span><span class="proj">sotto</span><span class="use">4:12 · $0.21 today</span></div>
+  <div class="stage">
+    <div class="orb-wrap"><button class="orb" type="button" aria-pressed="false"><svg class="ic"><use href="#i-mic"/></svg><span class="sr-only">Mute</span></button></div>
+    <p class="word">Listening</p>
+    <p class="sub"><kbd>M</kbd> or <kbd>Space</kbd> to mute</p>
+  </div>
+  <div class="cc"><div class="card work">
+    <div class="card-top"><svg><use href="#i-spin"/></svg><span class="lab">Claude is working</span><span class="t">1:42</span></div>
+    <div class="step">Running <code>npm test -- auth.spec.ts</code></div>
+    <div class="req">Fix the flaky auth test, then run the full suite</div>
+    <div class="progress" aria-hidden="true"><i></i></div>
+  </div></div>
+  <div class="caps">
+    <div class="cap last"><span class="who cl"><svg><use href="#s-bars"/></svg>Sotto</span><p>It's running the auth tests now.</p></div>
+  </div>
+  <div class="bar"><button class="btn" type="button"><svg><use href="#i-pause"/></svg>Pause</button><button class="btn icon ghost" type="button" aria-label="Settings"><svg><use href="#i-gear"/></svg></button><button class="btn danger" type="button"><svg><use href="#i-power"/></svg>End voice</button></div>
+</div></div>
+<figcaption><b>Light: listening + working</b>Cool paper #f7f9fb, ink #0f141b. No beige. Mute edge 3.7:1, every text token AA.</figcaption></figure>
+
+<!-- 15. Light: Sotto speaking -->
+<figure id="light-voice"><div class="frame">
+<div class="win" data-theme="light" data-floor="voice">
+  <div class="hdr"><span class="st"><svg style="color:var(--voice)"><use href="#s-bars"/></svg>Live</span><span class="sep">·</span><span class="proj">sotto</span><span class="use">4:31 · $0.23 today</span></div>
+  <div class="stage">
+    <div class="orb-wrap"><svg class="ticks" data-ticks="44" data-seed="7" viewBox="0 0 200 200"></svg><button class="orb" type="button" aria-pressed="false"><svg class="ic"><use href="#i-mic"/></svg><span class="sr-only">Mute</span></button></div>
+    <p class="word">Sotto</p>
+    <p class="sub">is speaking · talk any time to interrupt</p>
+  </div>
+  <div class="cc"><div class="cc-quiet"><svg><use href="#s-ring"/></svg>Claude is idle</div></div>
+  <div class="caps">
+    <div class="cap prev"><span class="who you"><svg><use href="#s-dot"/></svg>You</span><p>What did it find?</p></div>
+    <div class="cap last"><span class="who cl"><svg><use href="#s-bars"/></svg>Sotto</span><p>The test shares a token cache with the login test, so run order matters.</p></div>
+  </div>
+  <div class="bar"><button class="btn" type="button"><svg><use href="#i-pause"/></svg>Pause</button><button class="btn icon ghost" type="button" aria-label="Settings"><svg><use href="#i-gear"/></svg></button><button class="btn danger" type="button"><svg><use href="#i-power"/></svg>End voice</button></div>
+</div></div>
+<figcaption><b>Light: Sotto speaking</b>Same hues, darkened for 4.5:1 on white; the field drops to 10% so it reads as tint, not paint.</figcaption></figure>
+
+<!-- 16. Mini 360x420 -->
+<figure id="mini"><div class="frame" style="width:360px">
+<div class="win mini" data-theme="dark" data-floor="you">
+  <div class="hdr"><span class="st"><svg><use href="#s-dot"/></svg>Live</span><span class="use">6:20 · $0.32</span></div>
+  <div class="stage">
+    <div class="orb-wrap"><span class="halo" style="--lvl:.55"></span><button class="orb" type="button" aria-pressed="false"><svg class="ic"><use href="#i-mic"/></svg><span class="sr-only">Mute</span></button></div>
+    <p class="word">Hearing you</p>
+  </div>
+  <div class="cc"><div class="card work">
+    <div class="card-top"><svg><use href="#i-spin"/></svg><span class="lab">Working</span><span class="step" style="font-size:13px;line-height:18px;flex:1;min-width:0;color:var(--text-2)">Running <code>npm test</code></span><span class="t">1:42</span></div>
+  </div></div>
+  <div class="caps"><div class="cap last"><p style="-webkit-line-clamp:1">Also run the whole suite once it's done…</p></div></div>
+  <div class="bar" style="height:56px"><button class="btn" type="button"><svg><use href="#i-pause"/></svg>Pause</button><button class="btn icon ghost" type="button" aria-label="Settings"><svg><use href="#i-gear"/></svg></button><button class="btn danger icon" type="button" aria-label="End voice"><svg><use href="#i-power"/></svg></button></div>
+</div></div>
+<figcaption><b>Collapsed 360x420</b>Settings, caption history and chips go first; the summary drops to one line. Orb 88px, state word, and mute never leave. No scroll.</figcaption></figure>
+
+</main>
+
+<script>
+// Radial "sunburst" for the Sotto speaking state. In the product the bar
+// lengths come from an AnalyserNode on an un-played clone of the remote stream.
+for (const svg of document.querySelectorAll("svg.ticks")) {
+  const n = +svg.dataset.ticks, seed = +svg.dataset.seed, ns = "http://www.w3.org/2000/svg";
+  for (let i = 0; i < n; i++) {
+    const a = (i / n) * Math.PI * 2 - Math.PI / 2;
+    const v = 0.35 + 0.65 * Math.abs(Math.sin(i * 0.9 + seed) * Math.cos(i * 0.37 + seed * 2));
+    const r0 = 74, r1 = r0 + 6 + v * 20;
+    const l = document.createElementNS(ns, "line");
+    l.setAttribute("x1", 100 + Math.cos(a) * r0); l.setAttribute("y1", 100 + Math.sin(a) * r0);
+    l.setAttribute("x2", 100 + Math.cos(a) * r1); l.setAttribute("y2", 100 + Math.sin(a) * r1);
+    l.setAttribute("stroke", "currentColor"); l.setAttribute("stroke-width", "4"); l.setAttribute("stroke-linecap", "round");
+    l.setAttribute("opacity", (0.55 + v * 0.45).toFixed(2));
+    svg.appendChild(l);
+  }
+}
+// ?frame=<id> renders one window only (used for hero.png).
+const f = new URLSearchParams(location.search).get("frame");
+if (f && document.getElementById(f)) { document.body.className = "hero"; document.getElementById(f).classList.add("pick"); }
+</script>
+</body>
+</html>

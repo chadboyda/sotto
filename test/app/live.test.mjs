@@ -1,0 +1,91 @@
+// Desktop app against the REAL gpt-live-1 (opt-in, costs about $0.01-0.02):
+//   SOTTO_APP_LIVE=1 npm run test:app
+// The daemon (in-process, temp data dir, spare port, fake inbox) opens the
+// window through the real chooser (daemon/window.js, SOTTO_BROWSER=app),
+// the app loads the page, WebKit's WebRTC connects to OpenAI (mock mic), the
+// session goes live, and voice off closes the panel and quits the app.
+import { test } from "node:test";
+import assert from "node:assert/strict";
+import fs from "node:fs";
+import os from "node:os";
+import net from "node:net";
+import path from "node:path";
+import { spawnSync } from "node:child_process";
+import { fileURLToPath } from "node:url";
+import { createDaemon } from "../../daemon/index.js";
+import { appPaths } from "../../daemon/window.js";
+import { resolveApiKey } from "../../daemon/config.js";
+import { startFakeInbox } from "../helpers/fake-inbox.js";
+
+const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
+const LIVE = process.env.SOTTO_APP_LIVE === "1";
+const SKIP = !LIVE ? "set SOTTO_APP_LIVE=1 (real gpt-live-1 session)"
+  : process.platform !== "darwin" ? "macOS only"
+  : !resolveApiKey({ env: process.env, pluginRoot: ROOT, dataDir: os.tmpdir() }) ? "no OPENAI_API_KEY" : false;
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+const freePort = () => new Promise((resolve) => {
+  const s = net.createServer();
+  s.listen(0, "127.0.0.1", () => { const { port } = s.address(); s.close(() => resolve(port)); });
+});
+async function waitFor(fn, ms, what) {
+  const end = Date.now() + ms;
+  for (;;) {
+    const v = await fn();
+    if (v) return v;
+    if (Date.now() > end) throw new Error(`timed out waiting for ${what}`);
+    await sleep(200);
+  }
+}
+const readJsonl = (f) => { try { return fs.readFileSync(f, "utf8").split("\n").filter(Boolean).map((l) => JSON.parse(l)); } catch { return []; } };
+const pidAlive = (pid) => { try { process.kill(pid, 0); return true; } catch { return false; } };
+
+test("app window goes live with gpt-live-1 and quits on voice off", { skip: SKIP, timeout: 150_000 }, async () => {
+  const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "sotto-app-live-")));
+  const D = path.join(tmp, "data");
+  const appLog = path.join(tmp, "app.jsonl");
+  // Build (incrementally) straight into this data dir, as the daemon would.
+  const b = spawnSync("/bin/bash", [path.join(ROOT, "scripts/build-app.sh"), "--out", appPaths(D, ROOT).dir, "--quiet"], { encoding: "utf8" });
+  assert.equal(b.status, 0, b.stderr);
+  const sock = `/tmp/clv-app-${process.pid}.sock`;
+  const inbox = await startFakeInbox(sock);
+  const port = await freePort();
+  const d = createDaemon({
+    dataDir: D, port, pluginRoot: ROOT,
+    env: { ...process.env, SOTTO_BROWSER: "app", SOTTO_APP_TEST: "1", SOTTO_APP_DEBUG_LOG: appLog, SOTTO_NO_BROWSER: "" },
+  });
+  await d.listen();
+  const ctl = (body) => fetch(`http://127.0.0.1:${port}/control`, {
+    method: "POST", headers: { "Content-Type": "application/json", "X-Sotto-Key": d.daemonKey }, body: JSON.stringify(body),
+  }).then((r) => r.json());
+  let appPid = null;
+  const t0 = Date.now();
+  try {
+    const on = await ctl({ action: "on", session: { session_id: "app-live", socket: sock, token: "t", cwd: ROOT, project_dir: ROOT }, config: { open_browser: true } });
+    assert.equal(on.ok, true, on.message);
+    const launch = await waitFor(() => readJsonl(appLog).find((e) => e.ev === "launch"), 20_000, "app launch");
+    appPid = launch.pid;
+    await waitFor(() => d.voice.state === "live", 45_000, "live session");
+    const tLive = Date.now() - t0;
+    const ev = readJsonl(appLog);
+    assert.ok(ev.some((e) => e.ev === "bridge" && e.kind === "live" && e.live === true), "session.started seen by the app");
+    assert.ok(ev.some((e) => e.ev === "bridge" && e.kind === "mic" && e.ok === true && e.echoCancellation === true), "mic with echo cancellation");
+    await sleep(2500);
+    const icons = readJsonl(appLog).filter((e) => e.ev === "icon").map((e) => e.state);
+    assert.ok(icons.some((s) => ["listening", "assistantSpeaking", "userSpeaking", "working", "muted"].includes(s)), `icon states: ${icons}`);
+    const daemonLog = fs.readFileSync(path.join(D, "logs", "daemon.log"), "utf8");
+    assert.match(daemonLog, /"ev":"window.choose"[^\n]*"mode":"app"/);
+    const off = await ctl({ action: "off" });
+    assert.equal(off.ok, true);
+    await waitFor(() => !pidAlive(appPid), 15_000, "app quits after voice off");
+    const billed = d.voice.status().today?.seconds;
+    console.log(`# live in ${(tLive / 1000).toFixed(1)} s from /control on; icons: ${[...new Set(icons)].join(",")}; billed today in this data dir: ${billed} s`);
+  } finally {
+    if (appPid && pidAlive(appPid)) process.kill(appPid, "SIGTERM");
+    await ctl({ action: "off" }).catch(() => {});
+    await sleep(500);
+    await d.close();
+    await inbox.close?.();
+    if (!process.env.SOTTO_E2E_KEEP) fs.rmSync(tmp, { recursive: true, force: true });
+    else console.log(`# kept ${tmp}`);
+  }
+});

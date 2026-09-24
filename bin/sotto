@@ -1,0 +1,107 @@
+#!/bin/bash
+# sotto CLI (SPEC §5.9). Claude Code adds a plugin's bin/ to the Bash
+# tool's PATH, so Claude can run this when the user asks, by voice, for a
+# different voice (the voice model cannot change its own voice):
+#
+#   sotto voice            list the voices, current one marked
+#   sotto voice <name>     set the voice (switches a live session now)
+#   sotto status           same as /talk status
+#
+# It reuses scripts/toggle.sh (the /talk handler) with a synthesized hook
+# input, so both paths share one implementation. The Bash tool does not get
+# CLAUDE_PLUGIN_DATA, so the data dir is found here: the dir whose `active`
+# file names this session's inbox socket, else any dir with voice active,
+# else one with a running daemon, else $CLAUDE_PLUGIN_DATA / the newest
+# sotto data dir. Prints one plain line; exits 1 on an error.
+# Never touches OPENAI_API_KEY. macOS /bin/bash 3.2 compatible.
+
+SELF="${BASH_SOURCE[0]}"
+while [[ -L "$SELF" ]]; do
+  LINK="$(readlink "$SELF")"
+  [[ "$LINK" == /* ]] && SELF="$LINK" || SELF="${SELF%/*}/$LINK"
+done
+ROOT="$(cd "${SELF%/*}/.." && pwd)"
+
+usage() {
+  printf 'usage: sotto voice [name] | sotto status\n' >&2
+  exit 2
+}
+
+case "$1" in
+  voice|voices) ARGS="voice${2:+ $2}" ;;
+  status)       ARGS="status" ;;
+  -h|--help|help|"") usage ;;
+  *) usage ;;
+esac
+# Only plain words reach the JSON below.
+[[ "$ARGS" =~ ^[A-Za-z0-9\ _-]+$ ]] || { printf 'sotto: unknown voice.\n'; exit 1; }
+
+# --- data dir discovery -----------------------------------------------------------
+CANDS=()
+[[ -n "$CLAUDE_PLUGIN_DATA" ]] && CANDS+=("${CLAUDE_PLUGIN_DATA%/}")
+for d in "$HOME"/.claude/plugins/data/sotto*; do [[ -d "$d" ]] && CANDS+=("$d"); done
+[[ -d "$HOME/.sotto" ]] && CANDS+=("$HOME/.sotto")
+
+pid_alive() {
+  local pid=""
+  [[ -r "$1/daemon.pid" ]] && pid="$(<"$1/daemon.pid")"
+  pid="${pid%%[[:space:]]*}"
+  [[ "$pid" =~ ^[0-9]+$ ]] && kill -0 "$pid" 2>/dev/null
+}
+
+D=""; PORT=""
+# 1. voice is active for THIS session (Claude Code exports its socket to Bash).
+if [[ -n "$CLAUDE_CODE_MESSAGING_SOCKET" ]]; then
+  for d in "${CANDS[@]}"; do
+    [[ -r "$d/active" ]] || continue
+    IFS=$'\t' read -r OWNER APORT _ < "$d/active"
+    if [[ "$OWNER" == "$CLAUDE_CODE_MESSAGING_SOCKET" ]]; then D="$d"; PORT="$APORT"; break; fi
+  done
+fi
+# 2. voice is active anywhere.
+if [[ -z "$D" ]]; then
+  for d in "${CANDS[@]}"; do
+    [[ -r "$d/active" ]] || continue
+    IFS=$'\t' read -r _ APORT _ < "$d/active"
+    D="$d"; PORT="$APORT"; break
+  done
+fi
+# 3. a daemon is running.
+if [[ -z "$D" ]]; then
+  for d in "${CANDS[@]}"; do
+    if pid_alive "$d"; then D="$d"; [[ -r "$d/daemon.port" ]] && PORT="$(<"$d/daemon.port")"; break; fi
+  done
+fi
+# 4. $CLAUDE_PLUGIN_DATA, else the most recently used data dir.
+if [[ -z "$D" ]]; then
+  if [[ -n "$CLAUDE_PLUGIN_DATA" ]]; then
+    D="${CLAUDE_PLUGIN_DATA%/}"
+  else
+    NEWEST=""
+    for d in "${CANDS[@]}"; do
+      [[ -d "$d/logs" ]] || continue
+      if [[ -z "$NEWEST" || "$d/logs" -nt "$NEWEST/logs" ]]; then NEWEST="$d"; fi
+    done
+    D="${NEWEST:-$HOME/.sotto}"
+  fi
+fi
+PORT="${PORT%%[[:space:]]*}"
+
+# --- run the /talk handler --------------------------------------------------------
+ENVV=(CLAUDE_PLUGIN_DATA="$D" CLAUDE_PLUGIN_ROOT="$ROOT")
+[[ "$PORT" =~ ^[0-9]+$ ]] && ENVV+=(CLAUDE_PLUGIN_OPTION_PORT="$PORT")
+OUT="$(printf '{"hook_event_name":"UserPromptExpansion","command_name":"sotto:talk","command_args":"%s"}' "$ARGS" \
+  | env "${ENVV[@]}" /bin/bash "$ROOT/scripts/toggle.sh")"
+
+re='"stopReason":"((\\.|[^"\\])*)"'
+if [[ "$OUT" =~ $re ]]; then
+  MSG="${BASH_REMATCH[1]}"
+  MSG="${MSG//\\\"/\"}"
+  MSG="${MSG//\\\//\/}"
+  MSG="${MSG//\\\\/\\}"
+else
+  MSG="sotto: ERROR no answer from the /talk handler."
+fi
+printf '%s\n' "$MSG"
+[[ "$MSG" == *"ERROR"* || "$MSG" == *"unknown voice"* || "$MSG" == *"usage:"* ]] && exit 1
+exit 0

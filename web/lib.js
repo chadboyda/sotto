@@ -1,0 +1,977 @@
+// sotto web page: pure helpers.
+//
+// Everything in this module is free of DOM and network access so it can be
+// imported both by app.js (in Chrome) and by node:test (test/web/*.test.js).
+// Keep it that way: no `document`, `window`, `navigator` or `fetch` here.
+
+/** Captions: same-role fragments closer than this (session timeline ms) merge into one line. */
+export const CAPTION_GAP_MS = 1500;
+/** Captions: keep at most this many lines on screen. */
+export const MAX_CAPTION_LINES = 60;
+/** Price of gpt-live-1 per minute of connected time (USD). */
+export const PRICE_PER_MINUTE = 0.05;
+
+const STATUS_LABELS = {
+  off: "Off",
+  waiting_page: "Opening",
+  connecting: "Connecting",
+  live: "Live",
+  paused: "Paused",
+  sleeping: "Sleeping",
+  reconnecting: "Reconnecting",
+  closing: "Closing",
+};
+
+/** Human label for a daemon state (§7.5). Unknown states are title-cased, never blank. */
+export function statusLabel(state) {
+  if (Object.hasOwn(STATUS_LABELS, state)) return STATUS_LABELS[state];
+  if (typeof state !== "string" || state === "") return "Unknown";
+  const words = state.replace(/[_-]+/g, " ").trim();
+  return words.charAt(0).toUpperCase() + words.slice(1);
+}
+
+/** Every daemon state the page knows about (used by tests and styles). */
+export const KNOWN_STATES = Object.freeze(Object.keys(STATUS_LABELS));
+
+/** Round half-up at two decimals without the 0.075 -> "0.07" float surprise. */
+function money(x) {
+  return (Math.round((x + Number.EPSILON) * 100 + 1e-7) / 100).toFixed(2);
+}
+
+const plural = (n, one, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
+
+/**
+ * Human-readable duration for a number of seconds. Whole minutes, rounded down, so the
+ * reading changes once a minute and never shows a decimal ("14.2 min" read as nothing).
+ *   0 -> "0 min", 1..59 s -> "under a minute", 14 min -> "14 min",
+ *   65 min -> "1 hr 5 min", 120 min -> "2 hr".
+ * `{ long: true }` spells the units out for sentences: "5 minutes", "1 hour 5 minutes".
+ * daemon/format.js mirrors this for the /talk status line (test/daemon/format.test.js).
+ */
+export function formatDuration(seconds, { long = false } = {}) {
+  const s = Number.isFinite(seconds) && seconds > 0 ? seconds : 0;
+  if (s === 0) return long ? "0 minutes" : "0 min";
+  if (s < 60) return "under a minute";
+  const total = Math.floor(s / 60 + 1e-9);
+  const h = Math.floor(total / 60);
+  const m = total % 60;
+  const mins = long ? plural(m, "minute") : `${m} min`;
+  if (h === 0) return mins;
+  const hrs = long ? plural(h, "hour") : `${h} hr`;
+  return m === 0 ? hrs : `${hrs} ${mins}`;
+}
+
+/** "$0.71" for dollars; a non-zero amount under half a cent reads "<$0.01", never "$0.00". */
+export function formatMoney(dollars) {
+  const d = Number.isFinite(dollars) && dollars > 0 ? dollars : 0;
+  if (d > 0 && d < 0.005) return "<$0.01";
+  return `$${money(d)}`;
+}
+
+/** Cost of a number of billed seconds, formatted. */
+export function formatCost(seconds) {
+  const s = Number.isFinite(seconds) && seconds > 0 ? seconds : 0;
+  return formatMoney((s / 60) * PRICE_PER_MINUTE);
+}
+
+/** `"<duration> · <$>"` for a number of billed seconds, e.g. 852 -> "14 min · $0.71". */
+export function formatUsage(seconds) {
+  return `${formatDuration(seconds)} · ${formatCost(seconds)}`;
+}
+
+/**
+ * Throttle for the header's usage reading, so the cost doesn't tick every data-channel
+ * update: a new reading is taken when the whole minute changes, when the day rolls
+ * over (seconds go down), or at most every `everyMs`. Returns the reading to show
+ * (`prev` itself when nothing should change).
+ */
+export function stableUsage(prev, seconds, now, everyMs = 10_000) {
+  const s = Number.isFinite(seconds) && seconds > 0 ? seconds : 0;
+  if (!prev) return { seconds: s, at: now };
+  if (s === prev.seconds) return prev;
+  const minuteChanged = Math.floor(s / 60) !== Math.floor(prev.seconds / 60);
+  if (minuteChanged || s < prev.seconds || now - prev.at >= everyMs) return { seconds: s, at: now };
+  return prev;
+}
+
+/** The session line under the dial: "session just started", "14 min this session". */
+export function sessionText(ms) {
+  const s = Math.max(0, (Number(ms) || 0) / 1000);
+  return s < 60 ? "session just started" : `${formatDuration(s)} this session`;
+}
+
+/**
+ * Today's billed seconds, combining the daemon's figure with fresher usage the page
+ * saw on the data channel. The daemon's `today.seconds` already includes
+ * `live.usage_seconds` for the current session, so only the part of the data-channel
+ * figure beyond that is added.
+ */
+export function todaySeconds(status, dcUsageSeconds = 0, dcSessionId = null) {
+  const base = Number(status?.today?.seconds) || 0;
+  const live = status?.live;
+  if (!live || !dcSessionId || live.session_id !== dcSessionId) return base;
+  const extra = (Number(dcUsageSeconds) || 0) - (Number(live.usage_seconds) || 0);
+  return extra > 0 ? base + extra : base;
+}
+
+/**
+ * Captions reducer (§7.4). Returns a NEW array; never mutates `lines`.
+ * A fragment joins the last line when the role matches, it belongs to the same Live
+ * session, and `start_ms - last.end_ms <= 1500`. Deltas are appended exactly as
+ * received (the API says to preserve spaces). Empty deltas are ignored.
+ *
+ * @param {Array<{role:string,text:string,start_ms:number,end_ms:number,session?:string|null}>} lines
+ * @param {{role:string,text:string,start_ms:number,end_ms:number,session?:string|null}} frag
+ */
+export function reduceCaptions(lines, frag, max = MAX_CAPTION_LINES) {
+  const list = Array.isArray(lines) ? lines : [];
+  if (!frag || typeof frag.text !== "string" || frag.text === "") return list;
+  const role = frag.role === "assistant" ? "assistant" : "user";
+  const start = Number(frag.start_ms) || 0;
+  const end = Number.isFinite(Number(frag.end_ms)) ? Number(frag.end_ms) : start;
+  const session = frag.session ?? null;
+  const last = list[list.length - 1];
+  let next;
+  if (last && last.role === role && (last.session ?? null) === session && start - last.end_ms <= CAPTION_GAP_MS) {
+    const merged = { ...last, text: last.text + frag.text, end_ms: Math.max(last.end_ms, end) };
+    next = list.slice(0, -1);
+    next.push(merged);
+  } else {
+    next = list.slice();
+    next.push({ role, text: frag.text.replace(/^\s+/, ""), start_ms: start, end_ms: end, session });
+  }
+  return next.length > max ? next.slice(next.length - max) : next;
+}
+
+/** Speaker label for a caption line. */
+export function speakerLabel(role) {
+  return role === "assistant" ? "Sotto" : "You";
+}
+
+const BLUETOOTH_RE = /airpods|bluetooth|headset|hands-free|buds/i;
+const BUILTIN_RE = /macbook|built-in|internal/i;
+
+/** True if a device label looks like a Bluetooth/headset mic (hands-free profile). */
+export function isBluetoothLabel(label) {
+  return BLUETOOTH_RE.test(String(label || ""));
+}
+
+/**
+ * Choose the microphone (§7.5 "Default mic").
+ * 1. the saved id, if present;
+ * 2. else, if the default input looks like Bluetooth, the first built-in mic;
+ * 3. else the default.
+ *
+ * `devices` is the enumerateDevices() output (any kinds). Chrome lists a pseudo device
+ * with deviceId "default" whose label is "Default - <real device>"; when present it is the
+ * default, otherwise the first audio input is.
+ *
+ * @returns {{deviceId:string|null, rule:"saved"|"builtin"|"default"|"none", hint:string|null}}
+ */
+export function pickInputDevice(devices, savedId) {
+  const inputs = (Array.isArray(devices) ? devices : []).filter((d) => d && d.kind === "audioinput");
+  if (inputs.length === 0) return { deviceId: null, rule: "none", hint: null };
+  if (savedId && inputs.some((d) => d.deviceId === savedId)) {
+    return { deviceId: savedId, rule: "saved", hint: null };
+  }
+  const def = inputs.find((d) => d.deviceId === "default") || inputs[0];
+  if (isBluetoothLabel(def.label)) {
+    const builtin = inputs.find(
+      (d) => d.deviceId !== "default" && d.deviceId !== "communications" && BUILTIN_RE.test(d.label || "") && !isBluetoothLabel(d.label),
+    );
+    if (builtin) {
+      return {
+        deviceId: builtin.deviceId,
+        rule: "builtin",
+        hint: "Using the built-in mic so your headphones keep high-quality audio.",
+      };
+    }
+  }
+  return { deviceId: def.deviceId, rule: "default", hint: null };
+}
+
+/** Pick the saved speaker if it still exists, else "" (the system default sink). */
+export function pickOutputDevice(devices, savedId) {
+  const outputs = (Array.isArray(devices) ? devices : []).filter((d) => d && d.kind === "audiooutput");
+  if (savedId && outputs.some((d) => d.deviceId === savedId)) return savedId;
+  return "";
+}
+
+/** Display name for a device; labels are empty until mic permission is granted. */
+export function deviceLabel(device, index = 0) {
+  const label = String(device?.label || "").trim();
+  if (label) return label;
+  if (device?.deviceId === "default") return "System default";
+  return device?.kind === "audiooutput" ? `Speaker ${index + 1}` : `Microphone ${index + 1}`;
+}
+
+/**
+ * Reason sent with POST /api/session when the daemon asks the page to connect (§7.5).
+ * A `connect` command with reason "notify" (the daemon woke a sleeping session to
+ * say something, §6.15) is passed through; a manual resume from sleep is "resume".
+ */
+export function connectReason(state, commandReason) {
+  if (commandReason === "notify") return "notify";
+  if (state === "paused" || state === "sleeping") return "resume";
+  return state === "reconnecting" ? "reconnect" : "start";
+}
+
+const DELEGATION_LABELS = {
+  collecting: ["Listening", "active"],
+  sent: ["Sent to Claude", "active"],
+  delivered: ["Claude is on it", "active"],
+  held_suspected: ["Not picked up yet", "warn"],
+  answered: ["Answered", "done"],
+  answered_stale: ["Answered (earlier request)", "done"],
+  superseded: ["Replaced by a newer request", "muted"],
+  dropped_echo: ["Ignored (echo)", "muted"],
+  dropped_empty: ["Didn't catch that", "muted"],
+  failed: ["Couldn't reach Claude", "error"],
+  orphaned: ["Dropped", "muted"],
+};
+
+/** `{label, tone}` for a delegation status; tone is one of active|warn|done|muted|error. */
+export function delegationLabel(status) {
+  const hit = DELEGATION_LABELS[status];
+  if (hit) return { label: hit[0], tone: hit[1] };
+  return { label: statusLabel(status), tone: "muted" };
+}
+
+/**
+ * Keep the newest `max` delegations, updating in place by id (newest first).
+ * An update without `text` keeps the earlier text.
+ */
+export function upsertDelegation(list, ev, max = 3) {
+  const prev = Array.isArray(list) ? list : [];
+  if (!ev || !ev.id) return prev;
+  const old = prev.find((d) => d.id === ev.id);
+  const merged = { id: ev.id, status: ev.status ?? old?.status ?? "collecting", text: ev.text || old?.text || "" };
+  return [merged, ...prev.filter((d) => d.id !== ev.id)].slice(0, max);
+}
+
+/** Text for a Live `session.closed` reason, or null when nothing needs saying. */
+export function closedReasonMessage(reason) {
+  switch (reason) {
+    case "close_requested":
+      return null;
+    case "content":
+      return "The voice session was ended by a safety filter.";
+    case "expired":
+      return "The voice session reached its time limit.";
+    case "remote_hangup":
+      return "The voice service hung up.";
+    case "connection_lost":
+      return "The voice connection was lost.";
+    default:
+      return reason ? `The voice session ended (${reason}).` : "The voice session ended.";
+  }
+}
+
+/** User-facing text for a getUserMedia failure (DOMException name). */
+export function micErrorMessage(name) {
+  switch (name) {
+    case "NotAllowedError":
+    case "SecurityError":
+      return "Microphone access is blocked. Allow the microphone in Chrome settings, then try again.";
+    case "NotFoundError":
+    case "OverconstrainedError":
+      return "No microphone was found. Connect one, then try again.";
+    case "NotReadableError":
+    case "AbortError":
+      return "The microphone is busy or unavailable. Close other apps using it, then try again.";
+    default:
+      return "The microphone could not be opened.";
+  }
+}
+
+/** Headline for the paused overlay. `idleSeconds` (when given) wins over `idleMinutes`. */
+export function pausedMessage(reason, idleMinutes, idleSeconds) {
+  if (reason === "idle") {
+    const s = Number(idleSeconds);
+    // Under two minutes and not a whole minute ("90 seconds") stays in seconds; otherwise
+    // whole minutes/hours, never a decimal ("2.5 minutes").
+    if (Number.isFinite(s) && s > 0 && s < 120 && Math.round(s) % 60 !== 0) return `Paused after ${Math.round(s)} seconds of silence`;
+    const min = Number.isFinite(s) && s > 0 ? Math.round(s / 60) : Number(idleMinutes) > 0 ? Math.round(Number(idleMinutes)) : 0;
+    return min > 0 ? `Paused after ${formatDuration(min * 60, { long: true })} of silence` : "Paused after a stretch of silence";
+  }
+  if (reason === "daily_cap") return "Paused: today's voice limit is reached";
+  if (reason === "user" || reason === "pause" || !reason) return "Paused";
+  if (reason === "error") return "Voice stopped";
+  return `Paused (${String(reason).replace(/_/g, " ")})`;
+}
+
+/**
+ * Error banner text for a data-channel `error` event, or null.
+ * Only command-less errors get a banner (§7.4); errors tied to a client command
+ * (a `client_event_id`, top level or inside `error`) are logged, not shown.
+ */
+export function errorBannerText(ev) {
+  if (!ev || ev.type !== "error") return null;
+  if (ev.client_event_id || ev.error?.client_event_id) return null;
+  const msg = ev.error?.message || ev.message || "The voice service reported an error.";
+  return String(msg);
+}
+
+/** Shorten to `n` chars on a word boundary where possible, with an ellipsis. */
+export function truncate(text, n = 160) {
+  const s = String(text ?? "").replace(/\s+/g, " ").trim();
+  if (s.length <= n) return s;
+  const cut = s.slice(0, n - 1);
+  const sp = cut.lastIndexOf(" ");
+  return (sp > n * 0.6 ? cut.slice(0, sp) : cut).replace(/[\s,;:.]+$/, "") + "…";
+}
+
+/**
+ * Map an SSE `activity` message to the activity line.
+ * @returns {{text:string, busy:boolean|null, summary:string|null, tone:"work"|"done"|"attention"|"info"}}
+ *   busy: new busy hint (null = leave as is); summary: text to keep as "last Claude summary".
+ */
+export function activityView(ev) {
+  const text = truncate(ev?.text || "", 180);
+  switch (ev?.kind) {
+    case "turn_start":
+      return { text: text ? `Claude is working: ${text}` : "Claude is working", busy: true, summary: null, tone: "work" };
+    case "tool":
+      return { text: text ? `Claude: ${text}` : "Claude is working", busy: true, summary: null, tone: "work" };
+    case "text":
+      return { text: text ? `Claude: ${text}` : "Claude is writing", busy: true, summary: null, tone: "work" };
+    case "permission":
+      return {
+        text: text ? `Waiting for your approval in the terminal: ${text}` : "Waiting for your approval in the terminal",
+        busy: true,
+        summary: null,
+        tone: "attention",
+      };
+    case "turn_end":
+      return { text: "Claude finished", busy: false, summary: ev?.text ? truncate(ev.text, 420) : null, tone: "done" };
+    default:
+      return { text: text || "", busy: null, summary: null, tone: "info" };
+  }
+}
+
+/**
+ * Keyboard shortcuts (§7.5). `M` toggles mute while live; `Space` resumes while paused
+ * and also toggles mute while live. Ignored in form fields, on buttons for Space (the
+ * button's own activation wins), and with modifier keys.
+ *
+ * @param {{key:string, code?:string, targetTag?:string, repeat?:boolean, meta?:boolean, ctrl?:boolean, alt?:boolean}} ev
+ * While sleeping (§7.6) `M` mutes/unmutes local wake listening.
+ *
+ * @param {{live:boolean, paused:boolean, sleeping?:boolean}} ctx
+ * @returns {"mute"|"resume"|null}
+ */
+export function hotkeyAction(ev, ctx) {
+  if (!ev || ev.repeat || ev.meta || ev.ctrl || ev.alt) return null;
+  const tag = String(ev.targetTag || "").toUpperCase();
+  if (tag === "SELECT" || tag === "INPUT" || tag === "TEXTAREA") return null;
+  const isSpace = ev.key === " " || ev.code === "Space";
+  const isM = ev.key === "m" || ev.key === "M" || ev.code === "KeyM";
+  if (isSpace) {
+    if (tag === "BUTTON" || tag === "SUMMARY" || tag === "A") return null;
+    if (ctx?.paused) return "resume";
+    if (ctx?.live) return "mute";
+    return null;
+  }
+  if (isM && (ctx?.live || ctx?.sleeping)) return "mute";
+  return null;
+}
+
+/** Root-mean-square of a time-domain Float32 sample buffer (values in -1..1). */
+export function rms(samples) {
+  if (!samples || samples.length === 0) return 0;
+  let sum = 0;
+  for (let i = 0; i < samples.length; i++) sum += samples[i] * samples[i];
+  return Math.sqrt(sum / samples.length);
+}
+
+/** Map RMS to a 0..1 meter level on a dB scale (-60 dB -> 0, -10 dB -> 1). */
+export function levelFromRms(value) {
+  if (!(value > 0)) return 0;
+  const db = 20 * Math.log10(value);
+  return Math.min(1, Math.max(0, (db + 60) / 50));
+}
+
+/**
+ * Local speech activity detector (§7.5): fires when RMS stays above `threshold` for
+ * more than `holdMs`, at most once per `minIntervalMs`. Clock-free: pass `now`.
+ */
+export function createActivityDetector({ threshold = 0.02, holdMs = 300, minIntervalMs = 10_000 } = {}) {
+  let aboveSince = null;
+  let lastFired = -Infinity;
+  return {
+    update(value, now) {
+      if (value > threshold) {
+        if (aboveSince === null) aboveSince = now;
+        if (now - aboveSince > holdMs && now - lastFired >= minIntervalMs) {
+          lastFired = now;
+          return true;
+        }
+      } else {
+        aboveSince = null;
+      }
+      return false;
+    },
+    reset() {
+      aboveSince = null;
+    },
+  };
+}
+
+/** Reconnect backoff for the daemon event stream: 0.5 s, 1 s, 2 s, 4 s, then 5 s. */
+export function backoffDelay(attempt) {
+  const n = Math.max(0, Math.floor(Number(attempt) || 0));
+  return Math.min(5000, 500 * 2 ** n);
+}
+
+/** Parse an SSE `data:` payload; returns null for anything that is not a typed object. */
+export function parseEventData(data) {
+  try {
+    const v = JSON.parse(data);
+    return v && typeof v === "object" && typeof v.type === "string" ? v : null;
+  } catch {
+    return null;
+  }
+}
+
+// ===========================================================================
+// Voice window view models (UI redesign, design/AUDIT.md). Pure functions that
+// turn page state into what the window shows, so app.js only copies strings and
+// flags into the DOM. Append-only on purpose: other branches edit the helpers
+// above, and keeping these separate keeps their rebases clean.
+// ===========================================================================
+
+/**
+ * Attack/release smoothing for a 0..1 level (exponential, frame-rate independent).
+ * Meters rise fast (attack ~40 ms) and fall slowly (release ~220 ms).
+ */
+export function smoothLevel(prev, target, dtMs, attackMs = 40, releaseMs = 220) {
+  const p = Number.isFinite(prev) ? prev : 0;
+  const t = Number.isFinite(target) ? Math.min(1, Math.max(0, target)) : 0;
+  const dt = Math.max(0, Number(dtMs) || 0);
+  const tau = t > p ? attackMs : releaseMs;
+  if (tau <= 0) return t;
+  return p + (t - p) * (1 - Math.exp(-dt / tau));
+}
+
+/**
+ * Noise gate for the dial: room noise (below `floor`, about -54 dB on the
+ * levelFromRms scale) reads as silence, so a quiet, listening window draws
+ * nothing; above it the level is rescaled to keep the full 0..1 range.
+ */
+export function gateLevel(level, floor = 0.12) {
+  const v = Number(level) || 0;
+  if (v <= floor) return 0;
+  return Math.min(1, (v - floor) / (1 - floor));
+}
+
+/** Reduced motion: meters snap to three lengths (rest, mid, full) instead of moving continuously. */
+export function quantizeLevel(level) {
+  if (!(level > 0.15)) return 0;
+  return level < 0.6 ? 0.5 : 1;
+}
+
+/**
+ * `count` band levels (0..1) from AnalyserNode.getByteFrequencyData output, on
+ * log-spaced bins between `minBin` and `maxBin` (speech lives in the low bins).
+ */
+export function bandLevels(bytes, count, { minBin = 2, maxBin = null } = {}) {
+  const out = new Float32Array(Math.max(0, count | 0));
+  const n = bytes?.length || 0;
+  if (!n || !out.length) return out;
+  const lo = Math.max(0, Math.min(minBin, n - 1));
+  const hi = Math.max(lo + 1, Math.min(maxBin ?? n, n));
+  const ratio = hi / Math.max(1, lo);
+  for (let i = 0; i < out.length; i++) {
+    const a = Math.floor(Math.max(1, lo) * ratio ** (i / out.length));
+    const b = Math.max(a + 1, Math.floor(Math.max(1, lo) * ratio ** ((i + 1) / out.length)));
+    let peak = 0;
+    for (let k = a; k < b && k < n; k++) if (bytes[k] > peak) peak = bytes[k];
+    out[i] = peak / 255;
+  }
+  return out;
+}
+
+/**
+ * A smooth, mirror-symmetric ring profile of `n` values from `bands`: the bands
+ * run 0 -> top, mirrored left/right and repeated `lobes / 2` times, then blurred
+ * so neighbouring ticks swell together (the assistant's ring is calm by design).
+ */
+export function symmetricProfile(bands, n, { lobes = 4, blur = 2 } = {}) {
+  const out = new Float32Array(Math.max(0, n | 0));
+  const m = bands?.length || 0;
+  if (!m || !out.length) return out;
+  const seg = out.length / lobes; // ticks per lobe
+  for (let i = 0; i < out.length; i++) {
+    // Distance from the lobe's middle, sampled at tick centres (0 middle .. 1 edge),
+    // in integer-friendly form so mirrored ticks round identically.
+    const j = Math.floor(i % seg);
+    const edge = (Math.abs(2 * j + 1 - seg) * m) / seg;
+    out[i] = bands[Math.min(m - 1, Math.floor(edge + 1e-9))]; // low (loud) bands swell mid-lobe
+  }
+  if (blur > 0) {
+    const src = Float32Array.from(out);
+    for (let i = 0; i < out.length; i++) {
+      let s = 0;
+      for (let k = -blur; k <= blur; k++) s += src[(i + k + out.length) % out.length];
+      out[i] = s / (2 * blur + 1);
+    }
+  }
+  return out;
+}
+
+/**
+ * Who has the floor, from the mic level and the assistant's output level
+ * (both 0..1, levelFromRms scale). Hysteresis in level and time so the word under
+ * the dial does not flicker between syllables. Clock-free: pass `now`.
+ *
+ * update(mic, voice, now) -> "you" | "voice" | null
+ */
+export function createFloorTracker({ onLevel = 0.36, offLevel = 0.2, attackMs = 90, releaseMs = 500 } = {}) {
+  const ch = () => ({ active: false, since: null });
+  const you = ch();
+  const voice = ch();
+  function step(c, level, now) {
+    if (!c.active) {
+      if (level > onLevel) {
+        c.since ??= now;
+        if (now - c.since >= attackMs) {
+          c.active = true;
+          c.since = null;
+        }
+      } else c.since = null;
+    } else if (level < offLevel) {
+      c.since ??= now;
+      if (now - c.since >= releaseMs) {
+        c.active = false;
+        c.since = null;
+      }
+    } else c.since = null;
+  }
+  let last = { mic: 0, voice: 0 };
+  return {
+    update(micLevel, voiceLevel, now) {
+      const m = Number(micLevel) || 0;
+      const v = Number(voiceLevel) || 0;
+      step(you, m, now);
+      step(voice, v, now);
+      last = { mic: m, voice: v };
+      if (voice.active && you.active) return m > v + 0.08 ? "you" : "voice";
+      if (voice.active) return "voice";
+      if (you.active) return "you";
+      return null;
+    },
+    reset() {
+      you.active = voice.active = false;
+      you.since = voice.since = null;
+      last = { mic: 0, voice: 0 };
+    },
+    get last() {
+      return last;
+    },
+  };
+}
+
+/**
+ * Classify a getUserMedia failure (AUDIT #6). Chrome reports a dismissed prompt,
+ * a site block and a macOS privacy block all as NotAllowedError; the message and
+ * the Permissions API state tell them apart:
+ *   "Permission dismissed"          + state "prompt"  -> dismissed (retry is enough)
+ *   "Permission denied"             + state "denied"  -> chrome (site settings)
+ *   "Permission denied by system"   (state "granted") -> macos (System Settings)
+ * In the Sotto app (`host` "app") every refusal is the macOS one.
+ * @returns {"dismissed"|"chrome"|"macos"|"notfound"|"busy"|"unsupported"|"other"}
+ */
+export function micFailureKind(name, message, permState, host = "browser") {
+  const msg = String(message || "");
+  switch (name) {
+    case "NotAllowedError":
+    case "PermissionDeniedError":
+    case "SecurityError":
+      // The Sotto app grants its own origin itself (Panel.swift); the only
+      // prompt or block there is macOS privacy for "Sotto".
+      if (host === "app") return "macos";
+      if (/by system/i.test(msg)) return "macos";
+      if (permState === "denied") return "chrome";
+      if (/dismiss/i.test(msg) || permState === "prompt") return "dismissed";
+      if (permState === "granted") return "macos";
+      return "chrome";
+    case "NotFoundError":
+    case "OverconstrainedError":
+      return "notfound";
+    case "NotReadableError":
+    case "AbortError":
+      return "busy";
+    case "NotSupportedError":
+      return "unsupported";
+    default:
+      return "other";
+  }
+}
+
+const MIC_FAILURES = {
+  dismissed: {
+    title: "The microphone prompt closed",
+    body: "Chrome asked for the microphone, but the prompt closed before you chose. Ask again, then click Allow.",
+    steps: null,
+    button: "Ask again",
+    header: "Allow mic",
+  },
+  chrome: {
+    title: "Chrome is blocking the microphone",
+    body: "This window is not allowed to use the microphone. Voice is paused and not billing.",
+    steps: [
+      "Open this window's menu (the three dots at the top right) and choose Site settings.",
+      "Set Microphone to Allow.",
+      "Come back here and click Try again.",
+    ],
+    button: "Try again",
+    header: "Mic blocked",
+  },
+  macos: {
+    title: "macOS is blocking the microphone",
+    body: "Chrome allows it, but your Mac doesn't. Voice is paused and not billing.",
+    steps: [
+      "Open System Settings, then Privacy & Security, then Microphone.",
+      "Turn on Google Chrome.",
+      "Quit and reopen Chrome, then run /talk on.",
+    ],
+    button: "Try again",
+    header: "Mic blocked",
+  },
+  notfound: {
+    title: "No microphone found",
+    body: "Connect a microphone or headset, then try again.",
+    steps: null,
+    button: "Try again",
+    header: "No mic",
+  },
+  busy: {
+    title: "The microphone is busy",
+    body: "Another app may be using it. Close apps that use the microphone, then try again.",
+    steps: null,
+    button: "Try again",
+    header: "Mic busy",
+  },
+  unsupported: {
+    title: "This browser can't use the microphone",
+    body: "Open the voice window in Google Chrome with /talk on.",
+    steps: null,
+    button: null,
+    header: "Mic error",
+  },
+  other: {
+    title: "The microphone could not be opened",
+    body: "Check that a microphone is connected, then try again.",
+    steps: null,
+    button: "Try again",
+    header: "Mic error",
+  },
+};
+
+// The same failures inside the Sotto desktop app (WKWebView, SPEC §6.16):
+// no Chrome, no site settings; macOS asks for and blocks "Sotto".
+const MIC_FAILURES_APP = {
+  macos: {
+    title: "macOS is blocking the microphone",
+    body: "Your Mac isn't letting Sotto use the microphone. Voice is paused and not billing.",
+    steps: [
+      "Open System Settings, then Privacy & Security, then Microphone.",
+      "Turn on Sotto.",
+      "Quit Sotto from its menu-bar icon, then run /talk on.",
+    ],
+    button: "Try again",
+    header: "Mic blocked",
+  },
+  unsupported: {
+    title: "This window can't use the microphone",
+    body: "Run /talk on again, or set window to chrome in /config (sotto).",
+    steps: null,
+    button: null,
+    header: "Mic error",
+  },
+};
+
+/** Card copy for a mic failure kind: {title, body, steps|null, button|null, header}. */
+export function micFailureView(kind, host = "browser") {
+  if (host === "app" && MIC_FAILURES_APP[kind]) return MIC_FAILURES_APP[kind];
+  return MIC_FAILURES[kind] || MIC_FAILURES.other;
+}
+
+/** The Allow-microphone card: Chrome shows a bubble at the top left; the app gets the macOS dialog. */
+export function micPromptView(host = "browser") {
+  if (host === "app") {
+    return {
+      title: "Allow microphone access",
+      body: "macOS is asking whether Sotto can use the microphone. Click Allow so Sotto can hear you. Voice starts once the mic is on.",
+      note: "Don't see it? It may be behind this panel, or check System Settings, then Privacy & Security, then Microphone.",
+      arrow: false,
+    };
+  }
+  return {
+    title: "Allow microphone access",
+    body: "Chrome is asking at the top left of this window: click Allow so Sotto can hear you. Voice starts once the mic is on.",
+    note: "Don't see it? The prompt closes if you click elsewhere; you can ask again.",
+    arrow: true,
+  };
+}
+
+/**
+ * What a screen reader hears when the card changes (AUDIT #11): the title and the
+ * first sentence of the body. Errors, blocked mics and the daily cap are assertive.
+ * @returns {{text:string, assertive:boolean}|null}
+ */
+export function cardAnnouncement(card) {
+  if (!card?.title) return null;
+  const first = String(card.body || "").match(/^.*?[.!?](?=\s|$)/)?.[0] || String(card.body || "");
+  const text = first ? `${card.title}. ${first}`.replace(/\.\. /, ". ") : `${card.title}.`;
+  const assertive = card.tone === "err" || card.kind === "cap" || String(card.kind || "").startsWith("mic-") || card.kind === "lost";
+  return { text: text.replace(/…\./g, "…"), assertive };
+}
+
+/** The connect checklist under the dial. `stage` is the step in progress. */
+export function connectSteps(stage) {
+  const order = ["mic", "network", "session"];
+  const labels = { mic: "Microphone on", network: "Reaching the voice service", session: "Starting the session" };
+  const at = order.indexOf(stage);
+  return order.map((key, i) => ({ key, label: labels[key], state: at < 0 ? "pending" : i < at ? "done" : i === at ? "active" : "pending" }));
+}
+
+/**
+ * The Claude Code card: one of idle | working | approval | finished.
+ * @param {{busy:boolean, kind?:string|null, text?:string, summary?:string|null, request?:{text:string,status:string}|null}} s
+ */
+export function claudeView(s) {
+  const text = String(s?.text || "").trim();
+  const request = s?.request?.text ? { text: truncate(s.request.text, 140), ...delegationLabel(s.request.status) } : null;
+  if (s?.kind === "permission" && s?.busy !== false) {
+    return {
+      kind: "approval",
+      title: "Claude needs your approval",
+      command: text || null,
+      note: "Waiting for your approval in the terminal",
+      request,
+    };
+  }
+  if (s?.busy) {
+    let step = "";
+    if (s.kind === "tool" || s.kind === "text") step = text;
+    else if (s.kind === "turn_start") step = text ? `Starting: ${text}` : "";
+    return { kind: "working", title: "Claude is working", step: truncate(step, 180) || "Thinking", request };
+  }
+  if (s?.summary) return { kind: "finished", title: "Claude finished", summary: String(s.summary), request };
+  return { kind: "idle", title: "Claude is idle", request };
+}
+
+const STAGE_WORDS = {
+  starting: ["Starting", "Looking for sotto…"],
+  connecting: ["Connecting", "Connecting to the voice service…"],
+  reconnecting: ["Reconnecting…", "Your mute setting is kept."],
+  listening: ["Listening", null],
+  you: ["Hearing you", null],
+  voice: ["Sotto is speaking", "Just talk to interrupt"],
+  muted: ["Muted", "Sotto can't hear you. Still billing."],
+  paused: ["Paused", null],
+  sleeping: ["Sleeping", "Speak to wake it"],
+  off: ["Voice is off", null],
+  error: ["Stopped", null],
+};
+
+/** The hero word while Claude Code waits for an approval (AUDIT #5): the urgent fact wins. */
+export const APPROVAL_WORD = "Approve in the terminal";
+
+/**
+ * Everything the window shows for one page snapshot. Replaces the old overlayModel().
+ *
+ * `sleep` is wake.js sleepView() output ({title, body, listening}) while the daemon
+ * sleeps (§7.6); `host` is "app" inside the Sotto desktop app (§6.16), where
+ * the microphone copy names macOS and Sotto instead of Chrome.
+ *
+ * @param {{
+ *   phase:string, state:string, sseDown?:boolean, unauthorized?:boolean,
+ *   muted?:boolean, floor?:"you"|"voice"|null, connectStage?:string|null,
+ *   micPrompt?:boolean, micFailure?:string|null, errorText?:string|null, errorCode?:string|null,
+ *   pausedReason?:string|null, idleMinutes?:number, idleSeconds?:number, capMinutes?:number, pendingResult?:string|null,
+ *   lastError?:{code:string,message?:string}|null, attention?:boolean, connectReason?:string|null,
+ *   sleep?:{title:string, body:string, listening:boolean}|null, host?:"browser"|"app",
+ * }} s
+ * @returns {{view:"live"|"card", dial:"full"|"small"|"hidden", floor:string, word:string, sub:string|null,
+ *   wordTone:"attn"|null, dialHint:"prompt"|null,
+ *   steps:Array|null, card:object|null, header:{key:string,label:string,detail:string|null}}}
+ */
+export function pageView(s) {
+  const st = s?.state || "off";
+  const phase = s?.phase || "boot";
+  const host = s?.host === "app" ? "app" : "browser";
+  const lastCode = s?.lastError?.code || null;
+  const out = {
+    view: "card", dial: "small", floor: "off", word: "", sub: null, wordTone: null, dialHint: null,
+    steps: null, card: null, header: { key: "off", label: statusLabel(st), detail: null },
+  };
+  // Every state keeps the dial as its hero (a dormant one before a session); only a
+  // window that is not ours at all drops it.
+  const card = (c, floor, header, dial = "small") => {
+    out.card = { pending: null, button: null, action: null, kbd: false, steps: null, arrow: false, keyInput: false, tone: "neutral", secondary: false, ...c };
+    out.floor = floor;
+    out.header = { detail: null, ...header };
+    out.dial = dial;
+    [out.word, out.sub] = STAGE_WORDS[floor] || ["", null];
+    return out;
+  };
+
+  if (s?.unauthorized && phase !== "live" && phase !== "connecting") {
+    return card({ kind: "unauthorized", title: "This window is not connected", body: "Open the voice window from Claude Code with /talk on." }, "off", { key: "off", label: "Not connected" }, "hidden");
+  }
+  if (phase === "replaced") {
+    return card(
+      { kind: "replaced", title: "Voice moved to another window", body: "Another sotto window took over. This one is inactive.", button: "Use this window", action: "reload" },
+      "off",
+      { key: "off", label: "Inactive" },
+    );
+  }
+  if (phase === "boot") return card({ kind: "starting", title: "Starting sotto", body: "Looking for the voice daemon…" }, "starting", { key: "connecting", label: "Starting" });
+  if (phase === "lost") {
+    return card(
+      { kind: "lost", title: "Lost contact with the sotto daemon", body: "The voice session was closed to stop billing. Waiting for the daemon to come back…", tone: "warn" },
+      "off",
+      { key: "error", label: "Disconnected" },
+    );
+  }
+  if (phase === "closed") {
+    return card({ kind: "closed", title: "Voice is off", body: "It's safe to close this window; start again from Claude Code with /talk on." }, "off", { key: "off", label: "Off" });
+  }
+  if (s?.micPrompt && phase === "connecting") {
+    const v = micPromptView(host);
+    card({ kind: "permission", title: v.title, body: v.body, note: v.note, arrow: v.arrow, tone: "attn" }, "off", { key: "attention", label: "Allow mic" });
+    // A static amber tick at 10 o'clock points at Chrome's bubble (the app has no bubble).
+    out.dialHint = v.arrow ? "prompt" : "attn";
+    return out;
+  }
+  const needsKey = s?.errorCode === "no_api_key" || (lastCode === "no_api_key" && phase !== "live" && phase !== "connecting" && st !== "off");
+  if (needsKey) {
+    return card(
+      {
+        kind: "apikey",
+        title: "Add your OpenAI API key to start",
+        body: "Sotto talks through OpenAI's voice model. Setting the key here is coming soon; for now add OPENAI_API_KEY to the plugin's .env file and run /talk on again.",
+        keyInput: true,
+        tone: "attn",
+      },
+      "off",
+      { key: "attention", label: "Key needed" },
+    );
+  }
+  if (phase === "error") {
+    if (s?.micFailure) {
+      const v = micFailureView(s.micFailure, host);
+      return card(
+        { kind: `mic-${s.micFailure}`, title: v.title, body: v.body, steps: v.steps, button: st === "off" ? null : v.button, action: "resume", kbd: st !== "off" && !!v.button, tone: "err" },
+        "error",
+        { key: "error", label: v.header },
+      );
+    }
+    return card(
+      {
+        kind: "error",
+        title: "Voice could not start",
+        body: s?.errorText || "Something went wrong.",
+        button: st === "off" ? null : "Try again",
+        action: "resume",
+        kbd: st !== "off",
+        tone: "err",
+      },
+      "error",
+      { key: "error", label: "Error" },
+    );
+  }
+  if (phase === "live" || phase === "connecting") {
+    out.view = "live";
+    out.dial = "full";
+    const reconnecting = st === "reconnecting" || (phase === "connecting" && s?.connectReason === "reconnect");
+    if (phase === "connecting") {
+      out.floor = reconnecting ? "reconnecting" : "connecting";
+      out.steps = reconnecting ? null : connectSteps(s?.connectStage || "mic");
+      out.header = { key: "connecting", label: reconnecting ? "Reconnecting" : "Connecting", detail: null };
+    } else if (s?.muted) {
+      out.floor = "muted";
+      out.header = { key: "muted", label: "Muted", detail: "Still billing" };
+    } else {
+      out.floor = s?.floor === "you" || s?.floor === "voice" ? s.floor : "listening";
+      out.header = { key: "live", label: "Live", detail: null };
+    }
+    [out.word, out.sub] = STAGE_WORDS[out.floor];
+    if (s?.attention) {
+      out.header = { key: "attention", label: "Approval needed", detail: out.header.key === "muted" ? "Muted" : null };
+      // The largest type names the most urgent fact; the floor moves to the small line.
+      if (phase === "live") {
+        out.sub = out.floor === "muted" ? "Muted · Sotto can't hear you" : out.word;
+        out.word = APPROVAL_WORD;
+        out.wordTone = "attn";
+      }
+    }
+    return out;
+  }
+  if (s?.sseDown) {
+    return card({ kind: "disconnected", title: "Disconnected", body: "Waiting for the sotto daemon…", tone: "warn" }, "off", { key: "error", label: "Disconnected" });
+  }
+  if (st === "off") return card({ kind: "off", title: "Voice is off", body: "Turn it on from Claude Code with /talk on." }, "off", { key: "off", label: "Off" });
+  if (st === "closing") return card({ kind: "closing", title: "Closing…", body: "Finishing the voice session." }, "off", { key: "off", label: "Closing" });
+  if (st === "sleeping") {
+    // Local voice wake (§7.6): the copy comes from wake.js sleepView(), so feat/voice-wake owns it.
+    const v = s?.sleep || { title: "Sleeping", body: "Voice wakes up when you speak. Nothing is sent or billed until then.", listening: false };
+    return card(
+      { kind: "sleeping", title: v.title, body: v.body, pending: s?.pendingResult || null, button: "Wake now", action: "resume", kbd: true, secondary: true, listening: !!v.listening },
+      "sleeping",
+      { key: "sleeping", label: statusLabel(st) },
+    );
+  }
+  if (st === "paused") {
+    const reason = s?.pausedReason || (lastCode === "daily_cap" ? "daily_cap" : null);
+    const cap = reason === "daily_cap";
+    let body = "Resume to keep talking with Claude Code.";
+    if (cap) {
+      const capMin = Number(s?.capMinutes);
+      const used = capMin > 0 ? `You've used today's ${formatDuration(capMin * 60, { long: true })} of voice. ` : "";
+      body = `${used}Raise daily_cap_minutes in /config (sotto) to continue today.`;
+    }
+    else if (lastCode === "mic_denied" || lastCode === "mic_error") body = s?.lastError?.message || body;
+    return card(
+      {
+        kind: cap ? "cap" : "paused",
+        title: pausedMessage(reason, s?.idleMinutes, s?.idleSeconds),
+        body: cap ? body : `${body} Nothing is billed while paused.`,
+        pending: s?.pendingResult || null,
+        button: cap ? null : "Resume",
+        action: "resume",
+        kbd: !cap,
+        tone: cap ? "attn" : "neutral",
+      },
+      "paused",
+      { key: cap ? "attention" : "paused", label: cap ? "Limit reached" : statusLabel(st) },
+    );
+  }
+  // waiting_page / connecting / reconnecting / live on the daemon while this page
+  // is idle: a connect command is on its way. Show the live layout, waiting.
+  out.view = "live";
+  out.dial = "full";
+  out.floor = st === "reconnecting" ? "reconnecting" : "connecting";
+  out.steps = st === "reconnecting" ? null : connectSteps(null);
+  out.header = { key: "connecting", label: statusLabel(st), detail: null };
+  [out.word, out.sub] = STAGE_WORDS[out.floor];
+  if (st !== "reconnecting") out.sub = "Waiting for Claude Code…";
+  return out;
+}
+
+/** Window title: the approval request escapes the window (AUDIT #5). */
+export function windowTitle(view, attention) {
+  if (attention) return "Approval needed · Sotto";
+  if (view?.floor === "muted") return "Muted · Sotto";
+  return "Sotto";
+}
+
+/** Claude's working time on the card: "42 sec", "3 min 12 sec", "1 hr 2 min". */
+export function formatElapsed(ms) {
+  const t = Math.max(0, Math.floor((Number(ms) || 0) / 1000));
+  if (t < 60) return `${t} sec`;
+  if (t < 3600) return `${Math.floor(t / 60)} min ${t % 60} sec`;
+  return formatDuration(t);
+}

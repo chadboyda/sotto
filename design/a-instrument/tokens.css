@@ -1,0 +1,188 @@
+/* sotto · Direction A "Instrument" · design tokens
+ *
+ * Plain CSS custom properties. No build step, no web fonts (SPEC §7.1).
+ * Theme follows the OS: light is the base, dark comes from
+ * prefers-color-scheme. [data-theme] on any element forces a theme for that
+ * subtree (used by the mockup frames and by a future manual override).
+ *
+ * Contrast (WCAG 2.x, measured against --bg / --surface-1 / --surface-2):
+ *   text tokens   >= 4.5:1 in both themes (lowest: light --live on --surface-2, 4.62)
+ *   --edge        >= 3.0:1 (control boundaries, WCAG 1.4.11)
+ *   signal colors >= 4.5:1 so they can also be used as text
+ */
+
+/* ---------- Theme-independent scales ---------- */
+:root {
+  /* Type: system stacks only */
+  --font-ui: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", system-ui, sans-serif;
+  --font-display: -apple-system, BlinkMacSystemFont, "SF Pro Display", "Segoe UI", system-ui, sans-serif;
+  --font-mono: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, monospace;
+
+  /* Type scale (px values; 1.2-ish steps, tuned for a 360-640px wide window) */
+  --text-meta: 12px;     /* header meta, kbd labels; never body copy */
+  --text-small: 13px;    /* secondary lines, card labels */
+  --text-body: 15px;     /* body, captions history, buttons */
+  --text-lead: 17px;     /* latest caption line */
+  --text-state: 22px;    /* the talking-state word under the dial */
+  --text-title: 24px;    /* overlay card titles (paused, errors, allow mic) */
+
+  --leading-tight: 1.2;
+  --leading-body: 1.45;
+  --weight-regular: 400;
+  --weight-medium: 510;
+  --weight-semibold: 600;
+  --tracking-title: -0.015em;
+  --tracking-caps: 0.06em; /* only for the tiny instrument legends */
+
+  /* Spacing: 4/8 grid */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 24px;
+  --space-6: 32px;
+  --space-7: 48px;
+  --gutter: 16px;          /* window side padding */
+  --gap-control: 8px;      /* between controls in one group */
+  --gap-group: 16px;       /* between groups */
+
+  /* Radii: machined, not pillowy */
+  --radius-xs: 4px;        /* kbd, tags */
+  --radius-sm: 8px;        /* buttons, inputs */
+  --radius-md: 12px;       /* cards */
+  --radius-lg: 16px;       /* drawer, overlay cards */
+  --radius-round: 999px;   /* dial, mute button */
+
+  /* Hit targets */
+  --hit-min: 44px;         /* every interactive element */
+  --hit-primary: 88px;     /* mute button (brief floor: 64px) */
+  --dial-size: 208px;      /* the voice instrument at default size */
+  --dial-size-compact: 132px;
+
+  /* Borders */
+  --stroke-hair: 1px;
+  --stroke-focus: 2px;
+
+  /* Motion: calm, signal-driven. Nothing loops while idle. */
+  --dur-instant: 80ms;     /* press feedback */
+  --dur-fast: 150ms;       /* hover, color changes */
+  --dur-base: 200ms;       /* state changes of the dial */
+  --dur-slow: 250ms;       /* drawer, overlay card */
+  --ease-out: cubic-bezier(0.16, 1, 0.3, 1);     /* expo-out: arrivals */
+  --ease-in-out: cubic-bezier(0.65, 0, 0.35, 1); /* symmetric: sweeps */
+  /* Level meters: the JS applies attack/release smoothing (attack ~40ms,
+     release ~220ms) to the analyser value; CSS never animates tick length. */
+  --meter-attack: 40ms;
+  --meter-release: 220ms;
+}
+
+/* ---------- Light (base) ---------- */
+:root,
+[data-theme="light"] {
+  color-scheme: light;
+
+  /* Neutrals: cool graphite, zero warmth */
+  --bg: #F5F6F8;
+  --surface-1: #FFFFFF;
+  --surface-2: #ECEEF2;
+  --surface-sunken: #E4E7EC;
+  --line: #DCE0E6;          /* dividers only, never a control edge */
+  --edge: #7A8391;          /* control boundaries: 3.54:1 on bg */
+  --fg: #0F1217;            /* 17.35:1 */
+  --fg-2: #434B57;          /* 8.15:1 */
+  --fg-3: #5B6472;          /* 5.53:1, the faintest text allowed */
+  --tick-rest: #B7BEC8;     /* idle meter ticks (decorative) */
+
+  /* Signals: one color per meaning, same hue family in both themes */
+  --live: #2F7A12;          /* live / heard / you speaking */
+  --live-tint: #E6F2DF;
+  --work: #2352C4;          /* Claude Code working */
+  --work-tint: #E4EBFA;
+  --attn: #8A5700;          /* needs approval, paused-with-news */
+  --attn-tint: #FBF0D9;
+  --attn-edge: #B07A12;
+  --err: #BE2B1D;           /* errors, End voice */
+  --err-tint: #FBE5E2;
+  --mute: #6A3FD0;          /* muted */
+  --mute-tint: #ECE5FB;
+  --voice: #0F1217;         /* Sotto speaking: ink, not a hue */
+
+  --on-signal: #FFFFFF;     /* text/icon on a filled signal color */
+  --focus: #2352C4;
+  --selection: #CFDCF7;
+  --shadow-drawer: 0 -8px 24px rgba(15, 18, 23, 0.12), 0 -1px 0 rgba(15, 18, 23, 0.06);
+  --shadow-dial: inset 0 1px 0 rgba(255, 255, 255, 0.9), 0 1px 2px rgba(15, 18, 23, 0.10), 0 6px 16px rgba(15, 18, 23, 0.08);
+}
+
+/* ---------- Dark ---------- */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+    --bg: #0B0D10;
+    --surface-1: #14171C;
+    --surface-2: #1C2027;
+    --surface-sunken: #07080A;
+    --line: #252A32;
+    --edge: #626C7B;          /* 3.66:1 on bg */
+    --fg: #ECEFF4;            /* 16.88:1 */
+    --fg-2: #AAB2BF;          /* 9.11:1 */
+    --fg-3: #8B94A3;          /* 6.36:1 */
+    --tick-rest: #333A45;
+    --live: #8BD96B;
+    --live-tint: #16241A;
+    --work: #7FA8FF;
+    --work-tint: #141E33;
+    --attn: #F0B43C;
+    --attn-tint: #2A2110;
+    --attn-edge: #B8871F;
+    --err: #FF7A6B;
+    --err-tint: #2E1614;
+    --mute: #B9A2FF;
+    --mute-tint: #1F1A33;
+    --voice: #ECEFF4;
+    --on-signal: #0B0D10;
+    --focus: #7FA8FF;
+    --selection: #2A3C66;
+    --shadow-drawer: 0 -8px 24px rgba(0, 0, 0, 0.5), 0 -1px 0 rgba(255, 255, 255, 0.04);
+    --shadow-dial: inset 0 1px 0 rgba(255, 255, 255, 0.06), 0 1px 0 rgba(0, 0, 0, 0.6), 0 8px 20px rgba(0, 0, 0, 0.45);
+  }
+}
+
+[data-theme="dark"] {
+  color-scheme: dark;
+  --bg: #0B0D10;
+  --surface-1: #14171C;
+  --surface-2: #1C2027;
+  --surface-sunken: #07080A;
+  --line: #252A32;
+  --edge: #626C7B;
+  --fg: #ECEFF4;
+  --fg-2: #AAB2BF;
+  --fg-3: #8B94A3;
+  --tick-rest: #333A45;
+  --live: #8BD96B;
+  --live-tint: #16241A;
+  --work: #7FA8FF;
+  --work-tint: #141E33;
+  --attn: #F0B43C;
+  --attn-tint: #2A2110;
+  --attn-edge: #B8871F;
+  --err: #FF7A6B;
+  --err-tint: #2E1614;
+  --mute: #B9A2FF;
+  --mute-tint: #1F1A33;
+  --voice: #ECEFF4;
+  --on-signal: #0B0D10;
+  --focus: #7FA8FF;
+  --selection: #2A3C66;
+  --shadow-drawer: 0 -8px 24px rgba(0, 0, 0, 0.5), 0 -1px 0 rgba(255, 255, 255, 0.04);
+  --shadow-dial: inset 0 1px 0 rgba(255, 255, 255, 0.06), 0 1px 0 rgba(0, 0, 0, 0.6), 0 8px 20px rgba(0, 0, 0, 0.45);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --dur-fast: 0ms;
+    --dur-base: 0ms;
+    --dur-slow: 0ms;
+  }
+}

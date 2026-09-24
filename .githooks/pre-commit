@@ -1,0 +1,64 @@
+#!/bin/bash
+# sotto pre-commit hook. Enabled per clone with:
+#   git config core.hooksPath .githooks
+#
+# 1. Secret scan of the STAGED content (not the working tree):
+#    - no .env / .env.* file (except .env.example) may be committed;
+#    - no staged file may contain an OpenAI project key (sk-proj- + 20 key chars);
+#    - no staged file may contain the literal OPENAI_API_KEY value from ./.env.
+# 2. Unit tests (npm test).
+# 3. claude plugin validate --strict (skipped with a warning if `claude` is missing).
+#
+# Never bypass with --no-verify; fix the cause instead.
+set -uo pipefail
+
+ROOT="$(git rev-parse --show-toplevel)" || exit 1
+cd "$ROOT" || exit 1
+fail() { printf 'pre-commit: %s\n' "$*" >&2; exit 1; }
+
+# --- 1. secret scan ----------------------------------------------------------
+STAGED=()
+while IFS= read -r -d '' f; do STAGED+=("$f"); done < <(git diff --cached --name-only --diff-filter=ACMR -z)
+
+LOCAL_KEY=""
+if [[ -f .env ]]; then
+  LOCAL_KEY="$(sed -nE 's/^[[:space:]]*(export[[:space:]]+)?OPENAI_API_KEY[[:space:]]*=[[:space:]]*["'\'']?([^"'\''[:space:]#]+).*/\2/p' .env | head -n1)"
+fi
+
+bad=0
+for f in "${STAGED[@]+"${STAGED[@]}"}"; do
+  base="${f##*/}"
+  if [[ "$base" == .env || ( "$base" == .env.* && "$base" != .env.example ) ]]; then
+    printf 'pre-commit: refusing to commit %s (environment file with secrets)\n' "$f" >&2
+    bad=1
+    continue
+  fi
+  # Staged blob content; -a so binary files are scanned too.
+  if git show ":$f" 2>/dev/null | grep -aqE 'sk-proj-[A-Za-z0-9_-]{20,}'; then
+    printf 'pre-commit: %s contains what looks like an OpenAI project key (sk-proj-...)\n' "$f" >&2
+    bad=1
+  elif [[ ${#LOCAL_KEY} -ge 20 ]] && git show ":$f" 2>/dev/null | grep -aqF -- "$LOCAL_KEY"; then
+    printf 'pre-commit: %s contains the OPENAI_API_KEY value from .env\n' "$f" >&2
+    bad=1
+  fi
+done
+[[ $bad -eq 0 ]] || fail "secret scan failed; unstage the file(s) above (the key itself is never printed)."
+
+# --- 2. unit tests -----------------------------------------------------------
+if ! npm test --silent >/tmp/clv-precommit-test.$$ 2>&1; then
+  grep -E '^not ok|^ +not ok|error:' /tmp/clv-precommit-test.$$ | head -n 40 >&2
+  rm -f /tmp/clv-precommit-test.$$
+  fail "unit tests failed (run: npm test)"
+fi
+grep -E '^# (tests|pass|fail)' /tmp/clv-precommit-test.$$ | tr '\n' ' ' >&2; echo >&2
+rm -f /tmp/clv-precommit-test.$$
+
+# --- 3. plugin validation ----------------------------------------------------
+if command -v claude >/dev/null 2>&1; then
+  claude plugin validate . --strict >/dev/null 2>&1 || { claude plugin validate . --strict >&2; fail "claude plugin validate . --strict failed"; }
+  claude plugin validate .claude-plugin/plugin.json --strict >/dev/null 2>&1 || { claude plugin validate .claude-plugin/plugin.json --strict >&2; fail "plugin.json validation failed"; }
+  echo "pre-commit: plugin validate --strict OK" >&2
+else
+  echo "pre-commit: WARNING claude CLI not found; skipped plugin validation" >&2
+fi
+exit 0

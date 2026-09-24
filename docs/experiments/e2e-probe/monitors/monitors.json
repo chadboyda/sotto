@@ -1,0 +1,1 @@
+[{"name":"voicemon","command":"bash ${CLAUDE_PLUGIN_ROOT}/scripts/mon.sh","description":"probe monitor emitting a fake voice line","when":"on-skill-invoke:talk"}]

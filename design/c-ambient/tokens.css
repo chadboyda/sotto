@@ -1,0 +1,140 @@
+/* sotto — Direction C "Ambient companion" design tokens.
+ *
+ * Plain CSS custom properties. No build step, no web fonts (SPEC §7.1).
+ * Dark is the default; light follows the system, and either can be forced
+ * with data-theme="dark" | "light" on any element (used by the mockup frames).
+ *
+ * Contrast (WCAG 2.x, measured against --bg / --surface-1 / --surface-2):
+ *   dark   text 16.8 / t2 9.9 / t3 6.5 / edge 4.1 (3.5 on surface-2)
+ *          live 10.2  voice 8.0  work 8.6  attn 10.7  err 7.6  muted 8.4
+ *   light  text 17.5 / t2 7.5 / t3 5.5 / edge 3.7 (3.3 on surface-2)
+ *          live 5.2   voice 6.1  work 5.5  attn 5.5   err 5.3  muted 6.0
+ * Tinted state fields: --field-a is 16% in dark, 10% in light, which keeps
+ * t3 >= 4.6:1 and colored text >= 4.5:1 on the tint.
+ */
+
+:root,
+[data-theme="dark"] {
+  color-scheme: dark;
+
+  /* Neutrals: cool slate, no warm cast. */
+  --bg:         #0d1015;
+  --surface-1:  #151920;   /* cards */
+  --surface-2:  #1c212a;   /* raised: drawer, inputs, buttons */
+  --scrim:      rgb(4 6 9 / 0.62);
+  --text:       #eef1f5;
+  --text-2:     #b3bcc8;   /* secondary: previous caption, meta */
+  --text-3:     #8d97a6;   /* tertiary: hints, kbd labels (still AA) */
+  --edge:       #6b7686;   /* control borders, >= 3:1 */
+  --hairline:   #262c36;   /* decorative dividers only, never a control edge */
+
+  /* One color per meaning, same hue family in both themes. */
+  --live:   #2fd3c4;   /* heard / listening / you speaking */
+  --voice:  #a99bff;   /* Sotto (the voice) speaking */
+  --work:   #6cb2ff;   /* Claude Code working */
+  --attn:   #f5b83d;   /* needs approval, notices */
+  --err:    #ff7a7a;   /* errors, End voice */
+  --muted:  #f28bc0;   /* mic muted (billing continues) */
+
+  --field-a: 16%;                 /* strength of the ambient color field */
+  --on-solid: #0d1015;            /* text on a solid state-color fill */
+  --focus:  #9fd0ff;
+  --shadow-2: 0 12px 32px rgb(0 0 0 / 0.45), 0 2px 6px rgb(0 0 0 / 0.35);
+}
+
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme="dark"]) {
+    color-scheme: light;
+    --bg:         #f7f9fb;
+    --surface-1:  #ffffff;
+    --surface-2:  #eef2f6;
+    --scrim:      rgb(15 20 27 / 0.36);
+    --text:       #0f141b;
+    --text-2:     #465262;
+    --text-3:     #5b6676;
+    --edge:       #7a8596;
+    --hairline:   #dde3ea;
+    --live:   #0a7169;
+    --voice:  #5b45d6;
+    --work:   #1b61c9;
+    --attn:   #8f5a00;
+    --err:    #c42b33;
+    --muted:  #b0246e;
+    --field-a: 10%;
+    --on-solid: #ffffff;
+    --focus:  #1b61c9;
+    --shadow-2: 0 12px 32px rgb(15 20 27 / 0.14), 0 2px 6px rgb(15 20 27 / 0.08);
+  }
+}
+
+[data-theme="light"] {
+  color-scheme: light;
+  --bg:         #f7f9fb;
+  --surface-1:  #ffffff;
+  --surface-2:  #eef2f6;
+  --scrim:      rgb(15 20 27 / 0.36);
+  --text:       #0f141b;
+  --text-2:     #465262;
+  --text-3:     #5b6676;
+  --edge:       #7a8596;
+  --hairline:   #dde3ea;
+  --live:   #0a7169;
+  --voice:  #5b45d6;
+  --work:   #1b61c9;
+  --attn:   #8f5a00;
+  --err:    #c42b33;
+  --muted:  #b0246e;
+  --field-a: 10%;
+  --on-solid: #ffffff;
+  --focus:  #1b61c9;
+  --shadow-2: 0 12px 32px rgb(15 20 27 / 0.14), 0 2px 6px rgb(15 20 27 / 0.08);
+}
+
+:root {
+  /* Type: system stacks only. */
+  --font-ui:   system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", sans-serif;
+  --font-mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+
+  /* Scale (px / line-height). The state word is the only display size. */
+  --fs-state:   34px;  --lh-state:   40px;  /* "Listening" — read from across the room */
+  --fs-title:   20px;  --lh-title:   28px;  /* card/overlay headlines */
+  --fs-caption: 17px;  --lh-caption: 24px;  /* latest caption line */
+  --fs-body:    15px;  --lh-body:    22px;  /* Claude card, buttons */
+  --fs-meta:    13px;  --lh-meta:    18px;  /* header, previous caption, hints */
+  --fs-label:   12px;  --lh-label:   16px;  /* uppercase-free speaker labels */
+  --fw-regular: 400; --fw-medium: 500; --fw-semibold: 600;
+  --tracking-state: -0.02em;
+
+  /* Spacing: 4/8 grid. 8 between controls, 16+ between groups. */
+  --sp-1: 4px;  --sp-2: 8px;  --sp-3: 12px; --sp-4: 16px;
+  --sp-5: 20px; --sp-6: 24px; --sp-8: 32px; --sp-10: 40px; --sp-12: 48px;
+  --gutter: 16px;
+
+  /* Sizing */
+  --hit:      44px;    /* minimum target for every control */
+  --hit-lg:   48px;    /* bottom-bar buttons */
+  --orb:      136px;   /* mute / floor indicator at default size */
+  --orb-mini: 88px;    /* collapsed size (<= 480px tall), still >= 64px */
+  --bar-h:    64px;    /* bottom action bar */
+  --header-h: 44px;
+
+  /* Radii */
+  --r-sm: 8px;  --r-md: 12px;  --r-lg: 16px;  --r-xl: 24px;  --r-pill: 999px;
+
+  /* Motion: calm, signal-driven. Nothing loops while idle. */
+  --dur-fast:  150ms;   /* hover, press */
+  --dur-base:  200ms;   /* state changes, color field crossfade */
+  --dur-slow:  250ms;   /* drawer, overlay */
+  --dur-level: 90ms;    /* audio-level follow (per-frame smoothing target) */
+  --ease-out:  cubic-bezier(0.2, 0.8, 0.2, 1);
+  --ease-in-out: cubic-bezier(0.4, 0, 0.2, 1);
+
+  /* Layers */
+  --z-banner: 20; --z-drawer: 30; --z-scrim: 29;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --dur-fast: 0ms; --dur-base: 0ms; --dur-slow: 0ms; --dur-level: 0ms;
+  }
+}

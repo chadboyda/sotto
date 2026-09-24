@@ -1,0 +1,192 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark light">
+  <title>Sotto</title>
+  <link rel="icon" href="icon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="styles.css">
+  <script type="module" src="app.js"></script>
+</head>
+<body data-phase="boot" data-state="off" data-view="card" data-floor="starting" data-dial="small" data-claude="idle">
+  <!-- Remote voice. A real, persistent <audio> element in the DOM (never WebAudio):
+       Chrome's echo canceller uses it as the reference signal. The dial's voice meter
+       reads an unplayed clone of the track instead (app.js, voiceMeter). -->
+  <audio id="remote-audio" autoplay></audio>
+
+  <!-- Reusable icons (inline SVG, currentColor). -->
+  <svg class="sprite" aria-hidden="true" focusable="false">
+    <symbol id="i-gear" viewBox="0 0 24 24"><path d="M12 15.25a3.25 3.25 0 1 0 0-6.5 3.25 3.25 0 0 0 0 6.5Z"/><path d="M19.4 13.5a7.7 7.7 0 0 0 0-3l2-1.55-2-3.46-2.38.96a7.6 7.6 0 0 0-2.6-1.5L14 2.5h-4l-.42 2.45a7.6 7.6 0 0 0-2.6 1.5L4.6 5.5l-2 3.46 2 1.55a7.7 7.7 0 0 0 0 3l-2 1.55 2 3.46 2.38-.96a7.6 7.6 0 0 0 2.6 1.5L10 21.5h4l.42-2.45a7.6 7.6 0 0 0 2.6-1.5l2.38.96 2-3.46-2-1.55Z"/></symbol>
+    <symbol id="i-pause" viewBox="0 0 24 24"><path d="M9 6v12M15 6v12"/></symbol>
+    <symbol id="i-play" viewBox="0 0 24 24"><path d="M8 5.5v13l10.5-6.5L8 5.5Z"/></symbol>
+    <symbol id="i-power" viewBox="0 0 24 24"><path d="M12 3.5v8"/><path d="M7.05 6.6a7.5 7.5 0 1 0 9.9 0"/></symbol>
+    <symbol id="i-close" viewBox="0 0 24 24"><path d="M6.5 6.5l11 11M17.5 6.5l-11 11"/></symbol>
+    <symbol id="i-alert" viewBox="0 0 24 24"><path d="M12 3.8 2.8 19.5h18.4L12 3.8Z"/><path d="M12 10v4.2M12 17.1v.1"/></symbol>
+    <symbol id="i-check" viewBox="0 0 24 24"><path d="m5 12.5 4.4 4.3L19 7.2"/></symbol>
+    <symbol id="i-mic" viewBox="0 0 24 24"><path d="M12 3a3 3 0 0 0-3 3v6a3 3 0 0 0 6 0V6a3 3 0 0 0-3-3Z"/><path d="M5.5 11.5a6.5 6.5 0 0 0 13 0M12 18v3"/></symbol>
+    <symbol id="i-key" viewBox="0 0 24 24"><circle cx="8" cy="15" r="4"/><path d="m11 12 8.5-8.5M16.5 6.5l2.5 2.5M14 9l2 2"/></symbol>
+  </svg>
+
+  <div class="app">
+    <header class="top">
+      <!-- Left: what the voice is doing (word) and where (project); right: what it costs. -->
+      <div class="status">
+        <span class="glyph" id="status-glyph" aria-hidden="true"></span>
+        <div class="status-text">
+          <span class="status-word" id="status-label">Starting</span>
+          <!-- Priority when the header is short of room (app.js fitHeader): the word and
+               the money always stay; the project goes first, then the detail, then "today". -->
+          <span class="status-sub">
+            <span class="status-detail" id="status-detail" hidden></span>
+            <span class="project" id="project" title=""></span>
+          </span>
+        </div>
+      </div>
+      <span class="usage" id="usage" title="Voice time billed today at $0.05 per minute" hidden></span>
+      <button type="button" class="icon-btn gear" id="settings-btn" aria-label="Settings" aria-haspopup="dialog" aria-controls="settings">
+        <svg aria-hidden="true"><use href="#i-gear"/></svg>
+      </button>
+    </header>
+
+    <!-- One banner at a time; the count says how many more are waiting. -->
+    <div class="banners" id="banners"></div>
+
+    <main class="main">
+      <section class="stage" aria-label="Voice">
+        <div class="dial" id="dial">
+          <canvas class="dial-canvas" id="dial-canvas" aria-hidden="true"></canvas>
+          <button type="button" class="mute" id="mute-btn" aria-label="Mute" aria-pressed="false" aria-keyshortcuts="M" aria-describedby="stage-word" disabled>
+            <svg class="mute-icon" viewBox="0 0 24 24" aria-hidden="true">
+              <g class="ico-mic">
+                <path d="M12 3a3 3 0 0 0-3 3v6a3 3 0 0 0 6 0V6a3 3 0 0 0-3-3Z"/>
+                <path d="M5.5 11.5a6.5 6.5 0 0 0 13 0M12 18v3"/>
+              </g>
+              <path class="ico-slash" d="M4 4l16 16"/>
+              <path class="ico-pause" d="M9 7v10M15 7v10"/>
+              <path class="ico-moon" d="M17.5 14.6A6.5 6.5 0 0 1 9.4 6.5a6.5 6.5 0 1 0 8.1 8.1Z"/>
+            </svg>
+          </button>
+        </div>
+        <div class="readout">
+          <p class="word" id="stage-word" data-tone="" tabindex="-1">Starting</p>
+          <p class="sub" id="stage-sub" hidden></p>
+          <ol class="steps" id="connect-steps" aria-label="Connecting" hidden></ol>
+          <p class="hint" id="key-hint" hidden><span class="keys"><kbd>M</kbd><span id="key-hint-space"> or <kbd>Space</kbd></span> <span id="key-hint-verb">to mute</span></span><span class="clock" id="clock" title="Time in this voice session"></span></p>
+        </div>
+      </section>
+
+      <!-- Card view: paused, allow microphone, errors, off, moved to another window. -->
+      <section class="card" id="overlay" data-tone="neutral" aria-labelledby="overlay-title" hidden>
+        <div class="pointer" id="prompt-pointer" hidden>
+          <svg class="pointer-arrow" viewBox="0 0 64 56" aria-hidden="true"><path d="M58 52C52 26 34 12 8 8"/><path d="M16 3 7 8l7 7"/></svg>
+          <span class="pointer-tag">Chrome is asking here</span>
+        </div>
+        <h2 class="card-title" id="overlay-title" tabindex="-1">Paused</h2>
+        <!-- Only this part scrolls when the window is short; the action below always shows. -->
+        <div class="card-scroll" id="overlay-scroll">
+        <p class="card-body" id="overlay-body"></p>
+        <ol class="card-steps" id="overlay-steps" hidden></ol>
+        <div class="pending" id="overlay-pending" hidden>
+          <p class="pending-title"><svg aria-hidden="true"><use href="#i-check"/></svg>Claude finished while you were away</p>
+          <p class="pending-text" id="overlay-pending-text"></p>
+        </div>
+        <div class="key-field" id="key-field" hidden>
+          <label for="api-key-input">OpenAI API key</label>
+          <div class="key-row">
+            <input id="api-key-input" type="password" autocomplete="off" spellcheck="false" placeholder="Key setup is coming soon" disabled>
+            <button type="button" class="btn" disabled>Save</button>
+          </div>
+        </div>
+        <p class="card-note" id="overlay-note" hidden></p>
+        </div>
+        <div class="card-actions">
+          <button type="button" class="btn primary" id="overlay-btn">Resume</button>
+        </div>
+        <p class="kbd-hint" id="overlay-kbd">or press <kbd>Space</kbd></p>
+      </section>
+
+      <section class="claude" id="claude" aria-label="Claude Code">
+        <div class="claude-head">
+          <span class="claude-icon" aria-hidden="true"></span>
+          <span class="claude-title" id="claude-title">Claude is idle</span>
+          <span class="claude-time" id="claude-time"></span>
+        </div>
+        <p class="claude-step" id="claude-step" hidden></p>
+        <pre class="claude-command" id="claude-command" hidden></pre>
+        <p class="claude-note" id="claude-note" hidden><span class="note-full">Waiting for your approval in the terminal. Approve or deny it there; Sotto can't approve for you.</span><span class="note-short">Approve or deny it in the terminal.</span></p>
+        <p class="claude-summary" id="summary" hidden></p>
+        <button type="button" class="more" id="more-btn" aria-expanded="false" aria-controls="summary" hidden>More</button>
+        <p class="claude-request" id="claude-request" hidden></p>
+      </section>
+
+      <section class="captions" id="captions-panel" aria-label="Conversation">
+        <!-- Exactly two lines: the one before (dimmer) and the latest (large). A line that
+             does not fit is dropped whole; the latest keeps its newest words. -->
+        <ol id="captions">
+          <li class="line" id="cap-prev" hidden><span class="who"></span><span class="text"></span></li>
+          <li class="line latest" id="cap-latest" hidden><span class="who"></span><span class="text"></span></li>
+        </ol>
+        <p class="captions-empty" id="captions-empty">What you and Sotto say will appear here.</p>
+      </section>
+    </main>
+
+    <footer class="bottom">
+      <button type="button" class="btn" id="pause-btn" title="Pause the paid voice session; resume any time">
+        <svg aria-hidden="true"><use href="#i-pause"/></svg><span>Pause</span>
+      </button>
+      <button type="button" class="btn danger" id="stop-btn" title="Turn voice off for Claude Code">
+        <svg aria-hidden="true"><use href="#i-power"/></svg><span>End voice</span>
+      </button>
+    </footer>
+  </div>
+
+  <!-- Screen readers hear floor changes, Claude's steps and approvals here, not every caption delta. -->
+  <p class="sr-only" id="announcer" aria-live="polite"></p>
+  <!-- Errors, a blocked mic and the daily cap interrupt (role=alert). -->
+  <p class="sr-only" id="alert-announcer" role="alert"></p>
+
+  <dialog class="drawer" id="settings" aria-labelledby="settings-title">
+    <div class="drawer-head">
+      <h2 id="settings-title">Settings</h2>
+      <button type="button" class="icon-btn" id="settings-close" aria-label="Close settings">
+        <svg aria-hidden="true"><use href="#i-close"/></svg>
+      </button>
+    </div>
+    <div class="field">
+      <span class="field-label" id="policy-label">Speaking policy</span>
+      <div class="segmented" role="radiogroup" aria-labelledby="policy-label" id="policy">
+        <button type="button" role="radio" data-policy="quiet" aria-checked="false">Quiet</button>
+        <button type="button" role="radio" data-policy="milestones" aria-checked="true">Milestones</button>
+        <button type="button" role="radio" data-policy="walkthrough" aria-checked="false">Walkthrough</button>
+      </div>
+      <p class="field-help" id="policy-help">Mentions finished work, approvals and errors.</p>
+    </div>
+    <div class="field">
+      <label class="field-label" for="voice-select">Voice</label>
+      <select id="voice-select"></select>
+      <p class="field-help" id="voice-help">Changing it restarts the voice session; the conversation carries over.</p>
+    </div>
+    <div class="field">
+      <label class="field-label" for="input-select">Microphone</label>
+      <select id="input-select"></select>
+      <p class="field-help" id="mic-hint" hidden></p>
+    </div>
+    <div class="field">
+      <label class="field-label" for="output-select">Speaker</label>
+      <select id="output-select"></select>
+    </div>
+    <div class="field">
+      <label class="field-label" for="wake-select">Voice wake</label>
+      <select id="wake-select">
+        <option value="off">Off</option>
+        <option value="low">Low</option>
+        <option value="medium" selected>Medium</option>
+        <option value="high">High</option>
+      </select>
+      <p class="field-help">How readily your voice wakes a sleeping session. Nothing is sent or billed until it wakes.</p>
+    </div>
+    <p class="drawer-foot"><kbd>Esc</kbd> to close · changes apply right away</p>
+  </dialog>
+</body>
+</html>

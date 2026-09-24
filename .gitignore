@@ -1,0 +1,13 @@
+.env
+.env.*
+!.env.example
+node_modules/
+.DS_Store
+*.log
+.claude/worktrees/
+
+# Optional private material (a separate git repo); never part of this repo.
+private/
+docs/experiments/*/hooklog.txt
+docs/experiments/*/monlog.txt
+docs/experiments/*/*.jsonl

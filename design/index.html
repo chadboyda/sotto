@@ -1,0 +1,216 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="dark light">
+<title>Voice UI Directions</title>
+<style>
+:root{
+  --bg:#0b0d10;--surface:#13161b;--surface-2:#1a1e25;--line:#262b33;--edge:#4a525e;
+  --ink:#e8ebef;--ink-2:#aab2bd;--ink-3:#8b94a0;
+  --pick:#2fd3c4;--pick-ink:#06231f;--warn:#f5b83d;--bad:#ff7a7a;
+  --bar:#6cb2ff;
+  --font:-apple-system,BlinkMacSystemFont,"Segoe UI",Inter,system-ui,sans-serif;
+  --mono:ui-monospace,SFMono-Regular,Menlo,monospace;
+}
+@media (prefers-color-scheme: light){
+  :root:not([data-theme="dark"]){
+    --bg:#f5f6f8;--surface:#ffffff;--surface-2:#eef0f3;--line:#dde1e6;--edge:#8a929c;
+    --ink:#11151a;--ink-2:#434b55;--ink-3:#5b636d;
+    --pick:#0a7169;--pick-ink:#ffffff;--warn:#8f5a00;--bad:#c42b33;--bar:#1b61c9;
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#0b0d10;--surface:#13161b;--surface-2:#1a1e25;--line:#262b33;--edge:#4a525e;
+  --ink:#e8ebef;--ink-2:#aab2bd;--ink-3:#8b94a0;
+  --pick:#2fd3c4;--pick-ink:#06231f;--warn:#f5b83d;--bad:#ff7a7a;--bar:#6cb2ff;
+}
+*{box-sizing:border-box}
+html,body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.55 var(--font);-webkit-font-smoothing:antialiased}
+main{max-width:1180px;margin:0 auto;padding:40px 16px 80px}
+h1{font-size:28px;line-height:1.2;margin:0 0 8px;letter-spacing:-.01em}
+h2{font-size:21px;margin:0;letter-spacing:-.01em}
+h3{font-size:13px;text-transform:uppercase;letter-spacing:.06em;color:var(--ink-3);margin:24px 0 8px;font-weight:600}
+p{margin:0 0 10px}
+.lede{color:var(--ink-2);max-width:72ch}
+a{color:var(--bar)}
+code,.mono{font-family:var(--mono);font-size:.9em}
+.verdict{margin:28px 0 40px;padding:20px 22px;border:1px solid var(--pick);border-radius:14px;background:var(--surface)}
+.verdict strong.tag{display:inline-block;background:var(--pick);color:var(--pick-ink);border-radius:999px;padding:2px 10px;font-size:12px;letter-spacing:.04em;text-transform:uppercase;margin-bottom:8px}
+.verdict ul{margin:8px 0 0;padding-left:20px}
+.verdict li{margin:4px 0}
+table{width:100%;border-collapse:collapse;font-variant-numeric:tabular-nums}
+.tablewrap{overflow-x:auto;border:1px solid var(--line);border-radius:12px;background:var(--surface)}
+th,td{padding:10px 12px;text-align:left;border-bottom:1px solid var(--line);vertical-align:top}
+th{font-size:13px;color:var(--ink-3);font-weight:600}
+tr:last-child td{border-bottom:0}
+td.n{text-align:center;width:88px}
+.score{display:inline-flex;align-items:center;gap:6px}
+.score i{display:inline-block;height:6px;border-radius:3px;background:var(--edge)}
+.win .score i{background:var(--pick)}
+tr.total td{font-weight:700}
+.judges{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:12px;margin-top:12px}
+.judge{background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:14px 16px}
+.judge b{display:block}
+.judge .role{color:var(--ink-3);font-size:13px;display:block;margin-bottom:6px}
+.judge p{font-size:14px;color:var(--ink-2)}
+section.dir{margin-top:56px;padding-top:32px;border-top:1px solid var(--line)}
+.dirhead{display:flex;flex-wrap:wrap;align-items:baseline;gap:10px 16px;margin-bottom:12px}
+.pill{font-size:12px;border:1px solid var(--edge);border-radius:999px;padding:2px 10px;color:var(--ink-2)}
+.pill.pick{border-color:var(--pick);color:var(--pick)}
+.total-big{margin-left:auto;font-size:22px;font-weight:700;font-variant-numeric:tabular-nums}
+.total-big small{font-size:13px;color:var(--ink-3);font-weight:500}
+.grid{display:grid;grid-template-columns:300px 1fr;gap:24px;align-items:start}
+@media (max-width:760px){.grid{grid-template-columns:1fr}}
+figure{margin:0}
+figure img{display:block;width:100%;height:auto;border-radius:12px;border:1px solid var(--line);background:var(--surface-2)}
+figcaption{font-size:13px;color:var(--ink-3);margin-top:6px}
+.hero{max-width:300px}
+.pitch ol{padding-left:20px;margin:0 0 10px}
+.pitch li{margin:5px 0;color:var(--ink-2)}
+.pros,.cons{margin:0;padding-left:20px}
+.pros li::marker{color:var(--pick)}
+.cons li::marker{color:var(--bad)}
+.overview{margin-top:20px}
+.overview .scroll{max-height:720px;overflow:auto;border-radius:12px;border:1px solid var(--line)}
+.overview .scroll img{border:0;border-radius:0}
+details{margin-top:8px}
+summary{cursor:pointer;color:var(--ink-2);min-height:44px;display:flex;align-items:center}
+footer{margin-top:56px;color:var(--ink-3);font-size:13px}
+</style>
+</head>
+<body>
+<main>
+  <h1>sotto voice window: three directions</h1>
+  <p class="lede">Three mockups made in response to the feedback that the buttons are "really tight" and the window has an "ugly AI-slop beige color". A panel of three judges reviewed every frame of each direction against the current window (<code>design/audit/</code>) and the existing <code>web/</code> structure. Each criterion is scored 1 to 10, averaged across the judges and rounded.</p>
+
+  <div class="verdict">
+    <strong class="tag">Recommended</strong>
+    <h2>C, "Ambient companion", with parts taken from A and B</h2>
+    <p style="margin-top:8px">C is the easiest to read from across the desk: a 136px orb, one 34px word and a lightly tinted background. It also maps almost one-to-one onto the current DOM (<code>.live-view</code>, <code>#mic-caption</code>, <code>#activity</code>, <code>#captions</code>, footer), so it is the cheapest to build and the least risky. A has the best information design for Claude Code and the strictest contrast work. B has the best recovery and onboarding flows.</p>
+    <h3>Take from the runners-up</h3>
+    <ul>
+      <li><b>From A: the Claude Code card.</b> One card for idle, working (current step plus <i>Asked "…"</i> for the request it serves), approval and finished. This replaces C's lighter "Claude is working" chip. Also take A's blue <b>working arc around the orb</b>, so work in progress shows even while the word says "Listening".</li>
+      <li><b>From A: Sotto's voice as ink, not a hue.</b> That frees violet to mean muted and removes C's pink. Pink muted and red error sit too close for users with red-green color blindness, and teal (live) versus blue (working) is close as well.</li>
+      <li><b>From A: contrast measured per surface.</b> Check every token on bg, surface-1 and surface-2 in both themes, not only on bg.</li>
+      <li><b>From B: connecting as a checklist</b> ("Found the sotto daemon, Microphone on, Connecting to the voice service…"), so a stall shows which step stopped.</li>
+      <li><b>From B: a sketch of Chrome's prompt on the Allow-microphone screen</b>, with the "Allow while visiting the site" option highlighted. Pair it with C's arrow.</li>
+      <li><b>From B: approval pinned above the footer</b>, so it is never pushed off by captions. Also take B's rule that your captions are the same size and contrast as the assistant's.</li>
+      <li><b>Guardrails for C:</b> hold the background tint for about 400ms before switching and cross-fade it, so quick turn-taking does not flicker teal and violet. At 360x420, the icon-only End button needs <code>aria-label="End voice"</code> and should keep a visible "End" label as B does. Check the "not billing while paused" copy against SPEC before shipping it.</li>
+    </ul>
+  </div>
+
+  <h2>Scores</h2>
+  <p class="lede" style="margin-top:6px">Criteria: <b>Glance</b> means you can read the state without focusing on the window. <b>Complaints</b> means it fixes the tight buttons and the beige. <b>Polish</b> is taste and craft. <b>A11y</b> is accessibility. <b>Fit</b> is how well it fits the existing <code>web/</code> code.</p>
+  <div class="tablewrap" style="margin-top:12px">
+  <table>
+    <thead><tr><th>Direction</th><th class="n">Glance</th><th class="n">Complaints</th><th class="n">Polish</th><th class="n">A11y</th><th class="n">Fit</th><th class="n">Total /50</th></tr></thead>
+    <tbody>
+      <tr class="win"><td><b>C</b> Ambient companion</td>
+        <td class="n"><span class="score"><i style="width:36px"></i>9</span></td>
+        <td class="n"><span class="score"><i style="width:36px"></i>9</span></td>
+        <td class="n"><span class="score"><i style="width:32px"></i>8</span></td>
+        <td class="n"><span class="score"><i style="width:32px"></i>8</span></td>
+        <td class="n"><span class="score"><i style="width:36px"></i>9</span></td>
+        <td class="n"><b>43</b></td></tr>
+      <tr><td><b>A</b> Instrument</td>
+        <td class="n"><span class="score"><i style="width:32px"></i>8</span></td>
+        <td class="n"><span class="score"><i style="width:36px"></i>9</span></td>
+        <td class="n"><span class="score"><i style="width:32px"></i>8</span></td>
+        <td class="n"><span class="score"><i style="width:36px"></i>9</span></td>
+        <td class="n"><span class="score"><i style="width:24px"></i>6</span></td>
+        <td class="n"><b>40</b></td></tr>
+      <tr><td><b>B</b> Conversation-first</td>
+        <td class="n"><span class="score"><i style="width:24px"></i>6</span></td>
+        <td class="n"><span class="score"><i style="width:28px"></i>7</span></td>
+        <td class="n"><span class="score"><i style="width:28px"></i>7</span></td>
+        <td class="n"><span class="score"><i style="width:32px"></i>8</span></td>
+        <td class="n"><span class="score"><i style="width:20px"></i>5</span></td>
+        <td class="n"><b>33</b></td></tr>
+    </tbody>
+  </table>
+  </div>
+
+  <div class="judges">
+    <div class="judge"><b>Maya Okafor</b><span class="role">Voice-UX designer</span>
+      <p>"In a voice app you look at the screen only to check who has the floor. C answers that at a glance and from across the room. A answers it only if you know the ring code. B puts the answer in a 64px pill at the bottom and gives the space to text you have just heard. B's connecting checklist is the best recovery idea of the three."</p></div>
+    <div class="judge"><b>Theo Lindqvist</b><span class="role">Visual designer</span>
+      <p>"All three get rid of the beige. A is the most distinctive: it looks like a real object, not a template. But the two rings of grey rest ticks are busy at idle. C's tinted background is lovely, and I would keep it no stronger than it is now. B's dock has label problems: 'Claude L…' and 'Speaking · t…' are truncated at 420px, and 'End voice' is squeezed into a 76px box. That is the tight-button complaint again."</p></div>
+    <div class="judge"><b>Priya Raman</b><span class="role">Accessibility specialist</span>
+      <p>"A did the most careful work: contrast is measured on every surface and violet means muted. C passes AA, but its pink muted and red error are too similar for users with red-green color blindness. Shape (dashed ring versus alert) saves it, but I would still swap the hue. B's transcript-first layout helps deaf and hard-of-hearing users most. All three have 44px targets and separate End voice from Pause."</p></div>
+  </div>
+
+  <!-- C -->
+  <section class="dir" id="c">
+    <div class="dirhead"><h2>C · Ambient companion</h2><span class="pill pick">Recommended</span><span class="total-big">43<small>/50</small></span></div>
+    <div class="grid">
+      <figure class="hero"><a href="c-ambient/hero.png"><img src="c-ambient/hero.png" alt="Direction C listening state: large teal ring mute button, the word Listening, captions and a Pause / End voice footer on a teal-tinted dark background" loading="lazy"></a><figcaption>Listening, 420x640</figcaption></figure>
+      <div class="pitch">
+        <p>The window works like a mood light with one word in it. The background takes a soft tint of whoever has the floor: teal when it hears you, violet for Sotto, blue for Claude Code working, amber when something needs you, red for errors and pink when muted.</p>
+        <ol>
+          <li>The mute button (136px) is also the floor indicator. It is a thin ring when listening, a solid disk with a level halo when you speak, a sunburst when Sotto speaks, and a dashed ring with a slashed mic when muted.</li>
+          <li>One 34px word states the state. The only loud state is approval: amber, the full command unclipped, and "Approval needed" in the header.</li>
+          <li>Cool grey neutrals in both themes, AA text contrast, control edges at 3:1 or better.</li>
+          <li>Every control is 44px or larger. End voice sits alone on the right. Speaking policy and the mic and speaker pickers move into a drawer behind a gear.</li>
+          <li>An explicit "Allow microphone access" screen, separate recovery steps for each mic error, and a 360x420 collapse with no scrolling.</li>
+        </ol>
+        <h3>Strengths</h3>
+        <ul class="pros"><li>Easiest state to read at a glance; can be read from across a desk.</li><li>Same DOM as today; the tint is just a <code>body[data-state]</code> CSS variable.</li><li>Calm when idle: nothing moves while listening.</li></ul>
+        <h3>Weaknesses</h3>
+        <ul class="cons"><li>Pink muted and red error are close; teal live and blue working are close.</li><li>The Claude Code chip is thinner than A's card (it does not show which request the step serves).</li><li>Quick turn-taking could make the background flicker; needs damping. Reduced-motion frame not drawn.</li></ul>
+      </div>
+    </div>
+    <div class="overview"><details open><summary>All 16 frames (overview.png), click image for full size</summary><div class="scroll"><a href="c-ambient/overview.png"><img src="c-ambient/overview.png" alt="All 16 frames of Direction C" loading="lazy"></a></div></details></div>
+  </section>
+
+  <!-- A -->
+  <section class="dir" id="a">
+    <div class="dirhead"><h2>A · Instrument</h2><span class="pill">Runner-up</span><span class="total-big">40<small>/50</small></span></div>
+    <div class="grid">
+      <figure class="hero"><a href="a-instrument/hero.png"><img src="a-instrument/hero.png" alt="Direction A listening state: an 88px mute button inside two concentric tick rings, the word Listening, an idle Claude Code card, captions, Pause and a red End voice text button" loading="lazy"></a><figcaption>Listening, 420x640</figcaption></figure>
+      <div class="pitch">
+        <p>A calm pro-audio meter for the voice window: near-black cool graphite, hairline edges, no beige anywhere.</p>
+        <ol>
+          <li>A dial with two rings around an 88px mute button. The inner green ring is your mic (jagged ticks). The outer ring is Sotto's voice (smooth, symmetric swells). A blue bezel arc means Claude Code is working. Shape and word change with the state too.</li>
+          <li>One color per meaning in both themes: green for live, blue for working, amber for approval, red for errors, violet for muted. Text is 4.5:1 or better and control edges 3:1 or better, measured on every surface.</li>
+          <li>One Claude Code card for idle, working (step plus the request it serves), approval and finished (3-line summary plus "More").</li>
+          <li>Controls are 44px or larger, settings are in a drawer, and End voice is a red text button on the far right.</li>
+          <li>An explicit Allow-mic screen, recovery steps for each mic error, and a fixed collapse order at 360x420.</li>
+        </ol>
+        <h3>Strengths</h3>
+        <ul class="pros"><li>Best information design for Claude Code (card plus the request it serves).</li><li>Most rigorous accessibility; violet for muted is clearly distinct.</li><li>The most distinctive, least template-like look.</li></ul>
+        <h3>Weaknesses</h3>
+        <ul class="cons"><li>You have to learn the two-ring code; the rest ticks are busy at idle.</li><li>Tick rings mean new SVG plus per-frame rendering for two analysers.</li><li>Frame 09 caption is missing its speaker label; the "not billed while paused" copy is unverified.</li></ul>
+      </div>
+    </div>
+    <div class="overview"><details><summary>All 15 frames (overview.png)</summary><div class="scroll"><a href="a-instrument/overview.png"><img src="a-instrument/overview.png" alt="All 15 frames of Direction A" loading="lazy"></a></div></details></div>
+  </section>
+
+  <!-- B -->
+  <section class="dir" id="b">
+    <div class="dirhead"><h2>B · Conversation-first</h2><span class="pill">Third</span><span class="total-big">33<small>/50</small></span></div>
+    <div class="grid">
+      <figure class="hero"><a href="b-transcript/hero.png"><img src="b-transcript/hero.png" alt="Direction B listening state: a Claude finished card and captions filling the window, with the latest line in large bold text, above a dock with a Listening pill, Pause and End voice" loading="lazy"></a><figcaption>Listening, 420x640</figcaption></figure>
+      <div class="pitch">
+        <p>The conversation is the main view, set as captions. A docked 64px pill is both the mute button and the floor indicator.</p>
+        <ol>
+          <li>Captions, not chat bubbles. The newest line is the largest and older lines fade out; your words have the same size and contrast as the assistant's.</li>
+          <li>The pill changes with the state: a hollow ring for listening, a green halo for you, a coral waveform for Sotto, a dashed and hatched pill when muted. Pause and a separate End voice sit to its right.</li>
+          <li>Claude Code progress is an inline timeline (request, steps, result), ending in a 3-line summary with "More".</li>
+          <li>Allow-mic screen with a sketch of Chrome's prompt, recovery steps for each mic error, approval pinned above the dock, "Still billing" shown while muted.</li>
+          <li>Cool slate palette, WCAG AA, 44px or larger controls, settings drawer, no scrolling down to 360x420.</li>
+        </ol>
+        <h3>Strengths</h3>
+        <ul class="pros"><li>Best for users who rely on captions; the timeline gives the richest record of progress.</li><li>The connecting checklist and the Chrome-prompt sketch are the best onboarding in the set.</li></ul>
+        <h3>Weaknesses</h3>
+        <ul class="cons"><li>The state lives in a small pill at the bottom edge, so it is the weakest at a glance.</li><li>Pill labels truncate at 420px and End voice is cramped, which brings back the tight-button complaint.</li><li>Largest rewrite: the transcript becomes the layout and chips turn into timelines.</li></ul>
+      </div>
+    </div>
+    <div class="overview"><details><summary>All 16 frames (overview.png)</summary><div class="scroll"><a href="b-transcript/overview.png"><img src="b-transcript/overview.png" alt="All 16 frames of Direction B" loading="lazy"></a></div></details></div>
+  </section>
+
+  <footer>Sources: <code>design/{a-instrument,b-transcript,c-ambient}/</code> (tokens.css, SYSTEM.md, mockup.html), the current-state audit in <code>design/audit/</code>, and <code>web/index.html</code>. Mockups only. Nothing in <code>web/</code> was changed.</footer>
+</main>
+</body>
+</html>

@@ -1,0 +1,47 @@
+{
+  "hooks": {
+    "UserPromptExpansion": [
+      { "matcher": "^sotto:talk$",
+        "hooks": [ { "type": "command", "command": "${CLAUDE_PLUGIN_ROOT}/scripts/toggle.sh", "args": [], "timeout": 15 } ] }
+    ],
+    "UserPromptSubmit": [
+      { "hooks": [ { "type": "command", "command": "${CLAUDE_PLUGIN_ROOT}/scripts/hook.sh", "args": ["UserPromptSubmit"], "timeout": 5 } ] }
+    ],
+    "PreToolUse": [
+      { "hooks": [ { "type": "command", "command": "${CLAUDE_PLUGIN_ROOT}/scripts/hook.sh", "args": ["PreToolUse"], "timeout": 5 } ] }
+    ],
+    "PermissionRequest": [
+      { "hooks": [ { "type": "command", "command": "${CLAUDE_PLUGIN_ROOT}/scripts/hook.sh", "args": ["PermissionRequest"], "timeout": 5 } ] }
+    ],
+    "MessageDisplay": [
+      { "hooks": [ { "type": "command", "command": "${CLAUDE_PLUGIN_ROOT}/scripts/hook.sh", "args": ["MessageDisplay"], "timeout": 5 } ] }
+    ],
+    "Notification": [
+      { "hooks": [ { "type": "command", "command": "${CLAUDE_PLUGIN_ROOT}/scripts/hook.sh", "args": ["Notification"], "timeout": 5 } ] }
+    ],
+    "Elicitation": [
+      { "hooks": [ { "type": "command", "command": "${CLAUDE_PLUGIN_ROOT}/scripts/hook.sh", "args": ["Elicitation"], "timeout": 5 } ] }
+    ],
+    "SubagentStop": [
+      { "hooks": [ { "type": "command", "command": "${CLAUDE_PLUGIN_ROOT}/scripts/hook.sh", "args": ["SubagentStop"], "timeout": 5 } ] }
+    ],
+    "TaskCompleted": [
+      { "hooks": [ { "type": "command", "command": "${CLAUDE_PLUGIN_ROOT}/scripts/hook.sh", "args": ["TaskCompleted"], "timeout": 5 } ] }
+    ],
+    "TeammateIdle": [
+      { "hooks": [ { "type": "command", "command": "${CLAUDE_PLUGIN_ROOT}/scripts/hook.sh", "args": ["TeammateIdle"], "timeout": 5 } ] }
+    ],
+    "PostToolUseFailure": [
+      { "hooks": [ { "type": "command", "command": "${CLAUDE_PLUGIN_ROOT}/scripts/hook.sh", "args": ["PostToolUseFailure"], "timeout": 5 } ] }
+    ],
+    "Stop": [
+      { "hooks": [ { "type": "command", "command": "${CLAUDE_PLUGIN_ROOT}/scripts/hook.sh", "args": ["Stop"], "timeout": 5 } ] }
+    ],
+    "StopFailure": [
+      { "hooks": [ { "type": "command", "command": "${CLAUDE_PLUGIN_ROOT}/scripts/hook.sh", "args": ["StopFailure"], "timeout": 5 } ] }
+    ],
+    "SessionEnd": [
+      { "hooks": [ { "type": "command", "command": "${CLAUDE_PLUGIN_ROOT}/scripts/hook.sh", "args": ["SessionEnd"], "timeout": 1 } ] }
+    ]
+  }
+}

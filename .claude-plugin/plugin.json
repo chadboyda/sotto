@@ -1,0 +1,50 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-plugin-manifest.json",
+  "name": "sotto",
+  "displayName": "Sotto",
+  "version": "0.1.0",
+  "description": "Full-duplex voice conversation with your running Claude Code session, powered by OpenAI gpt-live-1. Toggle with /talk.",
+  "author": { "name": "Chad Boyda" },
+  "homepage": "https://github.com/chadboyda/sotto",
+  "repository": "https://github.com/chadboyda/sotto",
+  "license": "MIT",
+  "keywords": ["voice", "gpt-live", "webrtc", "speech", "hands-free"],
+  "userConfig": {
+    "voice": {
+      "type": "string", "title": "Voice", "default": "marin",
+      "description": "GPT-Live voice used for new voice sessions.",
+      "options": ["alloy","ash","ballad","beacon","bossa","cedar","cinder","coral","delta","echo","gleam","marin","meridian","quartz","ripple","sage","shimmer","stone","tempo","verse","vesper","willow"]
+    },
+    "port": {
+      "type": "number", "title": "Local port", "default": 47821, "min": 1024, "max": 65535,
+      "description": "Loopback port for the sotto daemon and voice window."
+    },
+    "idle_seconds": {
+      "type": "number", "title": "Idle seconds", "default": 60, "min": 0, "max": 7200,
+      "description": "Close the paid voice session after this many seconds with no speech and no pending request; it wakes again when you talk (0 = never)."
+    },
+    "idle_minutes": {
+      "type": "number", "title": "Idle minutes (legacy)", "default": 5, "min": 0, "max": 120,
+      "description": "Legacy setting, used only when Idle seconds is not set."
+    },
+    "wake_sensitivity": {
+      "type": "string", "title": "Wake sensitivity", "default": "medium",
+      "options": ["off", "low", "medium", "high"],
+      "description": "How readily your voice wakes a sleeping session (detected locally, nothing is sent until then). off = press Space to resume."
+    },
+    "speaking_policy": {
+      "type": "string", "title": "Speaking policy", "default": "milestones",
+      "options": ["quiet", "milestones", "walkthrough"],
+      "description": "How much the voice narrates Claude's work you did not ask about."
+    },
+    "daily_cap_minutes": {
+      "type": "number", "title": "Daily cap (minutes)", "default": 120, "min": 0, "max": 1440,
+      "description": "Maximum voice minutes per day at $0.05/min (0 = no cap)."
+    },
+    "window": {
+      "type": "string", "title": "Voice window", "default": "auto",
+      "options": ["auto", "app", "chrome", "default"],
+      "description": "Where the voice page opens: auto (the Sotto desktop app on macOS, else Chrome), app, chrome, or default (your default browser)."
+    }
+  }
+}

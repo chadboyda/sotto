@@ -1,0 +1,172 @@
+/* sotto — Direction B "Conversation-first" design tokens.
+ *
+ * Plain CSS custom properties. No build step, no web fonts, no CDN (SPEC §7.1).
+ * Dark is the default block; light applies from prefers-color-scheme, and either
+ * theme can be forced with [data-theme="dark" | "light"] on any ancestor (used by
+ * the mockup frames and handy for testing).
+ *
+ * Contrast targets (all measured; see SYSTEM.md table):
+ *   --text, --text-2, --text-3      >= 4.5:1 on --bg AND --surface
+ *   role colors used as text         >= 4.5:1 on --bg AND --surface
+ *   --edge-strong, --mute-edge       >= 3:1 on --bg (control boundaries)
+ */
+
+:root,
+[data-theme="dark"] {
+  color-scheme: dark;
+
+  /* Neutrals: cool slate, no warm cast. */
+  --bg:            #0d1015;
+  --surface:       #151920;   /* cards, dock, header plate */
+  --surface-2:     #1d222b;   /* hover, inset wells, segmented track */
+  --surface-3:     #272d38;   /* pressed, selected segment */
+  --edge:          #2a313c;   /* hairline dividers (decorative, not a boundary) */
+  --edge-strong:   #677385;   /* control boundaries, >= 3:1 on bg */
+  --scrim:         rgb(5 7 10 / 0.62);
+
+  --text:          #eceff4;   /* 16.5:1 on bg */
+  --text-2:        #b3bcc9;   /* 9.9:1  secondary copy, older captions */
+  --text-3:        #8b95a4;   /* 6.3:1  meta, timestamps, kbd hints */
+  --text-on-solid: #0d1015;   /* text on a filled role-color button */
+
+  /* One color per meaning. Same hue family in both themes. */
+  --heard:         #4fd69c;   /* live / you are heard / your words */
+  --heard-soft:    rgb(79 214 156 / 0.14);
+  --voice:         #ff9275;   /* Sotto is speaking / its words */
+  --voice-soft:    rgb(255 146 117 / 0.14);
+  --work:          #79a8ff;   /* Claude Code is working */
+  --work-soft:     rgb(121 168 255 / 0.13);
+  --attn:          #f4bb4a;   /* needs you: approval, allow mic */
+  --attn-soft:     rgb(244 187 74 / 0.13);
+  --error:         #ff7a7a;
+  --error-soft:    rgb(255 122 122 / 0.13);
+  --muted:         #d3d9e2;   /* mic muted: neutral "off", paired with hatch + slash */
+  --muted-soft:    rgb(211 217 226 / 0.10);
+  --done:          var(--heard);
+
+  --mute-edge:     #7c8899;   /* 64px mute control ring at rest, 5.3:1 on bg */
+  --focus:         #9cc0ff;
+
+  --shadow-1: 0 1px 0 rgb(255 255 255 / 0.04) inset, 0 8px 24px -12px rgb(0 0 0 / 0.6);
+  --shadow-2: 0 1px 0 rgb(255 255 255 / 0.05) inset, 0 24px 48px -16px rgb(0 0 0 / 0.7);
+}
+
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme="dark"]) {
+    color-scheme: light;
+    --bg:            #f6f7f9;
+    --surface:       #ffffff;
+    --surface-2:     #edf0f4;
+    --surface-3:     #e1e6ed;
+    --edge:          #dde2e9;
+    --edge-strong:   #7d8797;
+    --scrim:         rgb(20 26 36 / 0.36);
+    --text:          #10141a;
+    --text-2:        #3f4855;
+    --text-3:        #5a6472;
+    --text-on-solid: #ffffff;
+    --heard:         #0b7a4d;
+    --heard-soft:    rgb(11 122 77 / 0.10);
+    --voice:         #b8431f;
+    --voice-soft:    rgb(184 67 31 / 0.09);
+    --work:          #1f5ccc;
+    --work-soft:     rgb(31 92 204 / 0.09);
+    --attn:          #8a5300;
+    --attn-soft:     rgb(214 150 20 / 0.16);
+    --error:         #c0262b;
+    --error-soft:    rgb(192 38 43 / 0.09);
+    --muted:         #3a4250;
+    --muted-soft:    rgb(58 66 80 / 0.08);
+    --mute-edge:     #6b7584;
+    --focus:         #1f5ccc;
+    --shadow-1: 0 1px 2px rgb(16 24 40 / 0.06), 0 8px 24px -12px rgb(16 24 40 / 0.18);
+    --shadow-2: 0 2px 4px rgb(16 24 40 / 0.06), 0 24px 48px -16px rgb(16 24 40 / 0.28);
+  }
+}
+
+[data-theme="light"] {
+  color-scheme: light;
+  --bg:            #f6f7f9;
+  --surface:       #ffffff;
+  --surface-2:     #edf0f4;
+  --surface-3:     #e1e6ed;
+  --edge:          #dde2e9;
+  --edge-strong:   #7d8797;
+  --scrim:         rgb(20 26 36 / 0.36);
+  --text:          #10141a;
+  --text-2:        #3f4855;
+  --text-3:        #5a6472;
+  --text-on-solid: #ffffff;
+  --heard:         #0b7a4d;
+  --heard-soft:    rgb(11 122 77 / 0.10);
+  --voice:         #b8431f;
+  --voice-soft:    rgb(184 67 31 / 0.09);
+  --work:          #1f5ccc;
+  --work-soft:     rgb(31 92 204 / 0.09);
+  --attn:          #8a5300;
+  --attn-soft:     rgb(214 150 20 / 0.16);
+  --error:         #c0262b;
+  --error-soft:    rgb(192 38 43 / 0.09);
+  --muted:         #3a4250;
+  --muted-soft:    rgb(58 66 80 / 0.08);
+  --mute-edge:     #6b7584;
+  --focus:         #1f5ccc;
+  --shadow-1: 0 1px 2px rgb(16 24 40 / 0.06), 0 8px 24px -12px rgb(16 24 40 / 0.18);
+  --shadow-2: 0 2px 4px rgb(16 24 40 / 0.06), 0 24px 48px -16px rgb(16 24 40 / 0.28);
+}
+
+:root {
+  /* Type: system stacks only. */
+  --font-sans: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI Variable", "Segoe UI", system-ui, sans-serif;
+  --font-display: -apple-system, BlinkMacSystemFont, "SF Pro Display", "Segoe UI Variable Display", system-ui, sans-serif;
+  --font-mono: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, monospace;
+
+  /* Scale (px / line-height). Minor third-ish, tuned for a 420px window. */
+  --fs-micro: 11px;  --lh-micro: 14px;   /* kbd chips, section eyebrows (caps, +0.06em) */
+  --fs-meta:  12px;  --lh-meta:  16px;   /* timestamps, usage, speaker labels */
+  --fs-small: 13px;  --lh-small: 18px;   /* timeline steps, hints */
+  --fs-body:  15px;  --lh-body:  22px;   /* older captions, card copy */
+  --fs-lead:  17px;  --lh-lead:  24px;   /* status word, card titles */
+  --fs-live:  21px;  --lh-live:  29px;   /* the latest caption line: the hero */
+  --fs-title: 24px;  --lh-title: 30px;   /* full-window state titles (Allow microphone) */
+
+  --fw-regular: 400;
+  --fw-medium:  510;
+  --fw-semibold: 600;
+  --tracking-tight: -0.012em;
+  --tracking-caps: 0.06em;
+
+  /* Spacing: 4/8 grid. */
+  --s-1: 4px;  --s-2: 8px;  --s-3: 12px; --s-4: 16px;
+  --s-5: 20px; --s-6: 24px; --s-8: 32px; --s-10: 40px; --s-12: 48px;
+  --gutter: var(--s-4);         /* window side padding */
+  --gap-control: var(--s-2);    /* between controls */
+  --gap-group: var(--s-4);      /* between groups */
+
+  /* Radii. */
+  --r-xs: 6px;   /* kbd chips */
+  --r-sm: 10px;  /* buttons, selects */
+  --r-md: 14px;  /* cards, timeline block */
+  --r-lg: 20px;  /* drawer, dock plate */
+  --r-pill: 999px;
+
+  /* Hit targets. */
+  --hit: 44px;          /* every interactive control */
+  --hit-primary: 64px;  /* mute / resume */
+
+  /* Layout. */
+  --header-h: 56px;
+  --dock-h: 96px;       /* 64 control + 16 + 16 */
+
+  /* Motion. Calm, signal-driven, never looping while idle. */
+  --dur-1: 120ms;  /* press, hover */
+  --dur-2: 180ms;  /* state swaps, fades */
+  --dur-3: 240ms;  /* drawer, card enter */
+  --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+  --ease-inout: cubic-bezier(0.65, 0, 0.35, 1);
+  --level-smooth: 90ms;  /* transition on --level-driven transforms */
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root { --dur-1: 0ms; --dur-2: 0ms; --dur-3: 0ms; --level-smooth: 0ms; }
+}

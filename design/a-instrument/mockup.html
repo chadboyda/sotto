@@ -1,0 +1,982 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="dark light">
+<title>Instrument: sotto mockups</title>
+<style>
+/* ==== tokens.css (inlined) ==== */
+/* sotto · Direction A "Instrument" · design tokens
+ *
+ * Plain CSS custom properties. No build step, no web fonts (SPEC §7.1).
+ * Theme follows the OS: light is the base, dark comes from
+ * prefers-color-scheme. [data-theme] on any element forces a theme for that
+ * subtree (used by the mockup frames and by a future manual override).
+ *
+ * Contrast (WCAG 2.x, measured against --bg / --surface-1 / --surface-2):
+ *   text tokens   >= 4.5:1 in both themes (lowest: light --live on --surface-2, 4.62)
+ *   --edge        >= 3.0:1 (control boundaries, WCAG 1.4.11)
+ *   signal colors >= 4.5:1 so they can also be used as text
+ */
+
+/* ---------- Theme-independent scales ---------- */
+:root {
+  /* Type: system stacks only */
+  --font-ui: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", system-ui, sans-serif;
+  --font-display: -apple-system, BlinkMacSystemFont, "SF Pro Display", "Segoe UI", system-ui, sans-serif;
+  --font-mono: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, monospace;
+
+  /* Type scale (px values; 1.2-ish steps, tuned for a 360-640px wide window) */
+  --text-meta: 12px;     /* header meta, kbd labels; never body copy */
+  --text-small: 13px;    /* secondary lines, card labels */
+  --text-body: 15px;     /* body, captions history, buttons */
+  --text-lead: 17px;     /* latest caption line */
+  --text-state: 22px;    /* the talking-state word under the dial */
+  --text-title: 24px;    /* overlay card titles (paused, errors, allow mic) */
+
+  --leading-tight: 1.2;
+  --leading-body: 1.45;
+  --weight-regular: 400;
+  --weight-medium: 510;
+  --weight-semibold: 600;
+  --tracking-title: -0.015em;
+  --tracking-caps: 0.06em; /* only for the tiny instrument legends */
+
+  /* Spacing: 4/8 grid */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 24px;
+  --space-6: 32px;
+  --space-7: 48px;
+  --gutter: 16px;          /* window side padding */
+  --gap-control: 8px;      /* between controls in one group */
+  --gap-group: 16px;       /* between groups */
+
+  /* Radii: machined, not pillowy */
+  --radius-xs: 4px;        /* kbd, tags */
+  --radius-sm: 8px;        /* buttons, inputs */
+  --radius-md: 12px;       /* cards */
+  --radius-lg: 16px;       /* drawer, overlay cards */
+  --radius-round: 999px;   /* dial, mute button */
+
+  /* Hit targets */
+  --hit-min: 44px;         /* every interactive element */
+  --hit-primary: 88px;     /* mute button (brief floor: 64px) */
+  --dial-size: 208px;      /* the voice instrument at default size */
+  --dial-size-compact: 132px;
+
+  /* Borders */
+  --stroke-hair: 1px;
+  --stroke-focus: 2px;
+
+  /* Motion: calm, signal-driven. Nothing loops while idle. */
+  --dur-instant: 80ms;     /* press feedback */
+  --dur-fast: 150ms;       /* hover, color changes */
+  --dur-base: 200ms;       /* state changes of the dial */
+  --dur-slow: 250ms;       /* drawer, overlay card */
+  --ease-out: cubic-bezier(0.16, 1, 0.3, 1);     /* expo-out: arrivals */
+  --ease-in-out: cubic-bezier(0.65, 0, 0.35, 1); /* symmetric: sweeps */
+  /* Level meters: the JS applies attack/release smoothing (attack ~40ms,
+     release ~220ms) to the analyser value; CSS never animates tick length. */
+  --meter-attack: 40ms;
+  --meter-release: 220ms;
+}
+
+/* ---------- Light (base) ---------- */
+:root,
+[data-theme="light"] {
+  color-scheme: light;
+
+  /* Neutrals: cool graphite, zero warmth */
+  --bg: #F5F6F8;
+  --surface-1: #FFFFFF;
+  --surface-2: #ECEEF2;
+  --surface-sunken: #E4E7EC;
+  --line: #DCE0E6;          /* dividers only, never a control edge */
+  --edge: #7A8391;          /* control boundaries: 3.54:1 on bg */
+  --fg: #0F1217;            /* 17.35:1 */
+  --fg-2: #434B57;          /* 8.15:1 */
+  --fg-3: #5B6472;          /* 5.53:1, the faintest text allowed */
+  --tick-rest: #B7BEC8;     /* idle meter ticks (decorative) */
+
+  /* Signals: one color per meaning, same hue family in both themes */
+  --live: #2F7A12;          /* live / heard / you speaking */
+  --live-tint: #E6F2DF;
+  --work: #2352C4;          /* Claude Code working */
+  --work-tint: #E4EBFA;
+  --attn: #8A5700;          /* needs approval, paused-with-news */
+  --attn-tint: #FBF0D9;
+  --attn-edge: #B07A12;
+  --err: #BE2B1D;           /* errors, End voice */
+  --err-tint: #FBE5E2;
+  --mute: #6A3FD0;          /* muted */
+  --mute-tint: #ECE5FB;
+  --voice: #0F1217;         /* Sotto speaking: ink, not a hue */
+
+  --on-signal: #FFFFFF;     /* text/icon on a filled signal color */
+  --focus: #2352C4;
+  --selection: #CFDCF7;
+  --shadow-drawer: 0 -8px 24px rgba(15, 18, 23, 0.12), 0 -1px 0 rgba(15, 18, 23, 0.06);
+  --shadow-dial: inset 0 1px 0 rgba(255, 255, 255, 0.9), 0 1px 2px rgba(15, 18, 23, 0.10), 0 6px 16px rgba(15, 18, 23, 0.08);
+}
+
+/* ---------- Dark ---------- */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+    --bg: #0B0D10;
+    --surface-1: #14171C;
+    --surface-2: #1C2027;
+    --surface-sunken: #07080A;
+    --line: #252A32;
+    --edge: #626C7B;          /* 3.66:1 on bg */
+    --fg: #ECEFF4;            /* 16.88:1 */
+    --fg-2: #AAB2BF;          /* 9.11:1 */
+    --fg-3: #8B94A3;          /* 6.36:1 */
+    --tick-rest: #333A45;
+    --live: #8BD96B;
+    --live-tint: #16241A;
+    --work: #7FA8FF;
+    --work-tint: #141E33;
+    --attn: #F0B43C;
+    --attn-tint: #2A2110;
+    --attn-edge: #B8871F;
+    --err: #FF7A6B;
+    --err-tint: #2E1614;
+    --mute: #B9A2FF;
+    --mute-tint: #1F1A33;
+    --voice: #ECEFF4;
+    --on-signal: #0B0D10;
+    --focus: #7FA8FF;
+    --selection: #2A3C66;
+    --shadow-drawer: 0 -8px 24px rgba(0, 0, 0, 0.5), 0 -1px 0 rgba(255, 255, 255, 0.04);
+    --shadow-dial: inset 0 1px 0 rgba(255, 255, 255, 0.06), 0 1px 0 rgba(0, 0, 0, 0.6), 0 8px 20px rgba(0, 0, 0, 0.45);
+  }
+}
+
+[data-theme="dark"] {
+  color-scheme: dark;
+  --bg: #0B0D10;
+  --surface-1: #14171C;
+  --surface-2: #1C2027;
+  --surface-sunken: #07080A;
+  --line: #252A32;
+  --edge: #626C7B;
+  --fg: #ECEFF4;
+  --fg-2: #AAB2BF;
+  --fg-3: #8B94A3;
+  --tick-rest: #333A45;
+  --live: #8BD96B;
+  --live-tint: #16241A;
+  --work: #7FA8FF;
+  --work-tint: #141E33;
+  --attn: #F0B43C;
+  --attn-tint: #2A2110;
+  --attn-edge: #B8871F;
+  --err: #FF7A6B;
+  --err-tint: #2E1614;
+  --mute: #B9A2FF;
+  --mute-tint: #1F1A33;
+  --voice: #ECEFF4;
+  --on-signal: #0B0D10;
+  --focus: #7FA8FF;
+  --selection: #2A3C66;
+  --shadow-drawer: 0 -8px 24px rgba(0, 0, 0, 0.5), 0 -1px 0 rgba(255, 255, 255, 0.04);
+  --shadow-dial: inset 0 1px 0 rgba(255, 255, 255, 0.06), 0 1px 0 rgba(0, 0, 0, 0.6), 0 8px 20px rgba(0, 0, 0, 0.45);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --dur-fast: 0ms;
+    --dur-base: 0ms;
+    --dur-slow: 0ms;
+  }
+}
+
+/* ==== end tokens ==== */
+
+/* ================= Board (presentation only) ================= */
+html { background: #050608; }
+body.board {
+  margin: 0; padding: 40px 40px 56px;
+  font-family: var(--font-ui); color: #C9CFD8;
+  -webkit-font-smoothing: antialiased;
+}
+.board-head { max-width: 1400px; margin: 0 0 32px; }
+.board-head h1 { font: 600 20px/1.2 var(--font-display); letter-spacing: -0.01em; color: #F2F4F7; margin: 0 0 6px; }
+.board-head p { margin: 0; font-size: 13px; color: #8B94A3; max-width: 90ch; }
+.grid { display: flex; flex-wrap: wrap; gap: 40px 32px; align-items: flex-start; }
+figure { margin: 0; }
+figcaption { margin-top: 12px; width: 420px; font-size: 13px; line-height: 1.4; color: #8B94A3; }
+figcaption b { display: block; color: #E4E8EE; font-weight: 600; font-size: 13px; margin-bottom: 2px; }
+figcaption code { font: 12px var(--font-mono); color: #C9CFD8; }
+.hero-only body.board, body.board.hero-only { padding: 0; }
+body.hero-only .board-head, body.hero-only figcaption { display: none; }
+body.hero-only .grid > figure:not(#hero) { display: none; }
+body.hero-only .frame { border-radius: 0; box-shadow: none; outline: 0; }
+
+/* ================= Window frame ================= */
+.frame {
+  width: 420px; height: 640px; position: relative; overflow: hidden;
+  border-radius: 10px; outline: 1px solid #1E232B;
+  box-shadow: 0 20px 50px rgba(0,0,0,.55);
+  background: var(--bg); color: var(--fg);
+  font: var(--weight-regular) var(--text-body)/var(--leading-body) var(--font-ui);
+  -webkit-font-smoothing: antialiased;
+  font-feature-settings: "tnum" 0;
+}
+.frame.compact { width: 360px; height: 420px; }
+.frame ::selection { background: var(--selection); }
+.win { position: absolute; inset: 0; display: flex; flex-direction: column; }
+.num { font-variant-numeric: tabular-nums; }
+
+/* ================= Header ================= */
+.hdr {
+  display: flex; align-items: center; gap: var(--space-3);
+  height: 52px; padding: 0 var(--space-2) 0 var(--gutter);
+  border-bottom: 1px solid var(--line); flex: none;
+}
+.hdr-status { display: flex; align-items: center; gap: var(--space-2); font-weight: var(--weight-semibold); font-size: var(--text-small); white-space: nowrap; }
+.hdr-status svg { width: 12px; height: 12px; flex: none; }
+.hdr-status[data-s="live"] { color: var(--live); }
+.hdr-status[data-s="muted"] { color: var(--mute); }
+.hdr-status[data-s="attn"] { color: var(--attn); }
+.hdr-status[data-s="err"] { color: var(--err); }
+.hdr-status[data-s="neutral"] { color: var(--fg-2); }
+.hdr-status small { font-weight: var(--weight-regular); color: var(--fg-2); font-size: var(--text-small); }
+.hdr-meta { flex: 1; min-width: 0; display: flex; align-items: center; gap: var(--space-2); font-size: var(--text-small); color: var(--fg-2); white-space: nowrap; overflow: hidden; }
+.hdr-meta .proj { overflow: hidden; text-overflow: ellipsis; }
+.hdr-meta .sep { width: 3px; height: 3px; border-radius: 50%; background: var(--fg-3); flex: none; }
+.hdr-usage { font-size: var(--text-small); color: var(--fg-2); white-space: nowrap; font-variant-numeric: tabular-nums; }
+
+/* ================= Buttons ================= */
+button { font: inherit; color: inherit; }
+.icon-btn {
+  width: var(--hit-min); height: var(--hit-min); flex: none;
+  display: grid; place-items: center;
+  border: 0; background: transparent; color: var(--fg-2);
+  border-radius: var(--radius-sm); cursor: pointer;
+  transition: background var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out);
+}
+.icon-btn:hover { background: var(--surface-2); color: var(--fg); }
+.icon-btn[aria-expanded="true"] { background: var(--surface-2); color: var(--fg); box-shadow: inset 0 0 0 1px var(--edge); }
+.icon-btn svg { width: 20px; height: 20px; }
+.btn {
+  min-height: var(--hit-min); padding: 0 var(--space-4);
+  display: inline-flex; align-items: center; justify-content: center; gap: var(--space-2);
+  border-radius: var(--radius-sm); cursor: pointer; white-space: nowrap;
+  font-size: var(--text-body); font-weight: var(--weight-medium);
+  background: var(--surface-1); border: 1px solid var(--edge); color: var(--fg);
+  transition: background var(--dur-fast) var(--ease-out), border-color var(--dur-fast) var(--ease-out), transform var(--dur-instant) linear;
+}
+.btn:active { transform: translateY(1px); }
+.btn svg { width: 18px; height: 18px; flex: none; }
+.btn.primary { background: var(--fg); border-color: var(--fg); color: var(--bg); min-height: 48px; font-weight: var(--weight-semibold); }
+.btn.primary kbd { background: color-mix(in srgb, var(--bg) 18%, transparent); color: var(--bg); border-color: color-mix(in srgb, var(--bg) 35%, transparent); }
+.btn.ghost-danger { background: transparent; border-color: transparent; color: var(--err); padding: 0 var(--space-3); }
+.btn.ghost-danger:hover { background: var(--err-tint); }
+.btn.text { background: transparent; border-color: transparent; color: var(--fg); padding: 0 var(--space-3); text-decoration: underline; text-underline-offset: 3px; text-decoration-color: var(--edge); }
+.btn[disabled] { opacity: 1; color: var(--fg-3); border-style: dashed; cursor: not-allowed; }
+.btn.block { width: 100%; }
+kbd {
+  display: inline-grid; place-items: center; min-width: 20px; height: 20px; padding: 0 5px;
+  font: var(--weight-medium) 11px/1 var(--font-ui); letter-spacing: .02em;
+  color: var(--fg-2); background: var(--surface-2);
+  border: 1px solid var(--line); border-bottom-color: var(--edge); border-radius: var(--radius-xs);
+}
+.focus-demo { outline: var(--stroke-focus) solid var(--focus); outline-offset: 2px; }
+
+/* ================= Stage + dial ================= */
+.stage { flex: none; display: flex; flex-direction: column; align-items: center; padding: var(--space-5) var(--gutter) var(--space-3); }
+.dial { position: relative; width: var(--dial-size); height: var(--dial-size); }
+.dial svg.meter { position: absolute; inset: 0; width: 100%; height: 100%; overflow: visible; }
+.mute {
+  position: absolute; left: 50%; top: 50%; width: var(--hit-primary); height: var(--hit-primary);
+  margin: calc(var(--hit-primary) / -2) 0 0 calc(var(--hit-primary) / -2);
+  border-radius: var(--radius-round); display: grid; place-items: center; cursor: pointer;
+  background: var(--surface-2); color: var(--fg);
+  border: 2px solid var(--edge); box-shadow: var(--shadow-dial);
+  transition: background var(--dur-base) var(--ease-out), border-color var(--dur-base) var(--ease-out), color var(--dur-base) var(--ease-out);
+}
+.mute svg { width: 30px; height: 30px; }
+.dial[data-mode="listen"] .mute, .dial[data-mode="you"] .mute { border-color: var(--live); }
+.dial[data-mode="voice"] .mute { border-color: var(--edge); }
+.dial[data-mode="muted"] .mute, .dial[data-muted] .mute { background: var(--mute); border-color: var(--mute); color: var(--on-signal); }
+.dial[data-mode="off"] .mute, .dial[data-mode="connect"] .mute { color: var(--fg-3); border-style: dashed; cursor: default; }
+.mute-key { position: absolute; right: 2px; bottom: 6px; }
+
+.floor { margin-top: var(--space-3); display: flex; flex-direction: column; align-items: center; gap: 2px; text-align: center; }
+.floor-word { display: flex; align-items: center; gap: var(--space-2); font: var(--weight-semibold) var(--text-state)/var(--leading-tight) var(--font-display); letter-spacing: var(--tracking-title); }
+.floor-word svg { width: 18px; height: 18px; }
+.floor-sub { font-size: var(--text-small); color: var(--fg-2); display: flex; align-items: center; gap: var(--space-2); }
+.floor[data-tone="live"] .floor-word svg { color: var(--live); }
+.floor[data-tone="muted"] .floor-word { color: var(--mute); }
+.floor[data-tone="dim"] .floor-word { color: var(--fg-2); }
+
+/* ================= Claude Code card ================= */
+.cc {
+  flex: none; margin: var(--space-2) var(--gutter) 0; padding: var(--space-3) var(--space-4);
+  border-radius: var(--radius-md); background: var(--surface-1); border: 1px solid var(--line);
+}
+.cc-head { display: flex; align-items: center; gap: var(--space-2); font-size: var(--text-small); color: var(--fg-2); min-height: 20px; }
+.cc-head .who { font-weight: var(--weight-semibold); color: var(--fg); }
+.cc-head .state { display: inline-flex; align-items: center; gap: 6px; font-weight: var(--weight-semibold); }
+.cc-head .state svg { width: 12px; height: 12px; }
+.cc-head .t { margin-left: auto; font-variant-numeric: tabular-nums; }
+.cc-step { margin: var(--space-2) 0 0; font-size: var(--text-body); color: var(--fg); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.cc-step code { font: 13.5px var(--font-mono); color: var(--fg-2); }
+.cc-req { margin-top: var(--space-2); display: flex; gap: var(--space-2); align-items: baseline; font-size: var(--text-small); color: var(--fg-2); }
+.cc-req span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cc-req b { font-weight: var(--weight-medium); color: var(--fg-3); flex: none; }
+.cc-sum { margin: var(--space-2) 0 0; font-size: var(--text-body); line-height: var(--leading-body); display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+.cc-more { display: flex; justify-content: space-between; align-items: center; margin: var(--space-1) calc(var(--space-3) * -1) calc(var(--space-2) * -1) 0; }
+.cc-more .cc-req { margin: 0; }
+.cc[data-tone="idle"] { background: transparent; border-style: dashed; border-color: var(--line); padding-block: var(--space-2); }
+.cc[data-tone="idle"] .cc-head { min-height: 28px; }
+.cc[data-tone="work"] { border-color: color-mix(in srgb, var(--work) 45%, var(--line)); }
+.cc[data-tone="work"] .state { color: var(--work); }
+.cc[data-tone="done"] .state { color: var(--fg); }
+.cc[data-tone="attn"] { background: var(--attn-tint); border: 2px solid var(--attn-edge); padding: var(--space-4); }
+.cc[data-tone="attn"] .state { color: var(--attn); font-size: var(--text-body); }
+.cc[data-tone="attn"] .state svg { width: 16px; height: 16px; }
+.cc-cmd { margin: var(--space-3) 0 var(--space-2); padding: var(--space-2) var(--space-3); border-radius: var(--radius-sm); background: var(--surface-sunken); font: 13px/1.5 var(--font-mono); color: var(--fg); white-space: pre-wrap; word-break: break-all; }
+.cc-note { margin: 0; font-size: var(--text-body); font-weight: var(--weight-medium); color: var(--fg); }
+.cc-note span { color: var(--fg-2); font-weight: var(--weight-regular); }
+.bar { height: 2px; background: var(--line); border-radius: 2px; margin-top: var(--space-3); overflow: hidden; }
+.bar i { display: block; height: 100%; width: 38%; margin-left: 22%; background: var(--work); border-radius: 2px; }
+
+/* ================= Captions ================= */
+.caps { flex: 1; min-height: 0; margin: var(--space-3) 0 0; padding: 0 var(--gutter); display: flex; flex-direction: column; justify-content: flex-end; overflow: hidden;
+  mask-image: linear-gradient(to bottom, transparent 0, #000 16px); }
+.cap { margin: 0; padding-top: var(--space-2); }
+.cap .who { display: block; font-size: var(--text-meta); font-weight: var(--weight-semibold); letter-spacing: .01em; color: var(--fg-3); margin-bottom: 1px; }
+.cap .who.you { color: var(--fg-2); }
+.cap p { margin: 0; font-size: var(--text-body); color: var(--fg-2); }
+.cap.latest p { font-size: var(--text-lead); color: var(--fg); line-height: 1.4; }
+.cap.live p::after { content: ""; display: inline-block; width: 2px; height: 1em; margin-left: 3px; vertical-align: -2px; background: var(--live); }
+.caps-empty { color: var(--fg-3); font-size: var(--text-small); padding-bottom: var(--space-2); }
+
+/* ================= Footer ================= */
+.ftr { flex: none; display: flex; align-items: center; justify-content: space-between; gap: var(--gap-group); padding: var(--space-3) var(--gutter) var(--space-3); border-top: 1px solid var(--line); margin-top: var(--space-3); }
+.ftr .btn kbd { margin-left: 2px; }
+
+/* ================= Banner ================= */
+.banner { flex: none; display: flex; align-items: center; gap: var(--space-2); margin: var(--space-2) var(--gutter) 0; padding: 0 0 0 var(--space-3); min-height: 48px; border-radius: var(--radius-sm); background: var(--surface-2); border: 1px solid var(--edge); font-size: var(--text-small); }
+.banner svg.ico { width: 16px; height: 16px; flex: none; }
+.banner p { margin: 0; flex: 1; line-height: 1.35; }
+.banner[data-tone="err"] { background: var(--err-tint); border-color: color-mix(in srgb, var(--err) 60%, var(--edge)); }
+.banner[data-tone="err"] svg.ico { color: var(--err); }
+.banner[data-tone="warn"] { background: var(--attn-tint); border-color: var(--attn-edge); }
+.banner[data-tone="warn"] svg.ico { color: var(--attn); }
+
+/* ================= Overlay card (paused, errors, permission) ================= */
+.sheet { flex: 1; min-height: 0; display: flex; flex-direction: column; padding: var(--space-6) var(--gutter) 0; }
+.sheet h2 { margin: 0 0 var(--space-2); font: var(--weight-semibold) var(--text-title)/1.15 var(--font-display); letter-spacing: var(--tracking-title); text-wrap: balance; }
+.sheet > p { margin: 0 0 var(--space-4); color: var(--fg-2); max-width: 34ch; }
+.sheet .head-row { display: flex; gap: var(--space-3); align-items: flex-start; }
+.sheet .head-row svg { width: 26px; height: 26px; flex: none; margin-top: 2px; color: var(--fg-2); }
+.sheet .head-row[data-tone="attn"] svg { color: var(--attn); }
+.sheet .head-row[data-tone="err"] svg { color: var(--err); }
+.sheet .head-row + p { padding-left: 38px; }
+.sheet .glyph { width: 48px; height: 48px; border-radius: var(--radius-md); display: grid; place-items: center; margin-bottom: var(--space-4); background: var(--surface-2); border: 1px solid var(--edge); color: var(--fg); }
+.sheet .glyph svg { width: 24px; height: 24px; }
+.sheet .glyph[data-tone="attn"] { background: var(--attn-tint); border-color: var(--attn-edge); color: var(--attn); }
+.sheet .glyph[data-tone="err"] { background: var(--err-tint); border-color: color-mix(in srgb, var(--err) 60%, var(--edge)); color: var(--err); }
+.sheet .pending, .sheet .steps { margin-left: 38px; }
+.sheet .actions { margin-top: auto; padding-bottom: var(--space-4); display: flex; flex-direction: column; gap: var(--gap-control); }
+.steps { list-style: none; margin: 0 0 var(--space-4); padding: 0; counter-reset: s; display: flex; flex-direction: column; gap: var(--space-3); }
+.steps li { counter-increment: s; display: grid; grid-template-columns: 28px 1fr; gap: var(--space-3); align-items: start; font-size: var(--text-body); }
+.steps li::before { content: counter(s); width: 28px; height: 28px; border-radius: 50%; display: grid; place-items: center; font-weight: var(--weight-semibold); font-size: var(--text-small); background: var(--surface-2); border: 1px solid var(--edge); color: var(--fg); }
+.steps li span { padding-top: 3px; }
+.path { font-weight: var(--weight-semibold); }
+.pending { border-radius: var(--radius-md); background: var(--surface-1); border: 1px solid var(--line); padding: var(--space-3) var(--space-4); margin-bottom: var(--space-4); }
+.pending .cc-head { margin-bottom: var(--space-2); }
+.pending p { margin: 0; display: -webkit-box; -webkit-line-clamp: 4; -webkit-box-orient: vertical; overflow: hidden; }
+
+/* Permission pointer */
+.prompt-zone { position: absolute; left: 8px; top: 8px; justify-content: flex-end; width: 236px; height: 92px; border-radius: 12px; border: 1.5px dashed var(--attn-edge); background: color-mix(in srgb, var(--attn-tint) 60%, transparent); display: flex; align-items: flex-end; padding: 10px 12px; font-size: var(--text-meta); color: var(--attn); font-weight: var(--weight-semibold); }
+.prompt-arrow { position: absolute; left: 44px; top: 108px; width: 80px; height: 64px; color: var(--attn); }
+
+/* ================= Drawer ================= */
+.scrim { position: absolute; inset: 0; background: color-mix(in srgb, var(--bg) 62%, transparent); }
+.drawer { position: absolute; left: 0; right: 0; bottom: 0; background: var(--surface-1); border-top: 1px solid var(--edge); border-radius: var(--radius-lg) var(--radius-lg) 0 0; box-shadow: var(--shadow-drawer); padding: var(--space-2) var(--gutter) var(--space-4); }
+.drawer-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: var(--space-2); }
+.drawer-head h3 { margin: 0; font: var(--weight-semibold) var(--text-lead)/1.2 var(--font-display); }
+.field { margin-bottom: var(--space-4); }
+.field > .lbl { display: flex; justify-content: space-between; font-size: var(--text-small); font-weight: var(--weight-semibold); color: var(--fg); margin-bottom: var(--space-2); }
+.field > .lbl span { font-weight: var(--weight-regular); color: var(--fg-2); }
+.seg { display: grid; grid-template-columns: repeat(3, 1fr); gap: 4px; padding: 4px; border-radius: 10px; background: var(--surface-sunken); border: 1px solid var(--edge); }
+.seg button { min-height: 40px; border: 0; border-radius: 7px; background: transparent; color: var(--fg-2); font-size: var(--text-small); font-weight: var(--weight-medium); cursor: pointer; }
+.seg button[aria-checked="true"] { background: var(--surface-1); color: var(--fg); box-shadow: 0 0 0 1px var(--edge), 0 1px 2px rgba(0,0,0,.25); font-weight: var(--weight-semibold); }
+.seg-desc { margin: var(--space-2) 0 0; font-size: var(--text-small); color: var(--fg-2); }
+.select { position: relative; }
+.select select { appearance: none; width: 100%; min-height: var(--hit-min); padding: 0 40px 0 var(--space-3); border-radius: var(--radius-sm); border: 1px solid var(--edge); background: var(--surface-2); color: var(--fg); font: var(--text-body) var(--font-ui); }
+.select svg { position: absolute; right: 12px; top: 50%; width: 16px; height: 16px; margin-top: -8px; color: var(--fg-2); pointer-events: none; }
+.field .hint { margin: var(--space-2) 0 0; font-size: var(--text-small); color: var(--fg-2); display: flex; gap: var(--space-2); }
+.field .hint svg { width: 16px; height: 16px; flex: none; margin-top: 1px; color: var(--fg-2); }
+.drawer-foot { display: flex; justify-content: space-between; align-items: center; font-size: var(--text-small); color: var(--fg-2); padding-top: var(--space-2); border-top: 1px solid var(--line); }
+
+/* ================= Compact (360x420) ================= */
+.compact .stage { flex-direction: row; gap: var(--space-4); padding: var(--space-3) var(--gutter) 0; justify-content: flex-start; }
+.compact .dial { width: var(--dial-size-compact); height: var(--dial-size-compact); }
+.compact .mute { --hit-primary: 72px; }
+.compact .mute svg { width: 26px; height: 26px; }
+.compact .floor { align-items: flex-start; text-align: left; margin: 0; }
+.compact .hdr-meta .proj, .compact .hdr-meta .sep { display: none; }
+.compact .cc { padding-block: var(--space-2); }
+.compact .caps { margin-top: var(--space-2); }
+
+@media (prefers-reduced-motion: reduce) { .frame * { transition: none !important; } }
+</style>
+</head>
+<body class="board">
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <defs>
+    <symbol id="i-mic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+      <rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5.5 11a6.5 6.5 0 0 0 13 0M12 17.5V21"/>
+    </symbol>
+    <symbol id="i-mic-off" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+      <rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5.5 11a6.5 6.5 0 0 0 13 0M12 17.5V21"/>
+      <path d="M4 4l16 16" stroke-width="2.2"/>
+    </symbol>
+    <symbol id="i-gear" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M4 7h9M17 7h3M4 17h3M11 17h9"/><circle cx="15" cy="7" r="2"/><circle cx="9" cy="17" r="2"/>
+    </symbol>
+    <symbol id="i-pause" viewBox="0 0 24 24" fill="currentColor"><rect x="6.5" y="5" width="3.6" height="14" rx="1"/><rect x="13.9" y="5" width="3.6" height="14" rx="1"/></symbol>
+    <symbol id="i-stop" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="5.5" y="5.5" width="13" height="13" rx="2.5"/></symbol>
+    <symbol id="i-play" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5.5v13a1 1 0 0 0 1.5.86l10.4-6.5a1 1 0 0 0 0-1.72L9.5 4.64A1 1 0 0 0 8 5.5Z"/></symbol>
+    <symbol id="i-close" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M6 6l12 12M18 6 6 18"/></symbol>
+    <symbol id="i-chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></symbol>
+    <symbol id="i-warn" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"><path d="M12 3.5 2.5 20h19L12 3.5Z"/><path d="M12 10v4.5M12 17.2v.3"/></symbol>
+    <symbol id="i-err" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2.8 21.2 12 12 21.2 2.8 12Z"/><path d="M12 8v5M12 16.2v.3"/></symbol>
+    <symbol id="i-check" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="m5 12.5 4.5 4.5L19 7.5"/></symbol>
+    <symbol id="i-info" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="12" cy="12" r="9"/><path d="M12 11v6M12 7.6v.3"/></symbol>
+    <symbol id="i-bt" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="m7 7 10 10-5 4V3l5 4L7 17"/></symbol>
+    <symbol id="i-lock" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="10.5" width="14" height="10" rx="2"/><path d="M8.5 10.5V8a3.5 3.5 0 0 1 7 0v2.5"/></symbol>
+    <!-- status glyphs: shape carries the meaning, color repeats it -->
+    <symbol id="g-live" viewBox="0 0 12 12"><circle cx="6" cy="6" r="5" fill="currentColor"/></symbol>
+    <symbol id="g-muted" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.6"><circle cx="6" cy="6" r="4.6"/><path d="M2.6 9.4l6.8-6.8"/></symbol>
+    <symbol id="g-attn" viewBox="0 0 12 12"><path d="M6 .8 11.4 10.8H.6Z" fill="currentColor"/></symbol>
+    <symbol id="g-err" viewBox="0 0 12 12"><path d="M6 .5 11.5 6 6 11.5.5 6Z" fill="currentColor"/></symbol>
+    <symbol id="g-ring" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.6"><circle cx="6" cy="6" r="4.6"/></symbol>
+    <symbol id="g-pause" viewBox="0 0 12 12" fill="currentColor"><rect x="2" y="1.5" width="3" height="9" rx=".6"/><rect x="7" y="1.5" width="3" height="9" rx=".6"/></symbol>
+    <symbol id="g-work" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M6 1.2A4.8 4.8 0 1 1 1.2 6"/></symbol>
+    <!-- floor glyphs -->
+    <symbol id="f-listen" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="9" cy="9" r="6.5"/><circle cx="9" cy="9" r="2" fill="currentColor"/></symbol>
+    <symbol id="f-you" viewBox="0 0 18 18" fill="currentColor"><rect x="2" y="6" width="2.4" height="6" rx="1.2"/><rect x="6" y="2.5" width="2.4" height="13" rx="1.2"/><rect x="10" y="5" width="2.4" height="8" rx="1.2"/><rect x="14" y="7" width="2.4" height="4" rx="1.2"/></symbol>
+    <symbol id="f-voice" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M1.5 9c1.5 0 1.5-5 3-5s1.5 10 3 10 1.5-10 3-10 1.5 10 3 10 1.5-5 3-5"/></symbol>
+  </defs>
+</svg>
+
+<header class="board-head">
+  <h1>Direction A: Instrument</h1>
+  <p>sotto voice window, 420x640 frames in dark (plus one light and one 360x420 compact frame). The dial is two concentric meters: the inner ring is your mic, the outer ring is Sotto's voice, the bezel arc is Claude Code working. Shape, word and color all change together.</p>
+</header>
+
+<main class="grid">
+
+<!-- 01 Allow microphone -->
+<figure>
+  <div class="frame" data-theme="dark"><div class="win">
+    <div class="prompt-zone">Chrome's prompt appears here</div>
+    <svg class="prompt-arrow" viewBox="0 0 80 64" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M40 62C40 40 34 22 22 6"/><path d="M14 12 22 5l6 9"/></svg>
+    <div class="sheet" style="padding-top:184px">
+      <h2 class="head-row" data-tone="attn"><svg><use href="#i-mic"/></svg><span>Allow microphone access</span></h2>
+      <p>Chrome is asking at the top left of this window. Click <b style="color:var(--fg)">Allow</b> so Sotto can hear you. Voice starts once the mic is on.</p>
+      <div class="field" style="margin-top:var(--space-2);padding-left:38px"><p class="hint" style="font-size:var(--text-small);color:var(--fg-2);display:flex;gap:8px;margin:0"><svg style="width:16px;height:16px;flex:none;margin-top:1px"><use href="#i-info"/></svg>Don't see it? The prompt closes if you click elsewhere.</p></div>
+      <div class="actions">
+        <button class="btn block">Ask again</button>
+      </div>
+    </div>
+    <div class="ftr" style="justify-content:flex-end">
+      <button class="btn ghost-danger"><svg><use href="#i-stop"/></svg>End voice</button>
+    </div>
+  </div></div>
+  <figcaption><b>01 · Allow microphone (first launch)</b>Shown when <code>permissions.query</code> returns <code>prompt</code>, before <code>getUserMedia</code>. Points at Chrome's bubble. Pause is hidden; only End voice remains.</figcaption>
+</figure>
+
+<!-- 02 Connecting -->
+<figure>
+  <div class="frame" data-theme="dark"><div class="win">
+    <header class="hdr">
+      <div class="hdr-status" data-s="neutral"><svg><use href="#g-ring"/></svg>Connecting</div>
+      <div class="hdr-meta"><span class="proj">sotto</span></div>
+      <div class="hdr-usage">14 min · $0.70</div>
+      <button class="icon-btn" aria-label="Settings"><svg><use href="#i-gear"/></svg></button>
+    </header>
+    <section class="stage">
+      <div class="dial" data-mode="connect"><button class="mute" disabled aria-label="Mute"><svg><use href="#i-mic"/></svg></button></div>
+      <div class="floor" data-tone="dim"><span class="floor-word">Connecting</span><span class="floor-sub">Connecting to the voice service…</span></div>
+    </section>
+    <section class="cc" data-tone="idle"><div class="cc-head"><span class="who">Claude Code</span><span>Idle</span></div></section>
+    <div class="caps"><p class="caps-empty">What you and Sotto say will appear here.</p></div>
+    <div class="ftr">
+      <button class="btn" disabled><svg><use href="#i-pause"/></svg>Pause</button>
+      <button class="btn ghost-danger"><svg><use href="#i-stop"/></svg>End voice</button>
+    </div>
+  </div></div>
+  <figcaption><b>02 · Connecting</b>Mic is open, voice session negotiating. The bezel sweeps once per second (static arc under reduced motion). Mute and Pause are visibly unavailable, not just faded.</figcaption>
+</figure>
+
+<!-- 03 Listening (hero) -->
+<figure id="hero">
+  <div class="frame" data-theme="dark"><div class="win">
+    <header class="hdr">
+      <div class="hdr-status" data-s="live"><svg><use href="#g-live"/></svg>Live</div>
+      <div class="hdr-meta"><span class="proj">sotto</span><span class="sep"></span><span class="num">0:19</span></div>
+      <div class="hdr-usage">14 min · $0.70</div>
+      <button class="icon-btn" aria-label="Settings"><svg><use href="#i-gear"/></svg></button>
+    </header>
+    <section class="stage">
+      <div class="dial" data-mode="listen" data-in="0.06"><button class="mute" aria-pressed="false" aria-label="Mute"><svg><use href="#i-mic"/></svg></button></div>
+      <div class="floor" data-tone="live"><span class="floor-word"><svg><use href="#f-listen"/></svg>Listening</span><span class="floor-sub"><kbd>M</kbd> or <kbd>Space</kbd> to mute</span></div>
+    </section>
+    <section class="cc" data-tone="idle"><div class="cc-head"><span class="who">Claude Code</span><span>Idle</span><span class="t">last run 2 min ago</span></div></section>
+    <div class="caps">
+      <div class="cap"><span class="who">Sotto</span><p>Tests passed. Want me to ask Claude to open a PR?</p></div>
+      <div class="cap latest"><span class="who you">You</span><p>Not yet. Let's look at the mic permission flow first.</p></div>
+    </div>
+    <div class="ftr">
+      <button class="btn"><svg><use href="#i-pause"/></svg>Pause</button>
+      <button class="btn ghost-danger"><svg><use href="#i-stop"/></svg>End voice</button>
+    </div>
+  </div></div>
+  <figcaption><b>03 · Live: listening (hero)</b>Inner ring armed in green at rest length; nothing moves until sound arrives. Shortcuts shown at the default size.</figcaption>
+</figure>
+
+<!-- 04 You speaking -->
+<figure>
+  <div class="frame" data-theme="dark"><div class="win">
+    <header class="hdr">
+      <div class="hdr-status" data-s="live"><svg><use href="#g-live"/></svg>Live</div>
+      <div class="hdr-meta"><span class="proj">sotto</span><span class="sep"></span><span class="num">0:42</span></div>
+      <div class="hdr-usage">14 min · $0.70</div>
+      <button class="icon-btn" aria-label="Settings"><svg><use href="#i-gear"/></svg></button>
+    </header>
+    <section class="stage">
+      <div class="dial" data-mode="you" data-in="0.82" data-seed="3"><button class="mute" aria-pressed="false" aria-label="Mute"><svg><use href="#i-mic"/></svg></button></div>
+      <div class="floor" data-tone="live"><span class="floor-word"><svg><use href="#f-you"/></svg>You're speaking</span><span class="floor-sub"><kbd>M</kbd> or <kbd>Space</kbd> to mute</span></div>
+    </section>
+    <section class="cc" data-tone="idle"><div class="cc-head"><span class="who">Claude Code</span><span>Idle</span></div></section>
+    <div class="caps">
+      <div class="cap"><span class="who">Sotto</span><p>Tests passed. Want me to ask Claude to open a PR?</p></div>
+      <div class="cap latest live"><span class="who you">You</span><p>Ask Claude to add a permission check before we open the mic</p></div>
+    </div>
+    <div class="ftr">
+      <button class="btn"><svg><use href="#i-pause"/></svg>Pause</button>
+      <button class="btn ghost-danger"><svg><use href="#i-stop"/></svg>End voice</button>
+    </div>
+  </div></div>
+  <figcaption><b>04 · Live: you speaking</b>Inner ring: jagged, asymmetric green ticks driven by the mic analyser. Your caption streams in at the lead size with a green caret.</figcaption>
+</figure>
+
+<!-- 05 Sotto speaking -->
+<figure>
+  <div class="frame" data-theme="dark"><div class="win">
+    <header class="hdr">
+      <div class="hdr-status" data-s="live"><svg><use href="#g-live"/></svg>Live</div>
+      <div class="hdr-meta"><span class="proj">sotto</span><span class="sep"></span><span class="num">0:51</span></div>
+      <div class="hdr-usage">14 min · $0.70</div>
+      <button class="icon-btn" aria-label="Settings"><svg><use href="#i-gear"/></svg></button>
+    </header>
+    <section class="stage">
+      <div class="dial" data-mode="voice" data-out="0.78" data-in="0.04"><button class="mute" aria-pressed="false" aria-label="Mute"><svg><use href="#i-mic"/></svg></button></div>
+      <div class="floor"><span class="floor-word"><svg><use href="#f-voice"/></svg>Sotto is speaking</span><span class="floor-sub">Just talk to interrupt</span></div>
+    </section>
+    <section class="cc" data-tone="idle"><div class="cc-head"><span class="who">Claude Code</span><span>Idle</span></div></section>
+    <div class="caps">
+      <div class="cap"><span class="who you">You</span><p>Ask Claude to add a permission check before we open the mic.</p></div>
+      <div class="cap latest"><span class="who">Sotto</span><p>Sent. I asked Claude Code to query the permission state first and show an Allow screen.</p></div>
+    </div>
+    <div class="ftr">
+      <button class="btn"><svg><use href="#i-pause"/></svg>Pause</button>
+      <button class="btn ghost-danger"><svg><use href="#i-stop"/></svg>End voice</button>
+    </div>
+  </div></div>
+  <figcaption><b>05 · Live: Sotto speaking</b>Outer ring in ink, smooth and symmetric (a different shape from yours), metered from an unplayed clone of the remote stream so <code>&lt;audio&gt;</code> stays the AEC reference.</figcaption>
+</figure>
+
+<!-- 06 Muted -->
+<figure>
+  <div class="frame" data-theme="dark"><div class="win">
+    <header class="hdr">
+      <div class="hdr-status" data-s="muted"><svg><use href="#g-muted"/></svg>Muted <small>· still billing</small></div>
+      <div class="hdr-meta"><span class="sep"></span><span class="num">3:07</span></div>
+      <div class="hdr-usage">17 min · $0.85</div>
+      <button class="icon-btn" aria-label="Settings"><svg><use href="#i-gear"/></svg></button>
+    </header>
+    <section class="stage">
+      <div class="dial" data-mode="muted"><button class="mute" aria-pressed="true" aria-label="Mute"><svg><use href="#i-mic-off"/></svg></button></div>
+      <div class="floor" data-tone="muted"><span class="floor-word"><svg><use href="#g-muted"/></svg>Muted</span><span class="floor-sub"><kbd>M</kbd> or <kbd>Space</kbd> to unmute · <b style="font-weight:500;color:var(--fg)">Pause</b> stops billing</span></div>
+    </section>
+    <section class="cc" data-tone="idle"><div class="cc-head"><span class="who">Claude Code</span><span>Idle</span></div></section>
+    <div class="caps">
+      <div class="cap"><span class="who">Sotto</span><p>Sent. I asked Claude Code to query the permission state first.</p></div>
+      <div class="cap latest"><span class="who you">You</span><p>Thanks. Hold on a second.</p></div>
+    </div>
+    <div class="ftr">
+      <button class="btn"><svg><use href="#i-pause"/></svg>Pause <kbd>Space</kbd></button>
+      <button class="btn ghost-danger"><svg><use href="#i-stop"/></svg>End voice</button>
+    </div>
+  </div></div>
+  <figcaption><b>06 · Live: muted</b>Button fills violet with a slashed mic; the inner ring collapses to a dashed circle. Header repeats it and says billing continues. The button's label stays "Mute"; <code>aria-pressed</code> carries the state.</figcaption>
+</figure>
+
+<!-- 07 Claude working -->
+<figure>
+  <div class="frame" data-theme="dark"><div class="win">
+    <header class="hdr">
+      <div class="hdr-status" data-s="live"><svg><use href="#g-live"/></svg>Live</div>
+      <div class="hdr-meta"><span class="proj">sotto</span><span class="sep"></span><span class="num">4:12</span></div>
+      <div class="hdr-usage">18 min · $0.90</div>
+      <button class="icon-btn" aria-label="Settings"><svg><use href="#i-gear"/></svg></button>
+    </header>
+    <section class="stage">
+      <div class="dial" data-mode="listen" data-in="0.05" data-work="1"><button class="mute" aria-pressed="false" aria-label="Mute"><svg><use href="#i-mic"/></svg></button></div>
+      <div class="floor" data-tone="live"><span class="floor-word"><svg><use href="#f-listen"/></svg>Listening</span><span class="floor-sub"><kbd>M</kbd> or <kbd>Space</kbd> to mute</span></div>
+    </section>
+    <section class="cc" data-tone="work">
+      <div class="cc-head"><span class="who">Claude Code</span><span class="state"><svg><use href="#g-work"/></svg>Working</span><span class="t">1:42</span></div>
+      <p class="cc-step">Running tests <code>npm test -- lib.test.js</code></p>
+      <div class="cc-req"><b>Asked</b><span>"Add a permission check before we open the mic"</span></div>
+    </section>
+    <div class="caps">
+      <div class="cap latest"><span class="who">Sotto</span><p>Sent. I'll tell you when it's done.</p></div>
+    </div>
+    <div class="ftr">
+      <button class="btn"><svg><use href="#i-pause"/></svg>Pause</button>
+      <button class="btn ghost-danger"><svg><use href="#i-stop"/></svg>End voice</button>
+    </div>
+  </div></div>
+  <figcaption><b>07 · Claude working, with the current step</b>Blue bezel arc on the dial (orbits slowly only while busy) plus one card: state, elapsed time, the current step on one line, and the request it serves (chips folded in).</figcaption>
+</figure>
+
+<!-- 08 Needs approval -->
+<figure>
+  <div class="frame" data-theme="dark"><div class="win">
+    <header class="hdr">
+      <div class="hdr-status" data-s="attn"><svg><use href="#g-attn"/></svg>Approval needed</div>
+      <div class="hdr-meta"><span class="sep"></span><span class="num">5:30</span></div>
+      <div class="hdr-usage">19 min · $0.95</div>
+      <button class="icon-btn" aria-label="Settings"><svg><use href="#i-gear"/></svg></button>
+    </header>
+    <section class="stage" style="padding-top:var(--space-4)">
+      <div class="dial" data-mode="listen" data-in="0.05" style="--dial-size:168px"><button class="mute" aria-pressed="false" aria-label="Mute" style="--hit-primary:76px"><svg><use href="#i-mic"/></svg></button></div>
+      <div class="floor" data-tone="live" style="margin-top:var(--space-2)"><span class="floor-word" style="font-size:19px"><svg><use href="#f-listen"/></svg>Listening</span></div>
+    </section>
+    <section class="cc" data-tone="attn" role="alert">
+      <div class="cc-head"><span class="state"><svg><use href="#i-warn"/></svg>Claude Code needs your approval</span></div>
+      <div class="cc-cmd">Bash(rm -rf test/fixtures/tmp &amp;&amp; npm test -- --update-snapshots)</div>
+      <p class="cc-note">Approve or deny it in the terminal. <span>Sotto can't approve for you.</span></p>
+    </section>
+    <div class="caps">
+      <div class="cap latest"><span class="who">Sotto</span><p>Claude Code is waiting for your approval in the terminal to run a shell command.</p></div>
+    </div>
+    <div class="ftr">
+      <button class="btn"><svg><use href="#i-pause"/></svg>Pause</button>
+      <button class="btn ghost-danger"><svg><use href="#i-stop"/></svg>End voice</button>
+    </div>
+  </div></div>
+  <figcaption><b>08 · Claude needs approval</b>The loudest state: amber card with a 2px edge, the full command unclipped, where to act. Dial shrinks to make room. Window title becomes <code>▲ Approve in terminal · Sotto</code>.</figcaption>
+</figure>
+
+<!-- 09 Finished with summary -->
+<figure>
+  <div class="frame" data-theme="dark"><div class="win">
+    <header class="hdr">
+      <div class="hdr-status" data-s="live"><svg><use href="#g-live"/></svg>Live</div>
+      <div class="hdr-meta"><span class="proj">sotto</span><span class="sep"></span><span class="num">7:02</span></div>
+      <div class="hdr-usage">21 min · $1.05</div>
+      <button class="icon-btn" aria-label="Settings"><svg><use href="#i-gear"/></svg></button>
+    </header>
+    <section class="stage">
+      <div class="dial" data-mode="voice" data-out="0.55" data-seed="7"><button class="mute" aria-pressed="false" aria-label="Mute"><svg><use href="#i-mic"/></svg></button></div>
+      <div class="floor"><span class="floor-word"><svg><use href="#f-voice"/></svg>Sotto is speaking</span><span class="floor-sub">Just talk to interrupt</span></div>
+    </section>
+    <section class="cc" data-tone="done">
+      <div class="cc-head"><span class="who">Claude Code</span><span class="state"><svg><use href="#i-check"/></svg>Finished</span><span class="t">3m 18s</span></div>
+      <p class="cc-sum">Added a permission check in app.js: the page now queries the microphone permission before calling getUserMedia and shows an Allow screen while Chrome's prompt is open. Denied and dismissed are handled separately, and lib.test.js covers all three outcomes.</p>
+      <div class="cc-more"><div class="cc-req"><b>Asked</b><span>"Add a permission check…"</span></div><button class="btn text">More</button></div>
+    </section>
+    <div class="caps">
+      <div class="cap latest"><span class="who">Sotto</span><p>Done. The page checks the mic first now.</p></div>
+    </div>
+    <div class="ftr">
+      <button class="btn"><svg><use href="#i-pause"/></svg>Pause</button>
+      <button class="btn ghost-danger"><svg><use href="#i-stop"/></svg>End voice</button>
+    </div>
+  </div></div>
+  <figcaption><b>09 · Claude finished, with summary</b>Clean 3-line clamp (no half-cut line) and a real "More" target. Captions give up their history first.</figcaption>
+</figure>
+
+<!-- 10 Paused after idle -->
+<figure>
+  <div class="frame" data-theme="dark"><div class="win">
+    <header class="hdr">
+      <div class="hdr-status" data-s="neutral"><svg><use href="#g-pause"/></svg>Paused</div>
+      <div class="hdr-meta"><span class="proj">sotto</span></div>
+      <div class="hdr-usage">21 min · $1.05</div>
+      <button class="icon-btn" aria-label="Settings"><svg><use href="#i-gear"/></svg></button>
+    </header>
+    <div class="sheet">
+      <h2 class="head-row" data-tone=""><svg><use href="#i-pause"/></svg><span>Paused after 5 minutes of silence</span></h2>
+      <p>Resume to keep talking with Claude Code. Nothing is billed while paused.</p>
+      <div class="pending">
+        <div class="cc-head"><span class="state" style="color:var(--fg)"><svg><use href="#i-check"/></svg>Claude finished while you were away</span></div>
+        <p>Added a permission check in app.js: the page now queries the microphone permission before calling getUserMedia and shows an Allow screen while Chrome's prompt is open.</p>
+      </div>
+      <div class="actions">
+        <button class="btn primary block"><svg><use href="#i-play"/></svg>Resume <kbd>Space</kbd></button>
+      </div>
+    </div>
+    <div class="ftr" style="justify-content:flex-end">
+      <button class="btn ghost-danger"><svg><use href="#i-stop"/></svg>End voice</button>
+    </div>
+  </div></div>
+  <figcaption><b>10 · Paused after idle, with a result waiting</b>Kept from today's design, rebuilt: one primary action with its key, the result that landed meanwhile, End voice far from Resume.</figcaption>
+</figure>
+
+<!-- 11 Error: mic blocked in macOS -->
+<figure>
+  <div class="frame" data-theme="dark"><div class="win">
+    <header class="hdr">
+      <div class="hdr-status" data-s="err"><svg><use href="#g-err"/></svg>Mic blocked</div>
+      <div class="hdr-meta"><span class="proj">sotto</span></div>
+      <div class="hdr-usage">21 min · $1.05</div>
+      <button class="icon-btn" aria-label="Settings"><svg><use href="#i-gear"/></svg></button>
+    </header>
+    <div class="sheet">
+      <h2 class="head-row" data-tone="err"><svg><use href="#i-lock"/></svg><span>macOS is blocking the microphone</span></h2>
+      <p>Chrome allows it, but your Mac doesn't. Voice is paused and not billing.</p>
+      <ol class="steps">
+        <li><span>Open <span class="path">System Settings → Privacy &amp; Security → Microphone</span></span></li>
+        <li><span>Turn on <span class="path">Google Chrome</span></span></li>
+        <li><span>Quit and reopen Chrome when macOS asks</span></li>
+      </ol>
+      <div class="actions">
+        <button class="btn primary block">Try again <kbd>Space</kbd></button>
+      </div>
+    </div>
+    <div class="ftr" style="justify-content:flex-end">
+      <button class="btn ghost-danger"><svg><use href="#i-stop"/></svg>End voice</button>
+    </div>
+  </div></div>
+  <figcaption><b>11 · Error: mic blocked in macOS</b>Each mic failure gets its own title and steps (Chrome site settings, macOS, not found, busy). One action. Red is reserved for errors and End voice.</figcaption>
+</figure>
+
+<!-- 12 Reconnecting + banner -->
+<figure>
+  <div class="frame" data-theme="dark"><div class="win">
+    <header class="hdr">
+      <div class="hdr-status" data-s="neutral"><svg><use href="#g-ring"/></svg>Reconnecting</div>
+      <div class="hdr-meta"><span class="sep"></span><span class="num">9:48</span></div>
+      <div class="hdr-usage">23 min · $1.15</div>
+      <button class="icon-btn" aria-label="Settings"><svg><use href="#i-gear"/></svg></button>
+    </header>
+    <div class="banner" data-tone="warn" role="status">
+      <svg class="ico"><use href="#i-warn"/></svg>
+      <p>The voice connection was lost. Reconnecting now.</p>
+      <button class="icon-btn" aria-label="Dismiss"><svg style="width:16px;height:16px"><use href="#i-close"/></svg></button>
+    </div>
+    <section class="stage" style="padding-top:var(--space-4)">
+      <div class="dial" data-mode="connect" data-muted="1"><button class="mute" aria-pressed="true" aria-label="Mute"><svg><use href="#i-mic-off"/></svg></button></div>
+      <div class="floor" data-tone="dim"><span class="floor-word">Reconnecting…</span><span class="floor-sub">Mute stays on after reconnecting</span></div>
+    </section>
+    <section class="cc" data-tone="work">
+      <div class="cc-head"><span class="who">Claude Code</span><span class="state"><svg><use href="#g-work"/></svg>Working</span><span class="t">0:24</span></div>
+      <p class="cc-step">Editing <code>web/app.js</code></p>
+    </section>
+    <div class="caps"><div class="cap latest"><span class="who you">You</span><p>Thanks. Hold on a second.</p></div></div>
+    <div class="ftr">
+      <button class="btn" disabled><svg><use href="#i-pause"/></svg>Pause</button>
+      <button class="btn ghost-danger"><svg><use href="#i-stop"/></svg>End voice</button>
+    </div>
+  </div></div>
+  <figcaption><b>12 · Reconnecting, with a notice banner</b>One banner at a time, plain words, one action (a 44px dismiss). Mute survives the reconnect; Claude Code keeps working underneath.</figcaption>
+</figure>
+
+<!-- 13 Settings drawer -->
+<figure>
+  <div class="frame" data-theme="dark"><div class="win">
+    <header class="hdr">
+      <div class="hdr-status" data-s="live"><svg><use href="#g-live"/></svg>Live</div>
+      <div class="hdr-meta"><span class="proj">sotto</span><span class="sep"></span><span class="num">0:19</span></div>
+      <div class="hdr-usage">14 min · $0.70</div>
+      <button class="icon-btn" aria-label="Settings" aria-expanded="true"><svg><use href="#i-gear"/></svg></button>
+    </header>
+    <section class="stage">
+      <div class="dial" data-mode="listen" data-in="0.06"><button class="mute" aria-label="Mute"><svg><use href="#i-mic"/></svg></button></div>
+      <div class="floor" data-tone="live"><span class="floor-word"><svg><use href="#f-listen"/></svg>Listening</span></div>
+    </section>
+    <div class="scrim"></div>
+    <div class="drawer" role="dialog" aria-label="Settings">
+      <div class="drawer-head"><h3>Settings</h3><button class="icon-btn" aria-label="Close settings"><svg><use href="#i-close"/></svg></button></div>
+      <div class="field">
+        <div class="lbl">Speaking policy</div>
+        <div class="seg" role="radiogroup" aria-label="Speaking policy">
+          <button role="radio" aria-checked="false">Quiet</button>
+          <button role="radio" aria-checked="true">Milestones</button>
+          <button role="radio" aria-checked="false">Walkthrough</button>
+        </div>
+        <p class="seg-desc">Mentions notable events: finished work, approvals, errors.</p>
+      </div>
+      <div class="field">
+        <div class="lbl">Microphone</div>
+        <div class="select"><select class="focus-demo"><option>MacBook Pro Microphone</option></select><svg><use href="#i-chev"/></svg></div>
+        <p class="hint"><svg><use href="#i-bt"/></svg>Using the built-in mic so your headphones keep high-quality audio.</p>
+      </div>
+      <div class="field">
+        <div class="lbl">Speaker</div>
+        <div class="select"><select><option>AirPods Pro</option></select><svg><use href="#i-chev"/></svg></div>
+      </div>
+      <div class="drawer-foot"><span><kbd>Esc</kbd> to close</span><span>Changes apply right away</span></div>
+    </div>
+  </div></div>
+  <figcaption><b>13 · Settings drawer (device pickers)</b>Behind the gear. 40px segments inside a 48px well, 44px selects, full-contrast text, the Bluetooth hint kept. Focus ring shown on the mic select. Dial stays visible above.</figcaption>
+</figure>
+
+<!-- 14 Light -->
+<figure>
+  <div class="frame" data-theme="light"><div class="win">
+    <header class="hdr">
+      <div class="hdr-status" data-s="live"><svg><use href="#g-live"/></svg>Live</div>
+      <div class="hdr-meta"><span class="proj">sotto</span><span class="sep"></span><span class="num">4:12</span></div>
+      <div class="hdr-usage">18 min · $0.90</div>
+      <button class="icon-btn" aria-label="Settings"><svg><use href="#i-gear"/></svg></button>
+    </header>
+    <section class="stage">
+      <div class="dial" data-mode="you" data-in="0.7" data-seed="11" data-work="1"><button class="mute" aria-pressed="false" aria-label="Mute"><svg><use href="#i-mic"/></svg></button></div>
+      <div class="floor" data-tone="live"><span class="floor-word"><svg><use href="#f-you"/></svg>You're speaking</span><span class="floor-sub"><kbd>M</kbd> or <kbd>Space</kbd> to mute</span></div>
+    </section>
+    <section class="cc" data-tone="work">
+      <div class="cc-head"><span class="who">Claude Code</span><span class="state"><svg><use href="#g-work"/></svg>Working</span><span class="t">1:42</span></div>
+      <p class="cc-step">Running tests <code>npm test -- lib.test.js</code></p>
+      <div class="cc-req"><b>Asked</b><span>"Add a permission check before we open the mic"</span></div>
+    </section>
+    <div class="caps">
+      <div class="cap"><span class="who">Sotto</span><p>Sent. I'll tell you when it's done.</p></div>
+      <div class="cap latest live"><span class="who you">You</span><p>And have it cover the dismissed case too</p></div>
+    </div>
+    <div class="ftr">
+      <button class="btn"><svg><use href="#i-pause"/></svg>Pause</button>
+      <button class="btn ghost-danger"><svg><use href="#i-stop"/></svg>End voice</button>
+    </div>
+  </div></div>
+  <figcaption><b>14 · Light theme (you speaking while Claude works)</b>Cool graphite on #F5F6F8, no beige. Same meanings, darker signal values; every text token clears 4.5:1, the mute edge and control edges clear 3:1.</figcaption>
+</figure>
+
+<!-- 15 Compact -->
+<figure>
+  <div class="frame compact" data-theme="dark"><div class="win">
+    <header class="hdr">
+      <div class="hdr-status" data-s="live"><svg><use href="#g-live"/></svg>Live</div>
+      <div class="hdr-meta"><span class="proj">sotto</span><span class="sep"></span><span class="num">4:12</span></div>
+      <div class="hdr-usage">18 min · $0.90</div>
+      <button class="icon-btn" aria-label="Settings"><svg><use href="#i-gear"/></svg></button>
+    </header>
+    <section class="stage">
+      <div class="dial" data-mode="voice" data-out="0.7" data-work="1"><button class="mute" aria-label="Mute"><svg><use href="#i-mic"/></svg></button></div>
+      <div class="floor"><span class="floor-word" style="font-size:19px"><svg><use href="#f-voice"/></svg>Sotto</span><span class="floor-sub">is speaking</span><span class="floor-sub" style="margin-top:6px"><kbd>M</kbd> mute</span></div>
+    </section>
+    <section class="cc" data-tone="work">
+      <div class="cc-head"><span class="state"><svg><use href="#g-work"/></svg>Working</span><span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">Running tests</span><span class="t">1:42</span></div>
+    </section>
+    <div class="caps"><div class="cap latest"><span class="who">Sotto</span><p>Sent. I'll tell you when it's done.</p></div></div>
+    <div class="ftr" style="margin-top:var(--space-2);padding-block:var(--space-2)">
+      <button class="btn"><svg><use href="#i-pause"/></svg>Pause</button>
+      <button class="btn ghost-danger"><svg><use href="#i-stop"/></svg>End voice</button>
+    </div>
+  </div></div>
+  <figcaption><b>15 · Compact 360x420</b>Priority collapse: settings already behind the gear, caption history gone, request chip gone, card down to one line. Dial and mute never leave; the page never scrolls.</figcaption>
+</figure>
+
+</main>
+
+<script>if (location.hash === "#hero") document.body.classList.add("hero-only");</script>
+<script>
+/* Mockup-only renderer for the dial. In the product, the same geometry is drawn
+   once and tick lengths are set per animation frame from smoothed analyser levels. */
+(function () {
+  const NS = "http://www.w3.org/2000/svg";
+  const N = 48;
+  function rnd(seed) { let s = seed * 9301 + 49297; return () => ((s = (s * 9301 + 49297) % 233280) / 233280); }
+  function line(g, cx, r0, r1, a, cls, color, w) {
+    const l = document.createElementNS(NS, "line");
+    const c = Math.cos(a), s = Math.sin(a);
+    l.setAttribute("x1", cx + c * r0); l.setAttribute("y1", cx + s * r0);
+    l.setAttribute("x2", cx + c * r1); l.setAttribute("y2", cx + s * r1);
+    l.setAttribute("stroke", color); l.setAttribute("stroke-width", w); l.setAttribute("stroke-linecap", "round");
+    g.appendChild(l);
+  }
+  function arc(cx, r, a0, a1) {
+    const p = (a) => [cx + Math.cos(a) * r, cx + Math.sin(a) * r];
+    const [x0, y0] = p(a0), [x1, y1] = p(a1);
+    return `M${x0} ${y0} A${r} ${r} 0 ${a1 - a0 > Math.PI ? 1 : 0} 1 ${x1} ${y1}`;
+  }
+  document.querySelectorAll(".dial").forEach((d) => {
+    const size = d.getBoundingClientRect().width || 208;
+    const k = size / 208;
+    const cx = size / 2;
+    const mode = d.dataset.mode;
+    const lin = parseFloat(d.dataset.in || "0");
+    const lout = parseFloat(d.dataset.out || "0");
+    const R = rnd(parseInt(d.dataset.seed || "5", 10));
+    const svg = document.createElementNS(NS, "svg");
+    svg.setAttribute("class", "meter"); svg.setAttribute("viewBox", `0 0 ${size} ${size}`);
+    svg.setAttribute("aria-hidden", "true");
+    const g = document.createElementNS(NS, "g"); svg.appendChild(g);
+
+    // Bezel: hairline circle + 12 calibration marks
+    const bez = document.createElementNS(NS, "circle");
+    bez.setAttribute("cx", cx); bez.setAttribute("cy", cx); bez.setAttribute("r", cx - 2 * k);
+    bez.setAttribute("fill", "none"); bez.setAttribute("stroke", "var(--line)"); bez.setAttribute("stroke-width", 1);
+    g.appendChild(bez);
+    for (let i = 0; i < 12; i++) line(g, cx, cx - 6 * k, cx - 2 * k, (i / 12) * Math.PI * 2 - Math.PI / 2, "", "var(--edge)", 1);
+
+    const rIn0 = 58 * k, inMax = 20 * k, rOut0 = 82 * k, outMax = 14 * k;
+    const tickW = Math.max(1.6, 2.2 * k);
+    for (let i = 0; i < N; i++) {
+      const a = (i / N) * Math.PI * 2 - Math.PI / 2;
+      // Outer ring: Sotto's voice. Smooth, symmetric lobes.
+      let lo = 3 * k, colOut = "var(--tick-rest)";
+      if (mode === "voice" && lout > 0) {
+        const lobe = 0.5 + 0.5 * Math.cos(a * 4 + 0.6);
+        lo = 3 * k + outMax * lout * (0.25 + 0.75 * lobe);
+        colOut = "var(--voice)";
+      }
+      line(g, cx, rOut0, rOut0 + lo, a, "", colOut, tickW);
+      // Inner ring: your mic. Jagged, asymmetric.
+      if (mode === "muted" || d.dataset.muted) continue;
+      let li = 3.5 * k, colIn = "var(--tick-rest)";
+      if (mode === "listen" || mode === "voice") { colIn = mode === "listen" ? "var(--live)" : "var(--tick-rest)"; li = 3.5 * k + inMax * lin * R(); }
+      if (mode === "you") { colIn = "var(--live)"; li = 3.5 * k + inMax * lin * (0.15 + 0.85 * Math.pow(R(), 1.3)); }
+      line(g, cx, rIn0, rIn0 + li, a, "", colIn, tickW);
+    }
+    if (mode === "muted" || d.dataset.muted) {
+      const c = document.createElementNS(NS, "circle");
+      c.setAttribute("cx", cx); c.setAttribute("cy", cx); c.setAttribute("r", rIn0 + 3 * k);
+      c.setAttribute("fill", "none"); c.setAttribute("stroke", "var(--mute)"); c.setAttribute("stroke-width", 2);
+      c.setAttribute("stroke-dasharray", "3 5"); c.setAttribute("stroke-linecap", "round");
+      g.appendChild(c);
+    }
+    if (mode === "connect") {
+      const p = document.createElementNS(NS, "path");
+      p.setAttribute("d", arc(cx, cx - 2 * k, -Math.PI / 2, -Math.PI / 2 + 1.1));
+      p.setAttribute("fill", "none"); p.setAttribute("stroke", "var(--fg-2)"); p.setAttribute("stroke-width", 2.5); p.setAttribute("stroke-linecap", "round");
+      g.appendChild(p);
+    }
+    if (d.dataset.work) {
+      const p = document.createElementNS(NS, "path");
+      p.setAttribute("d", arc(cx, cx - 2 * k, 0.35, 0.35 + 1.25));
+      p.setAttribute("fill", "none"); p.setAttribute("stroke", "var(--work)"); p.setAttribute("stroke-width", 3); p.setAttribute("stroke-linecap", "round");
+      g.appendChild(p);
+    }
+    d.prepend(svg);
+  });
+})();
+</script>
+</body>
+</html>

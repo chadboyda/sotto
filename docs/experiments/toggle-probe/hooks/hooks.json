@@ -1,0 +1,4 @@
+{"hooks":{
+ "UserPromptSubmit":[{"hooks":[{"type":"command","command":"${CLAUDE_PLUGIN_ROOT}/scripts/log.sh submit"}]}],
+ "UserPromptExpansion":[{"matcher":"^probe:(talk|vc)$","hooks":[{"type":"command","command":"${CLAUDE_PLUGIN_ROOT}/scripts/log.sh expansion"}]}]
+}}

@@ -1,0 +1,15 @@
+{
+  "name": "sotto",
+  "description": "Marketplace for Sotto, full-duplex voice for Claude Code (this repo).",
+  "owner": {
+    "name": "Chad Boyda",
+    "url": "https://github.com/chadboyda"
+  },
+  "plugins": [
+    {
+      "name": "sotto",
+      "source": "./",
+      "description": "Full-duplex voice conversation with your running Claude Code session (OpenAI gpt-live-1)."
+    }
+  ]
+}

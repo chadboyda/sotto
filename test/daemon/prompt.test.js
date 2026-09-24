@@ -1,0 +1,115 @@
+import { test } from "node:test";
+import assert from "node:assert/strict";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { render, renderForPolicy, buildSeed, greeting, policyChangeInstruction, ownerSwitchInstruction, POLICY_TEXT } from "../../daemon/prompt.js";
+import { parseTranscript, readTranscriptTail, gitBranch } from "../../daemon/claude-context.js";
+
+const HEADINGS = ["Backchannel policy:", "Interruption policy:", "Delegation policy:", "Backend tools:", "Delegate to the backend when:", "Do not delegate to the backend when:"];
+
+test("instructions: six verbatim headings in order, closing lines, no placeholders", () => {
+  for (const policy of ["quiet", "milestones", "walkthrough"]) {
+    const t = renderForPolicy("sotto", policy);
+    let pos = -1;
+    for (const h of HEADINGS) {
+      const i = t.indexOf(h, pos + 1);
+      assert.ok(i > pos, `${h} missing or out of order`);
+      pos = i;
+    }
+    assert.ok(t.endsWith("Delegate before giving an answer that depends on backend work.\nDo not guess the result while waiting."));
+    assert.ok(!t.includes("{{"));
+    assert.ok(t.length <= 40000);
+    assert.ok(t.includes(POLICY_TEXT[policy]));
+    assert.ok(t.includes('project "sotto"'));
+  }
+});
+
+test("render sanitizes quotes in the project name", () => {
+  const t = render({ project: 'we"ird\nname', policyText: "X" });
+  assert.ok(t.includes('project "we ird name"'));
+});
+
+test("greetings and runtime instructions", () => {
+  assert.equal(greeting("start", "quiet", "p"), 'Say only "Ready." Then stop and listen.');
+  assert.match(greeting("start", "milestones", "proj"), /connected to Claude Code in proj/);
+  assert.match(greeting("resume", "walkthrough", "p"), /^Say "I'm back\."/);
+  assert.equal(greeting("reconnect", "milestones", "p"), null);
+  assert.equal(policyChangeInstruction("quiet"), `The update preference has changed. ${POLICY_TEXT.quiet} Apply it from now on without announcing it.`);
+  assert.match(ownerSwitchInstruction("other"), /in the project other\..*connected to other\./);
+});
+
+test("seed: header, exchanges, voice history only on resume, pending result", () => {
+  const s = buildSeed({
+    project: "proj", cwd: "/a/b/folder", branch: "main", reason: "start",
+    exchanges: [{ role: "user", text: "hi" }, { role: "assistant", text: "hello" }],
+    voiceHistory: [{ role: "user", text: "voice line" }],
+    pendingResult: "It passed.",
+  });
+  assert.ok(s.startsWith("[Background reference; not user speech]\nProject: proj   Folder: folder   Git branch: main\nVoice session: start."));
+  assert.ok(s.includes("User: hi\nClaude Code: hello"));
+  assert.ok(!s.includes("Earlier voice conversation"));
+  assert.ok(s.endsWith("Result that arrived while voice was paused: It passed."));
+
+  const r = buildSeed({ project: "p", cwd: "/x", branch: null, reason: "resume", voiceHistory: [{ role: "assistant", text: "a" }, { role: "user", text: "b" }] });
+  assert.ok(r.includes("Git branch: unknown"));
+  assert.ok(r.includes("Voice session: resumed after a pause."));
+  assert.ok(r.includes("Earlier voice conversation (oldest first):\nYou said: a\nThe user said: b"));
+});
+
+test("seed stays within 24,000 chars and drops the oldest material first", () => {
+  const exchanges = Array.from({ length: 8 }, (_, i) => ({ role: i % 2 ? "assistant" : "user", text: `EX${i} ` + "x".repeat(590) }));
+  const voiceHistory = Array.from({ length: 30 }, (_, i) => ({ role: "user", text: `V${i} ` + "y".repeat(590) }));
+  const full = buildSeed({ project: "p", cwd: "/p", branch: "b", reason: "reconnect", exchanges, voiceHistory });
+  assert.ok(full.length <= 24000);
+  const small = buildSeed({ project: "p", cwd: "/p", branch: "b", reason: "reconnect", exchanges, voiceHistory, maxChars: 12000 });
+  assert.ok(small.length <= 12000);
+  assert.ok(!small.includes("EX0 "), "oldest exchange dropped");
+  assert.ok(small.includes("V29 "), "newest voice line kept");
+  const tiny = buildSeed({ project: "p", cwd: "/p", branch: "b", reason: "reconnect", exchanges, voiceHistory, maxChars: 8000 });
+  assert.ok(!tiny.includes("EX7 "), "all exchanges dropped before voice lines");
+  assert.ok(tiny.includes("V29 "));
+  assert.ok(!tiny.includes("V0 "));
+});
+
+const FIXTURE = [
+  { type: "summary", summary: "x" },
+  { type: "user", message: { role: "user", content: "What branch am I on?" } },
+  { type: "assistant", message: { role: "assistant", content: [{ type: "text", text: "Let me check." }, { type: "tool_use", id: "t", name: "Bash", input: {} }] } },
+  { type: "user", message: { role: "user", content: [{ type: "tool_result", tool_use_id: "t", content: "main" }] } },
+  { type: "user", isMeta: true, message: { role: "user", content: "meta stuff" } },
+  { type: "user", message: { role: "user", content: "/talk on" } },
+  { type: "user", message: { role: "user", content: "<command-name>/clear</command-name>" } },
+  { type: "assistant", message: { role: "assistant", content: [{ type: "text", text: "You are on **main** in `src/app/index.ts`." }] } },
+].map((o) => JSON.stringify(o)).join("\n") + "\n{not json\n";
+
+test("transcript-tail parser keeps text, skips tool/meta/commands", () => {
+  const out = parseTranscript(FIXTURE);
+  assert.deepEqual(out, [
+    { role: "user", text: "What branch am I on?" },
+    { role: "assistant", text: "You are on main in index.ts." },
+  ]);
+});
+
+test("readTranscriptTail reads only the tail and never throws", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "clv-tt-"));
+  const f = path.join(dir, "t.jsonl");
+  const filler = Array.from({ length: 3000 }, (_, i) => JSON.stringify({ type: "user", message: { role: "user", content: `old ${i} ` + "z".repeat(100) } })).join("\n");
+  fs.writeFileSync(f, filler + "\n" + FIXTURE);
+  const out = readTranscriptTail(f);
+  assert.ok(out.length <= 8);
+  assert.deepEqual(out.slice(-2), [
+    { role: "user", text: "What branch am I on?" },
+    { role: "assistant", text: "You are on main in index.ts." },
+  ]);
+  assert.deepEqual(readTranscriptTail(path.join(dir, "missing.jsonl")), []);
+  assert.deepEqual(readTranscriptTail(null), []);
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test("gitBranch uses execFile and handles errors", async () => {
+  const ok = (cmd, args, opts, cb) => { assert.equal(cmd, "git"); assert.deepEqual(args.slice(0, 2), ["-C", "/repo"]); assert.equal(opts.timeout, 800); cb(null, "feat/x\n"); };
+  assert.equal(await gitBranch("/repo", { execFile: ok }), "feat/x");
+  assert.equal(await gitBranch("/repo", { execFile: (c, a, o, cb) => cb(new Error("no")) }), null);
+  assert.equal(await gitBranch(null), null);
+});

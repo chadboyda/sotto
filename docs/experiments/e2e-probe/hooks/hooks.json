@@ -1,0 +1,6 @@
+{"hooks":{
+ "SessionStart":[{"hooks":[{"type":"command","command":"${CLAUDE_PLUGIN_ROOT}/scripts/log.py SessionStart"}]}],
+ "UserPromptSubmit":[{"hooks":[{"type":"command","command":"${CLAUDE_PLUGIN_ROOT}/scripts/log.py UserPromptSubmit"}]}],
+ "MessageDisplay":[{"hooks":[{"type":"command","command":"${CLAUDE_PLUGIN_ROOT}/scripts/log.py MessageDisplay","timeout":3}]}],
+ "Stop":[{"hooks":[{"type":"command","command":"${CLAUDE_PLUGIN_ROOT}/scripts/log.py Stop"}]}]
+}}

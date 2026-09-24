@@ -1,0 +1,19 @@
+{
+  "name": "sotto",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": { "node": ">=22.6" },
+  "scripts": {
+    "start": "node daemon/index.js --port 47821 --data-dir \"${CLAUDE_PLUGIN_DATA:-$HOME/.sotto}\" --plugin-root .",
+    "test": "node --test \"test/**/*.test.js\"",
+    "test:e2e": "node test/e2e/smoke.mjs",
+    "e2e": "node test/e2e/smoke.mjs && node test/e2e/wake.mjs",
+    "e2e:wake": "node test/e2e/wake.mjs",
+    "test:app": "node --test test/app/*.test.mjs",
+    "build:app": "bash scripts/build-app.sh",
+    "e2e:fixture": "node test/e2e/make-fixture.mjs",
+    "validate": "claude plugin validate . --strict",
+    "hooks:install": "git config core.hooksPath .githooks"
+  }
+}
