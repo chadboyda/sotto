@@ -267,7 +267,7 @@ test("instructions: vocabulary sits before the policy text; template contract in
   assert.ok(odd.includes("- a{{project}}b $& $1 {{policy_text}}\n\nP"));
   // A full-size glossary keeps the instructions far below the 16,384-token limit.
   const big = renderVocabulary(Array.from({ length: 3000 }, (_, i) => term(`skill${i}name`, TIER.skill)));
-  assert.ok(estTokens(renderForPolicy("p", "milestones", big)) < 4000);
+  assert.ok(estTokens(renderForPolicy("p", "milestones", big)) < 5000); // API limit: 16,384
 });
 
 test("vocabularyUpdateInstruction", () => {

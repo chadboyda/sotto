@@ -297,7 +297,7 @@ test("mirror turn: 'Noted.' stays silent, an answer is spoken", async (t) => {
   h.voice.handleHook("UserPromptSubmit", { prompt: `[sotto voice ${nonce}] ${MIRROR_TAG} why did that get cut off, seems like a bug`, prompt_id: "pm2" }, OWNER);
   h.voice.handleHook("Stop", { prompt_id: "pm2", last_assistant_message: "Found it: the request window started too late. I fixed it and added a test." }, OWNER);
   await h.clock.advance(5000);
-  assert.ok(ws.sent.some((e) => e.type === "session.commentary.append" && /^Claude Code, on what you just said: Found it/.test(e.content)));
+  assert.ok(ws.sent.some((e) => e.type === "session.commentary.append" && /^Claude's response to what the user just said[\s\S]*\nClaude said: Found it: the request window/.test(e.content)));
 });
 
 // ---- routing -----------------------------------------------------------------------------
@@ -309,7 +309,7 @@ test("mirror_result: 'Noted.' is silent; a real answer is spoken briefly under e
     assert.deepEqual(a.map((x) => x.kind), ["thinking"]);
     const b = route("mirror_result", p, { text: "I recorded Sotto as the project name. I will use it in the new repo." });
     assert.equal(b[0].kind, "commentary");
-    assert.match(b[0].content, /^Claude Code, on what you just said: I recorded Sotto as the project name/);
+    assert.match(b[0].content, /^Claude's response to what the user just said to you\. [\s\S]*\nClaude said: I recorded Sotto as the project name/);
   }
 });
 

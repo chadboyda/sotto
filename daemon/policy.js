@@ -7,8 +7,10 @@
 import { BG } from "./config.js";
 import { speakable, summary, tokenChunks, fitTokens, firstSentences, clip, sentences } from "./speech.js";
 import { policyChangeInstruction } from "./prompt.js";
+import { relay, relayMaterial, say, Rotation } from "./phrasing.js";
 
-const ANSWER = "Claude Code's answer: ";
+/** Silent-context prefix for Claude's reply (never spoken as is). */
+const REPLY = "Claude's reply: ";
 /** A bare acknowledgement ("Noted.", "Got it."): nothing to say to the user. */
 export function isAck(text) {
   const t = String(text || "").trim();
@@ -36,16 +38,21 @@ function completionSentence(items, p) {
   }
   return `Finished: ${oxford(items.map((it) => it.what), "and")}.`;
 }
-const FULL = "Claude Code's full reply (abridged): ";
+const FULL = "Claude's full reply, for follow-up questions (abridged): ";
 
 // Every append is clipped to the (estimated) token budget, not a char count.
 const act = (kind, delegationId, content) => ({ kind, delegationId: delegationId ?? null, content: fitTokens(content) });
 
-/** S and R for a final assistant message (§6.10). */
+/**
+ * S and R for a final assistant message (§6.10). `sum` is the material to
+ * relay (phrasing.relayMaterial: speakable, no labels, tag lines or repeats);
+ * S is its silent-context form; R is the full reply as silent context, for
+ * follow-up questions.
+ */
 export function resultParts(text) {
-  const sum = summary(text, 900);
+  const sum = relayMaterial(text, 900);
   const full = speakable(text);
-  const S = sum ? ANSWER + sum : "Claude Code finished, with nothing to report.";
+  const S = sum ? REPLY + sum : "Claude finished, with nothing to report.";
   const R = full.length > sum.length ? tokenChunks(BG + FULL + full).slice(0, 2) : [];
   // The part of the reply after the summary, for walkthrough narration.
   const rest = full.length > sum.length && full.startsWith(sum) ? full.slice(sum.length).trim() : (full.length > sum.length ? sentences(full).slice(sentences(sum).length).join(" ") : "");
@@ -61,13 +68,13 @@ export function route(source, policy, payload = {}, ctx = {}) {
   const p = ["quiet", "milestones", "walkthrough"].includes(policy) ? policy : "milestones";
   switch (source) {
     case "voice_result": {
-      const { S, R, rest } = resultParts(payload.text);
+      const { sum, R, rest } = resultParts(payload.text);
       // `earlier`: the request was made in a previous Live session, whose
       // delegation id the current session does not know. Speak it with a null
       // id and say which request it answers.
-      const lead = payload.earlier ? `Result for your earlier request "${clip(payload.requestText || "", 160).replace(/"/g, "'")}": ` : "";
       const id = payload.earlier ? null : payload.delegationId;
-      const out = [act("commentary", id, lead + S)];
+      const said = sum || "Claude finished, with nothing to report.";
+      const out = [act("commentary", id, payload.earlier ? relay("earlier", said, { requestText: payload.requestText }) : relay("answer", said))];
       if (p === "walkthrough" && rest) for (const c of tokenChunks(rest).slice(0, 2)) out.push(act("commentary", id, c));
       for (const r of R) out.push(act("thinking", null, r));
       return out;
@@ -82,14 +89,14 @@ export function route(source, policy, payload = {}, ctx = {}) {
       const { sum, S, R } = resultParts(payload.text);
       if (p === "quiet") return [act("thinking", null, BG + S)];
       const said = p === "milestones" ? clip(firstSentences(sum, 1), SHORT_SUMMARY_CHARS) : sum;
-      return [act("commentary", null, said ? `Claude Code finished: ${said}` : "Claude Code finished."), ...R.map((r) => act("thinking", null, r))];
+      return [act("commentary", null, relay("typed", said || "Done.")), ...R.map((r) => act("thinking", null, r))];
     }
     case "other_result": {
       // A turn nobody asked for as far as we know (no UserPromptSubmit seen, or
       // a system-originated prompt): context only, except in walkthrough.
       const { sum, S, R } = resultParts(payload.text);
       if (p !== "walkthrough" || !sum) return [act("thinking", null, BG + S)];
-      return [act("commentary", null, `Claude Code finished: ${clip(firstSentences(sum, 1), SHORT_SUMMARY_CHARS)}`), ...R.map((r) => act("thinking", null, r))];
+      return [act("commentary", null, relay("other", clip(firstSentences(sum, 1), SHORT_SUMMARY_CHARS))), ...R.map((r) => act("thinking", null, r))];
     }
     case "mirror_result": {
       // A turn started by a mirror (§6.18): the user's words, said to the
@@ -100,29 +107,28 @@ export function route(source, policy, payload = {}, ctx = {}) {
       const { sum, S, R } = resultParts(payload.text);
       if (!sum || isAck(sum)) return [act("thinking", null, `${BG}Claude Code has seen what the user just told you and had nothing to add.`)];
       const said = p === "walkthrough" ? sum : clip(firstSentences(sum, 2), 300);
-      return [act("commentary", null, `Claude Code, on what you just said: ${said}`), ...R.map((r) => act("thinking", null, r))];
+      return [act("commentary", null, relay("mirror", said)), ...R.map((r) => act("thinking", null, r))];
     }
     case "background_voice": {
       // A background task launched while answering a voice request finished:
       // the follow-up answer to that request. Spoken under every policy.
       const { sum, S, R } = resultParts(payload.text);
-      const lead = payload.requestText ? `Update on your earlier request "${clip(payload.requestText, 120).replace(/"/g, "'")}": ` : "Update on your earlier request: ";
       const said = p === "walkthrough" ? sum : firstSentences(sum, 2);
-      return [act("commentary", null, lead + (said || "the background work finished.")), ...R.map((r) => act("thinking", null, r))];
+      return [act("commentary", null, relay("background", said || "It finished, with nothing to report.", { requestText: payload.requestText })), ...R.map((r) => act("thinking", null, r))];
     }
     case "background_result": {
       // Background work launched in a typed turn (the user kicked it off).
       const { sum, S, R } = resultParts(payload.text);
       if (p === "quiet" || !sum) return [act("thinking", null, BG + "Background work finished. " + S)];
       const said = p === "milestones" ? clip(firstSentences(sum, 1), SHORT_SUMMARY_CHARS) : firstSentences(sum, 2);
-      return [act("commentary", null, `Background work finished: ${said}`), ...R.map((r) => act("thinking", null, r))];
+      return [act("commentary", null, relay("bgwork", said)), ...R.map((r) => act("thinking", null, r))];
     }
     case "progress_text": {
       const t = speakable(payload.text);
       if (!t) return [];
-      if (p === "walkthrough" && ctx.canSpeakProgress) return [act("commentary", null, clip(t, 400))];
+      if (p === "walkthrough" && ctx.canSpeakProgress) return [act("commentary", null, relay("progress", clip(t, 400)))];
       // Milestones: a long-running turn gets a spoken progress note at most every 30 s.
-      if (p === "milestones" && ctx.canSpeakLongProgress) return [act("commentary", null, `Still working: ${clip(firstSentences(t, 1), SHORT_SUMMARY_CHARS)}`)];
+      if (p === "milestones" && ctx.canSpeakLongProgress) return [act("commentary", null, relay("progress", clip(firstSentences(t, 1), SHORT_SUMMARY_CHARS)))];
       return [act("thinking", null, BG + clip(t, 600))];
     }
     case "question": {
@@ -151,10 +157,10 @@ export function route(source, policy, payload = {}, ctx = {}) {
     }
     case "idle":
       if (p === "quiet" || !payload.speak) return [act("thinking", null, BG + "Claude Code is idle, waiting for the user in the terminal.")];
-      return [act("commentary", null, "Claude Code is waiting for you in the terminal.")];
+      return [act("commentary", null, say("idle", payload.variant))];
     case "tool_failure": {
-      const said = `${cap(payload.label || "a step")} failed${payload.exit ? ` with exit code ${payload.exit}` : ""}.`;
-      const note = BG + `Claude Code tool failure: ${said}${payload.detail ? ` ${payload.detail}` : ""}`;
+      const said = say("toolFailure", payload.variant, { label: payload.label || "a step" });
+      const note = BG + `Claude Code tool failure: ${cap(payload.label || "a step")} failed${payload.exit ? ` with exit code ${payload.exit}` : ""}.${payload.detail ? ` ${payload.detail}` : ""}`;
       if (p === "walkthrough" && ctx.canSpeakFailure) return [act("commentary", null, said), act("thinking", null, note)];
       return [act("thinking", null, note)];
     }
@@ -175,9 +181,9 @@ export function route(source, policy, payload = {}, ctx = {}) {
     case "permission":
       // Spoken under every policy, never deduped away (SPEC §6.10.4). A
       // subagent's prompt is labelled as such: the user may not know it runs.
-      return [act("commentary", null, permissionSpeech(payload.label, payload.agent))];
+      return [act("commentary", null, permissionSpeech(payload.label, payload.agent, payload.variant))];
     case "approval_reminder":
-      return [act("commentary", null, reminderSpeech(payload.items))];
+      return [act("commentary", null, reminderSpeech(payload.items, payload.variant))];
     case "policy_change":
       return [act("instructions", null, policyChangeInstruction(payload.policy || p))];
     default:
@@ -316,17 +322,16 @@ export function cardText(md, max = 220) {
 }
 
 /** The spoken announcement of one approval prompt. */
-export function permissionSpeech(label, agent = false) {
-  return `${agent ? "A background agent is" : "Claude Code is"} waiting for your approval in the terminal to ${label || "use a tool"}.`;
+export function permissionSpeech(label, agent = false, variant = 0) {
+  return say(agent ? "permissionAgent" : "permission", variant, { label: label || "use a tool" });
 }
 
 /** The spoken reminder for approvals still pending (SPEC §6.10.4). */
-export function reminderSpeech(items = []) {
+export function reminderSpeech(items = [], variant = 0) {
   const list = (items || []).filter(Boolean);
-  if (list.length > 1) return `By the way, ${list.length} approvals are still waiting for you in the terminal.`;
+  if (list.length > 1) return say("reminderMany", variant, { n: list.length });
   const it = list[0] || {};
-  const to = it.label || "use a tool";
-  return it.agent ? `By the way, a background agent is still waiting on your approval to ${to}.` : `By the way, Claude's still waiting on your approval to ${to}.`;
+  return say(it.agent ? "reminderAgent" : "reminder", variant, { label: it.label || "use a tool" });
 }
 
 /** Permission label (infinitive) for "…waiting for your approval … to <label>". */
@@ -359,7 +364,7 @@ const phrase = (t, max) => clip(speakable(t).replace(/[.;:,]+$/, ""), max);
  * labels, sanitized by speakable() (no code, paths, URLs or secrets).
  * "Claude's asking: Which layout? Options: A, B, or C. Answer in the terminal."
  */
-export function questionSpeech(input = {}) {
+export function questionSpeech(input = {}, variant = 0) {
   const qs = Array.isArray(input && input.questions) ? input.questions.filter((q) => q && typeof q === "object") : [];
   const parts = [];
   for (const q of qs.slice(0, 4)) {
@@ -374,17 +379,17 @@ export function questionSpeech(input = {}) {
     if (labels.length) t += ` ${q.multiSelect ? "Pick any of" : "Options"}: ${oxford(labels, q.multiSelect ? "and" : "or")}.`;
     parts.push(t);
   }
-  if (!parts.length) return "Claude Code has a question for you in the terminal.";
-  if (parts.length === 1) return fitTokens(`Claude's asking: ${parts[0]} Answer in the terminal.`);
-  return fitTokens(`Claude has ${parts.length} questions for you in the terminal. ${parts.map((t, i) => `${ORDINAL[i]}: ${t}`).join(" ")}`);
+  if (!parts.length) return say("questionNone", variant);
+  if (parts.length === 1) return fitTokens(say("questionOne", variant, { q: parts[0] }));
+  return fitTokens(say("questionMany", variant, { n: parts.length, list: parts.map((t, i) => `${ORDINAL[i]}: ${t}`).join(" ") }));
 }
 
 /** Spoken form of an ExitPlanMode input: "Claude's plan is ready for your approval…: <title>." */
-export function planSpeech(input = {}, policy = "milestones") {
+export function planSpeech(input = {}, policy = "milestones", variant = 0) {
   const plan = typeof input?.plan === "string" ? input.plan : "";
   const h = /^\s{0,3}#{1,6}\s+(.+?)\s*#*\s*$/m.exec(plan);
   const title = phrase(h ? h[1] : firstSentences(summary(plan, 200), 1), 100).replace(/[.!?…]+$/, "");
-  let t = `Claude's plan is ready for your approval in the terminal${title ? `: ${title}` : ""}.`;
+  let t = say("plan", variant, { title });
   if (policy === "walkthrough") {
     const body = summary(h ? plan.replace(h[0], "") : plan, 300);
     if (body) t += ` In short: ${body}`;
@@ -399,11 +404,11 @@ export function serverName(name) {
 }
 
 /** Spoken form of an Elicitation hook (an MCP server asking the user for input). */
-export function elicitationSpeech(b = {}) {
+export function elicitationSpeech(b = {}, variant = 0) {
   const who = serverName(b.mcp_server_name);
   if (b.mode === "url") return `${who} needs you to finish a step in your browser. Check the terminal.`;
   const msg = clip(speakable(b.message || ""), 160);
-  return `${who} is asking for your input in the terminal${msg ? `: ${endPunct(msg).replace(/\?$/, ".")}` : "."}`;
+  return say("elicitation", variant, { who, msg: msg ? endPunct(msg).replace(/\?$/, ".") : "" });
 }
 
 // Notification types (hooks.md "Notification"): what each one means for the voice.
@@ -615,6 +620,7 @@ export class Narrator {
     this.lastFailureSpokenAt = -Infinity;
     this.recentQuestions = new Map(); // key → at
     this.lastAttention = new Map(); // "permission" | "question" | "elicitation" → at
+    this.rot = new Rotation(); // rotating template variants (phrasing.js)
     this.idleSaid = false; // spoken "waiting for you" this idle period
     this.resultSpoken = false; // this idle period began with a spoken result
   }
@@ -693,7 +699,7 @@ export class Narrator {
     for (const [k, t] of this.recentPermission) if (now - t >= PERMISSION_DEDUPE_MS) this.recentPermission.delete(k);
     if (this.recentPermission.has(key)) return null;
     this.recentPermission.set(key, now);
-    this.route("permission", { label, agent, dedupeKey: `approval:${key}` });
+    this.route("permission", { label, agent, dedupeKey: `approval:${key}`, variant: this.rot.next(agent ? "permissionAgent" : "permission") });
     return label;
   }
 
@@ -705,11 +711,13 @@ export class Narrator {
   onQuestion(toolName, toolInput, { toolUseId, delegationId = null } = {}) {
     const now = this.clock.now();
     for (const [k, t] of this.recentQuestions) if (now - t > QUESTION_DEDUPE_MS) this.recentQuestions.delete(k);
-    const spoken = toolName === "ExitPlanMode" ? planSpeech(toolInput, this.policy()) : { text: questionSpeech(toolInput), reference: "" };
+    const speak = (v) => (toolName === "ExitPlanMode" ? planSpeech(toolInput, this.policy(), v) : { text: questionSpeech(toolInput, v), reference: "" });
     // The same call may reach us from PreToolUse (with tool_use_id) and
-    // PermissionRequest (without): dedupe on the spoken text too.
-    const keys = [toolUseId && `id:${toolUseId}`, `text:${spoken.text}`].filter(Boolean);
+    // PermissionRequest (without): dedupe on the text too, in its plain
+    // variant (the spoken one rotates).
+    const keys = [toolUseId && `id:${toolUseId}`, `text:${speak(0).text}`].filter(Boolean);
     if (keys.some((k) => this.recentQuestions.has(k))) return null;
+    const spoken = speak(this.rot.next(toolName === "ExitPlanMode" ? "plan" : "question"));
     for (const k of keys) this.recentQuestions.set(k, now);
     this.lastAttention.set("question", now);
     this.releaseHeld();
@@ -745,19 +753,19 @@ export class Narrator {
       case "permission":
         if (this.recentlyAnnounced(["permission", "question"])) return "deduped";
         this.lastAttention.set("permission", this.clock.now());
-        this.route("attention", { text: msg ? `Claude Code needs you in the terminal: ${msg.replace(/[.!?…]*$/, ".")}` : "Claude Code is waiting for your approval in the terminal." });
+        this.route("attention", { text: say("permissionNote", this.rot.next("permissionNote"), { msg }) });
         return "spoken";
       case "elicitation":
         if (this.recentlyAnnounced(["elicitation"])) return "deduped";
-        this.onAttention("elicitation", msg ? `An MCP server needs your input in the terminal: ${msg.replace(/[.!?…]*$/, ".")}` : "An MCP server needs your input in the terminal.");
+        this.onAttention("elicitation", say("elicitation", this.rot.next("elicitation"), { who: "An MCP server", msg: msg ? msg.replace(/[.!?…]*$/, ".") : "" }));
         return "spoken";
       case "idle": return this.onIdle();
       case "attention":
-        if (type === "quota_auto_resume_stale") this.route("attention", { text: "Your usage limit has reset. Press Enter in the terminal to continue." });
-        else this.route("attention", { text: `A background Claude session needs your input${msg ? `: ${msg.replace(/[.!?…]*$/, ".")}` : "."}` });
+        if (type === "quota_auto_resume_stale") this.route("attention", { text: say("usageReset", this.rot.next("usageReset")) });
+        else this.route("attention", { text: say("sessionInput", this.rot.next("sessionInput"), { msg }) });
         return "spoken";
       case "notice":
-        this.route("notice", { text: "Claude Code stopped waiting for the usage limit, so the task did not continue." });
+        this.route("notice", { text: say("usageGaveUp", this.rot.next("usageGaveUp")) });
         return "spoken";
       case "resumed":
         if (this.policy() === "quiet") this.route("context", { text: "Claude Code resumed the task after the usage limit reset." });
@@ -854,7 +862,7 @@ export class Narrator {
     const first = String(error || "").split("\n")[0];
     const m = /^Exit code (\d+)/.exec(first);
     const detail = m ? "" : clip(speakable(first), 160);
-    this.route("tool_failure", { label, exit: m ? m[1] : null, detail });
+    this.route("tool_failure", { label, exit: m ? m[1] : null, detail, variant: this.rot.next("toolFailure") });
     return label;
   }
 

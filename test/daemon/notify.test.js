@@ -8,6 +8,7 @@ import {
 } from "../../daemon/policy.js";
 import { parseTaskNotifications } from "../../daemon/delegation.js";
 import { createFakeClock } from "../helpers/fake-clock.js";
+import { relay } from "../../daemon/phrasing.js";
 import { makeHarness } from "../helpers/daemon-harness.js";
 
 const BG = "[Background reference; not user speech] ";
@@ -33,8 +34,13 @@ test("questionSpeech: question and option labels, concise", () => {
     { question: "Which tests", multiSelect: true, options: [{ label: "Unit" }, { label: "E2E" }] },
   ] });
   assert.equal(two, "Claude has 2 questions for you in the terminal. First: Which DB? Options: Postgres or SQLite. Second: Which tests? Pick any of: Unit and E2E.");
-  assert.equal(questionSpeech({}), "Claude Code has a question for you in the terminal.");
-  assert.equal(questionSpeech({ questions: "nope" }), "Claude Code has a question for you in the terminal.");
+  assert.equal(questionSpeech({}), "Claude has a question for you in the terminal.");
+  assert.equal(questionSpeech({ questions: "nope" }), "Claude has a question for you in the terminal.");
+  // Variants rotate; each still says where to answer.
+  const input = { questions: [{ question: "Which layout?", options: [{ label: "A" }, { label: "B" }] }] };
+  const vs = [0, 1, 2].map((v) => questionSpeech(input, v));
+  assert.equal(new Set(vs).size, 3);
+  for (const v of vs) assert.match(v, /Which layout\? Options: A or B\..*terminal\.$/);
 });
 
 test("questionSpeech sanitizes: no code, paths, URLs or secrets are read out", () => {
@@ -124,30 +130,33 @@ test("route: background turns and turns nobody asked for", () => {
   for (const p of POLICIES) {
     const v = route("background_voice", p, { text, requestText: "count the files" });
     assert.equal(v[0].kind, "commentary", p);
-    assert.match(v[0].content, /^Update on your earlier request "count the files": The agent found 3 files\./);
+    assert.match(v[0].content, /^Background work for the user's earlier request "count the files" finished\. /);
+    assert.ok(v[0].content.endsWith("Claude said: The agent found 3 files. It also checked the tests.") || p === "walkthrough", v[0].content);
   }
   assert.deepEqual(route("background_result", "quiet", { text }).map((a) => a.kind), ["thinking"]);
-  assert.equal(route("background_result", "milestones", { text })[0].content, "Background work finished: The agent found 3 files.");
-  assert.equal(route("background_result", "walkthrough", { text })[0].content, "Background work finished: The agent found 3 files. It also checked the tests.");
+  assert.equal(route("background_result", "milestones", { text })[0].content, relay("bgwork", "The agent found 3 files."));
+  assert.equal(route("background_result", "walkthrough", { text })[0].content, relay("bgwork", "The agent found 3 files. It also checked the tests."));
   assert.deepEqual(route("other_result", "quiet", { text }).map((a) => a.kind), ["thinking"]);
   assert.deepEqual(route("other_result", "milestones", { text }).map((a) => a.kind), ["thinking"], "thinking-only when the user did not ask");
-  assert.equal(route("other_result", "walkthrough", { text })[0].content, "Claude Code finished: The agent found 3 files.");
+  assert.equal(route("other_result", "walkthrough", { text })[0].content, relay("other", "The agent found 3 files."));
 });
 
 test("route: typed_result under milestones is one short sentence", () => {
   const long = "This is a very long first sentence that goes on and on about " + "details ".repeat(40) + "end. Second.";
   const m = route("typed_result", "milestones", { text: long });
-  assert.ok(m[0].content.length <= "Claude Code finished: ".length + 160, String(m[0].content.length));
+  assert.ok(m[0].content.length <= relay("typed", "").length + 160, String(m[0].content.length));
   assert.ok(!m[0].content.includes("Second"));
 });
 
 test("route: idle and tool_failure", () => {
   assert.deepEqual(route("idle", "quiet", { speak: true }).map((a) => a.kind), ["thinking"]);
-  assert.equal(route("idle", "milestones", { speak: true })[0].content, "Claude Code is waiting for you in the terminal.");
+  assert.equal(route("idle", "milestones", { speak: true })[0].content, "Claude's waiting for you in the terminal.");
+  assert.equal(route("idle", "milestones", { speak: true, variant: 1 })[0].content, "Over to you, Claude's waiting in the terminal.");
   assert.deepEqual(route("idle", "milestones", { speak: false }).map((a) => a.kind), ["thinking"]);
   for (const p of ["quiet", "milestones"]) assert.deepEqual(route("tool_failure", p, { label: "running tests", exit: "1" }, { canSpeakFailure: true }).map((a) => a.kind), ["thinking"]);
   const w = route("tool_failure", "walkthrough", { label: "running tests", exit: "1" }, { canSpeakFailure: true });
-  assert.equal(w[0].content, "Running tests failed with exit code 1.");
+  assert.equal(w[0].content, "Running tests failed.", "no exit codes aloud");
+  assert.match(w[1].content, /exit code 1/, "the exit code stays in the silent note");
   assert.deepEqual(route("tool_failure", "walkthrough", { label: "x" }, { canSpeakFailure: false }).map((a) => a.kind), ["thinking"]);
 });
 
@@ -161,6 +170,7 @@ test("onQuestion: spoken once per tool call, whether PreToolUse or PermissionReq
   assert.equal(n.onPermission("AskUserQuestion", input), null, "never 'approval to use AskUserQuestion'");
   assert.equal(n.onToolUse("AskUserQuestion", input), null, "not a milestone");
   assert.deepEqual(spoken(), ["Claude's asking: Which layout? Options: A or B. Answer in the terminal."]);
+  assert.equal(n.onQuestion("AskUserQuestion", input, { toolUseId: "toolu_1" }), null, "a repeat is deduped although the next variant differs");
   n.onQuestion("AskUserQuestion", { questions: [{ question: "Another?" }] }, { toolUseId: "toolu_2" });
   assert.equal(spoken().length, 2);
 });
@@ -179,7 +189,7 @@ test("Notification permission_prompt is deduped against PermissionRequest; spoke
   assert.equal(spoken().length, 1);
   await clock.advance(ATTENTION_DEDUPE_MS + 1);
   assert.equal(n.onNotification({ notification_type: "permission_prompt", message: "Claude needs your permission to use Bash" }), "spoken");
-  assert.equal(spoken().at(-1), "Claude Code needs you in the terminal: Claude needs your permission to use Bash.");
+  assert.equal(spoken().at(-1), "Claude needs you in the terminal: Claude needs your permission to use Bash.");
 });
 
 test("Notification types: attention spoken in quiet; ignored ones silent; unknown ones as context", () => {
@@ -193,7 +203,7 @@ test("Notification types: attention spoken in quiet; ignored ones silent; unknow
   assert.deepEqual(spoken(), [
     "A background Claude session needs your input: Session 2 asks a question.",
     "Your usage limit has reset. Press Enter in the terminal to continue.",
-    "Claude Code stopped waiting for the usage limit, so the task did not continue.",
+    "Claude stopped waiting for the usage limit, so the task didn't continue.",
   ]);
   assert.equal(n.onNotification({ notification_type: "something_new", message: "hello there" }), "context");
   assert.equal(out.at(-1).kind, "thinking");
@@ -251,7 +261,7 @@ test("milestones: intermediate text of a long-running turn is spoken at most eve
   assert.equal(spoken().length, 0, "turn too young");
   await clock.advance(LONG_PROGRESS_MS);
   n.route("progress_text", { text: "Running the suite. This takes a while." });
-  assert.deepEqual(spoken(), ["Still working: Running the suite."]);
+  assert.deepEqual(spoken(), [relay("progress", "Running the suite.")]);
   await clock.advance(10000);
   n.route("progress_text", { text: "Half done." });
   assert.equal(spoken().length, 1, "throttled");
@@ -267,13 +277,13 @@ test("milestones: intermediate text of a long-running turn is spoken at most eve
 test("tool failures: context always, spoken in walkthrough at most every 15 s", async () => {
   const { clock, n, spoken, out } = narrator("walkthrough");
   n.onToolFailure("Bash", { command: "npm test", description: "Run the test suite" }, "Exit code 1\nError: /Users/me/secret/path.js failed");
-  assert.deepEqual(spoken(), ["Run the test suite failed with exit code 1."]);
+  assert.deepEqual(spoken(), ["Run the test suite failed."]);
   assert.ok(!out.some((a) => a.content.includes("/Users")));
   n.onToolFailure("Read", { file_path: "/a/b.js" }, "File does not exist.");
   assert.equal(spoken().length, 1);
   await clock.advance(15000);
   n.onToolFailure("Read", { file_path: "/a/b.js" }, "File does not exist.");
-  assert.equal(spoken().at(-1), "Reading a file failed.");
+  assert.match(spoken().at(-1), /^(?:Hm, |Looks like )?[Rr]eading a file failed\.$/);
 });
 
 // ---- daemon integration (fake sideband) --------------------------------------------------
@@ -415,7 +425,7 @@ test("background task turn: a voice-launched agent's completion is spoken as an 
   await h.clock.advance(3000);
   const c = appends(ws, "commentary").slice(before);
   assert.equal(c.length, 1);
-  assert.match(c[0].content, /^Update on your earlier request "Ask Claude to count the files in the background": The helper counted 3 files\./);
+  assert.match(c[0].content, /^Background work for the user's earlier request "Ask Claude to count the files in the background" finished\. [\s\S]*\nClaude said: The helper counted 3 files\./);
 });
 
 test("background task turn: typed launch spoken briefly under milestones; unknown launch is context only", async (t) => {
@@ -428,7 +438,7 @@ test("background task turn: typed launch spoken briefly under milestones; unknow
   hook("UserPromptSubmit", { prompt: "<task-notification>\n<task-id>b</task-id>\n<tool-use-id>toolu_B</tool-use-id>\n<status>completed</status>\n<summary>Background command completed (exit code 0)</summary>\n</task-notification>", prompt_id: "p2" });
   hook("Stop", { prompt_id: "p2", last_assistant_message: "All 248 tests passed. Nothing failed." });
   await h.clock.advance(3000);
-  assert.deepEqual(appends(ws, "commentary").slice(n).map((e) => e.content), ["Background work finished: All 248 tests passed."]);
+  assert.deepEqual(appends(ws, "commentary").slice(n).map((e) => e.content), [relay("bgwork", "All 248 tests passed.")]);
   n = appends(ws, "commentary").length;
   hook("UserPromptSubmit", { prompt: "<task-notification>\n<task-id>c</task-id>\n<tool-use-id>toolu_unknown</tool-use-id>\n<status>completed</status>\n<summary>x</summary>\n</task-notification>", prompt_id: "p3" });
   hook("Stop", { prompt_id: "p3", last_assistant_message: "Something finished." });
@@ -453,7 +463,7 @@ test("PostToolUseFailure: context under milestones; spoken under walkthrough; in
   hook("PostToolUseFailure", { tool_name: "Bash", tool_input: { command: "npm test", description: "Run tests" }, error: "Exit code 1", is_interrupt: true });
   assert.equal(appends(ws, "commentary").length, 0);
   hook("PostToolUseFailure", { tool_name: "Bash", tool_input: { command: "npm test", description: "Run tests" }, error: "Exit code 1" });
-  assert.deepEqual(appends(ws, "commentary").map((e) => e.content), ["Run tests failed with exit code 1."]);
+  assert.deepEqual(appends(ws, "commentary").map((e) => e.content), ["Run tests failed."]);
 });
 
 test("the observed bug: an unrelated turn's summary does not cut off a voice answer", async (t) => {
@@ -479,7 +489,7 @@ test("the observed bug: an unrelated turn's summary does not cut off a voice ans
   await h.clock.advance(2000);
   c = appends(ws, "commentary");
   assert.equal(c.length, 2, "released once the voice went quiet");
-  assert.equal(c[1].content, "Claude Code finished: Refactored the parser.");
+  assert.equal(c[1].content, relay("typed", "Refactored the parser."));
   assert.ok(h.log.find("speech.released").length >= 1);
 });
 
@@ -497,7 +507,7 @@ test("held low-priority update becomes thinking after 20 s of continuous speech"
 
 test("the observed repeat: internal progress-line SubagentStops are not agents finishing", async (t) => {
   const { h, ws, hook } = await live(t, { idle_seconds: 7200 }); // the pattern runs for minutes: no idle sleep
-  const said = () => appends(ws, "commentary").map((e) => e.content).filter((c) => /finished|is done/.test(c) && !/^Claude Code finished/.test(c));
+  const said = () => appends(ws, "commentary").map((e) => e.content).filter((c) => /finished|is done/.test(c) && !c.includes("Claude said: "));
   // Claude (running as `--agent claude`) launches two background agents; launching is not finishing.
   hook("UserPromptSubmit", { agent_type: "claude", prompt: "build it", prompt_id: "p1" });
   hook("PreToolUse", { agent_type: "claude", prompt_id: "p1", tool_name: "Agent", tool_use_id: "toolu_1", tool_input: { description: "web fix", prompt: "x", run_in_background: true } });

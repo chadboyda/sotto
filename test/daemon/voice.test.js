@@ -1,5 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { relay } from "../../daemon/phrasing.js";
 import fs from "node:fs";
 import path from "node:path";
 import { makeHarness, SESSION } from "../helpers/daemon-harness.js";
@@ -220,10 +221,10 @@ test("paused: results wait in pendingResult and seed the resumed session", async
   h.voice.handleHook("Stop", { last_assistant_message: "All tests pass. Nothing else changed." }, "/tmp/clv-owner-a.sock");
   await h.clock.advance(0);
   const pending = h.sse.find((m) => m.type === "result_pending");
-  assert.equal(pending.text, "Claude Code finished: All tests pass.");
+  assert.equal(pending.text, relay("typed", "All tests pass."));
   const r = await h.voice.createSession({ sdp: "x", reason: "resume" });
   assert.equal(r.status, 201);
-  assert.match(h.fetchCalls[1].body.session.input[0].content[0].text, /Result that arrived while voice was paused: Claude Code finished: All tests pass/);
+  assert.match(h.fetchCalls[1].body.session.input[0].content[0].text, /Result that arrived while voice was paused: Claude finished something the user typed[^\n]* Claude said: All tests pass/);
   assert.equal(h.voice.pendingResult, null);
   const ws2 = h.WS.last();
   ws2.open();
@@ -360,7 +361,7 @@ test("end to end in-process: speech → inbox → Stop → spoken result with th
   h.voice.handleHook("Stop", { last_assistant_message: "You are on **main**." }, "/tmp/clv-owner-a.sock");
   await h.clock.advance(0);
   const c = appends(ws, "commentary");
-  assert.deepEqual(c.at(-1), { type: "session.commentary.append", event_id: c.at(-1).event_id, delegation_id: "item_abc", content: "Claude Code's answer: You are on main." });
+  assert.deepEqual(c.at(-1), { type: "session.commentary.append", event_id: c.at(-1).event_id, delegation_id: "item_abc", content: relay("answer", "You are on main.") });
   assert.equal(h.voice.status().delegations[0].status, "answered");
   assert.equal(h.voice.status().claude.busy, false);
   assert.ok(appends(ws, "thinking").some((e) => e.delegation_id === "item_abc" && /Request sent to Claude Code/.test(e.content)));
@@ -373,7 +374,7 @@ test("permission prompts are spoken once", async (t) => {
   for (let i = 0; i < 2; i++) h.voice.handleHook("PermissionRequest", { tool_name: "Edit", tool_input: { file_path: "/a/hooks.json" } }, "/tmp/clv-owner-a.sock");
   const c = appends(ws, "commentary");
   assert.equal(c.length, 1);
-  assert.equal(c[0].content, "Claude Code is waiting for your approval in the terminal to edit hooks.json.");
+  assert.equal(c[0].content, "Claude needs your approval in the terminal to edit hooks.json.");
   assert.ok(h.sse.some((m) => m.type === "activity" && m.kind === "permission"));
 });
 

@@ -28,6 +28,7 @@
 // queued again: observed live, a replacement session re-spoke the last update.
 
 import { firstSentences } from "./speech.js";
+import { materialOf } from "./phrasing.js";
 
 export const PRIORITY = Object.freeze({ low: 1, normal: 2, high: 3 });
 
@@ -74,7 +75,8 @@ export const REPEAT_SIMILARITY = 0.55;
 export const REPEAT_SIMILARITY_SINCE = 0.4;
 /** Fewer content words than this: too short to judge (never a repeat). */
 export const REPEAT_MIN_WORDS = 6;
-// Spoken leads that carry no content ("Claude Code's answer: …").
+// Spoken leads that carry no content (the relay frame is cut by materialOf();
+// these are older fixed leads, kept for commentaries from a pre-relay daemon).
 const LEADS = /^(?:claude code's answer|claude code, on what you just said|claude code finished|background work finished|update on your earlier request(?: "[^"]*")?|result for your earlier request(?: "[^"]*")?|still working|short version)\s*:\s*/i;
 const STOP = new Set(("a an the and or but so of to in on at by for with from as is are was were be been being it its it's this that that's these those there " +
   "here i i'm i've i'll i'd me my you you're you'll you've you'd your we we'll we've we're our they their he she his her them us not no yes yeah ok okay just now right still also too " +
@@ -94,9 +96,9 @@ export function contentWords(text) {
   return out;
 }
 
-/** The part of a commentary the voice actually says: its lead sentences, without the "Claude Code's answer:" frame. */
+/** The part of a commentary the voice actually says: its lead sentences, without the relay frame. */
 export function spokenLead(content) {
-  return firstSentences(String(content || "").replace(LEADS, ""), 3).slice(0, 400);
+  return firstSentences(materialOf(content).replace(LEADS, ""), 3).slice(0, 400);
 }
 
 /** Share of `text`'s content words (its spoken lead) found in `said` (a Set). */
@@ -332,7 +334,8 @@ export class SpeechQueue {
       this.prerollUntil = now + COMMENTARY_PREROLL_MS;
       this.tail = "";
       this.lastSent = { action: head.action, key: head.key, priority: head.priority, urgent: head.urgent, at: now, heard: false };
-      this.remember("commentary", head.action.content, now);
+      // Claude's words only: the relay frame's own words would count as "said".
+      this.remember("commentary", materialOf(head.action.content), now);
       this.send(head.action);
     }
     this.schedule();

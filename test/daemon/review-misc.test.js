@@ -3,6 +3,7 @@
 // session framing, transcript absorption (claude-context.js), Node check.
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { relay } from "../../daemon/phrasing.js";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -70,7 +71,8 @@ test("every routed append fits the token budget, even for CJK results", () => {
 test("voice_result for an earlier Live session: null id, says which request", () => {
   const acts = route("voice_result", "milestones", { text: "Done.", delegationId: "item_old", requestText: "run the tests", earlier: true });
   assert.equal(acts[0].delegationId, null);
-  assert.equal(acts[0].content, `Result for your earlier request "run the tests": Claude Code's answer: Done.`);
+  assert.equal(acts[0].content, relay("earlier", "Done.", { requestText: "run the tests" }));
+  assert.match(acts[0].content, /^This answers the user's earlier request "run the tests"\./);
 });
 
 function narrator() {

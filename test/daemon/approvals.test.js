@@ -121,7 +121,7 @@ test("lifecycle: request, then PostToolUse for that tool_use_id, then the card a
   hook("UserPromptSubmit", { prompt: "deploy it", prompt_id: "p1" });
   hook("PreToolUse", { prompt_id: "p1", tool_use_id: "toolu_1", tool_name: "Bash", tool_input: { command: CMD } });
   hook("PermissionRequest", { prompt_id: "p1", tool_name: "Bash", tool_input: { command: CMD } });
-  assert.equal(said(ws).at(-1), "Claude Code is waiting for your approval in the terminal to run a shell command.");
+  assert.equal(said(ws).at(-1), "Claude needs your approval in the terminal to run a shell command.");
   assert.deepEqual([lastActivity(h).kind, lastActivity(h).text, lastActivity(h).agent], ["permission", "Claude needs approval to run a shell command", false]);
   assert.equal(h.voice.status().claude.approval.label, "run a shell command");
   assert.equal(h.voice.pageStatus().claude.approval.agent, false);
@@ -215,9 +215,9 @@ test("approvals are never deduped: same words twice, after a similar line, and u
   }
   await h.clock.advance(15_000);
   assert.deepEqual(said(ws), [
-    "Claude Code is waiting for your approval in the terminal to run a shell command.",
+    "Claude needs your approval in the terminal to run a shell command.",
     "A background agent is waiting for your approval in the terminal to run a shell command.",
-    "A background agent is waiting for your approval in the terminal to run a shell command.",
+    "Heads up, a background agent needs your approval in the terminal to run a shell command.", // rotated: same meaning
   ]);
   assert.equal(h.log.find("speech.duplicate").length, 0);
   // The Notification that repeats the first prompt 6 s later is the same prompt: not spoken again.
@@ -241,7 +241,7 @@ test("reminder (fake clock): at 2 min and 5 min, at most twice, never over the u
   const { h, ws, hook } = await live(t);
   hook("PreToolUse", { tool_use_id: "t1", tool_name: "Bash", tool_input: { command: CMD } });
   hook("PermissionRequest", { tool_name: "Bash", tool_input: { command: CMD } });
-  const reminders = () => said(ws).filter((c) => c.startsWith("By the way"));
+  const reminders = () => said(ws).filter((c) => /^(?:By the way|Just a reminder)/.test(c));
   await h.clock.advance(119_000);
   assert.equal(reminders().length, 0);
   // The user starts talking just before it is due: the reminder waits for them.
