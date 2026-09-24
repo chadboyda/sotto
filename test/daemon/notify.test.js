@@ -208,24 +208,15 @@ test("elicitation dialog Notification is deduped against the Elicitation hook", 
   assert.equal(spoken().length, 1);
 });
 
-test("idle_prompt: once per idle period, not after a spoken result, never in quiet", async () => {
-  const m = narrator("milestones");
-  m.n.onTurnStart();
-  m.n.route("typed_result", { text: "Done." }); // spoken result
-  assert.equal(m.n.onNotification({ notification_type: "idle_prompt", message: "Claude is waiting for your input" }), "context");
-  assert.equal(m.n.onNotification({ notification_type: "idle_prompt" }), "deduped");
-  m.state.policy = "milestones";
-  const m2 = narrator("milestones");
-  m2.n.onTurnStart();
-  m2.n.route("stale_result", { text: "Done." }); // result not spoken
-  assert.equal(m2.n.onNotification({ notification_type: "idle_prompt" }), "spoken");
-  assert.equal(m2.spoken().at(-1), "Claude Code is waiting for you in the terminal.");
-  assert.equal(m2.n.onNotification({ notification_type: "idle_prompt" }), "deduped");
-  m2.n.onTurnStart(); // a new idle period starts after the next turn
-  assert.equal(m2.n.onNotification({ notification_type: "idle_prompt" }), "spoken");
-  const q = narrator("quiet");
-  assert.equal(q.n.onNotification({ notification_type: "idle_prompt" }), "context");
-  assert.equal(q.spoken().length, 0);
+test("idle_prompt: Claude Code's generic idle notice is never sent to the voice", async () => {
+  for (const pol of ["milestones", "walkthrough", "quiet"]) {
+    const m = narrator(pol);
+    m.n.onTurnStart();
+    m.n.route("stale_result", { text: "Done." }); // even with an unspoken result
+    assert.equal(m.n.onNotification({ notification_type: "idle_prompt", message: "Claude is waiting for your input" }), "ignored");
+    assert.equal(m.n.onNotification({ notification_type: "idle_prompt" }), "deduped");
+    assert.equal(m.spoken().length, 0);
+  }
 });
 
 test("completions within 3 s are batched into one sentence", async () => {
