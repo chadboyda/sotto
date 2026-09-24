@@ -150,44 +150,77 @@ export function speakerLabel(role) {
 
 const BLUETOOTH_RE = /airpods|bluetooth|headset|hands-free|buds/i;
 const BUILTIN_RE = /macbook|built-in|internal/i;
+// Webcams, phones (Continuity) and virtual/loopback devices: never chosen over a
+// built-in mic without the user asking. Seen live (2026-09-24): Chrome opened
+// "OBSBOT Meet 2 Microphone" (a webcam across the room) while the Mac's system
+// default was the MacBook Pro mic, and the user was not heard for minutes.
+const AVOID_RE = /virtual|zoomaudio|teams audio|blackhole|loopback|soundflower|prism|krisp|aggregate|obsbot|webcam|camera|brio|facetime|iphone|ipad|continuity/i;
 
 /** True if a device label looks like a Bluetooth/headset mic (hands-free profile). */
 export function isBluetoothLabel(label) {
   return BLUETOOTH_RE.test(String(label || ""));
 }
 
+/** True if a device label looks like a webcam, phone or virtual device. */
+export function isAvoidedLabel(label) {
+  return AVOID_RE.test(String(label || ""));
+}
+
+const PSEUDO_IDS = new Set(["default", "communications"]);
+
+/** The real name behind Chrome's "Default - <name>" pseudo device. */
+export function stripDefaultPrefix(label) {
+  return String(label || "").replace(/^Default\s*-\s*/, "").trim();
+}
+
 /**
  * Choose the microphone (§7.5 "Default mic").
- * 1. the saved id, if present;
- * 2. else, if the default input looks like Bluetooth, the first built-in mic;
- * 3. else the default.
+ * 1. the saved id, if present ("default" = follow the system default);
+ * 2. the system default input (Chrome's and the app's "default" pseudo device),
+ *    unless it looks like Bluetooth: then the built-in mic;
+ * 3. no known system default: the built-in mic, else the first input that is
+ *    not a webcam, phone or virtual device (a headset last), else the first input.
  *
- * `devices` is the enumerateDevices() output (any kinds). Chrome lists a pseudo device
- * with deviceId "default" whose label is "Default - <real device>"; when present it is the
- * default, otherwise the first audio input is.
+ * The system default is opened BY ID ("default"), never by leaving deviceId
+ * out: Chrome then uses its own per-profile device ranking
+ * (media.audio_input.user_preference_ranking), which can put a webcam first
+ * whatever macOS says (seen live 2026-09-24).
  *
- * @returns {{deviceId:string|null, rule:"saved"|"builtin"|"default"|"none", hint:string|null}}
+ * `devices` is the enumerateDevices() output (any kinds).
+ *
+ * @returns {{deviceId:string|null, rule:"saved"|"builtin"|"default"|"fallback"|"none", hint:string|null, label:string, savedMissing:boolean}}
  */
 export function pickInputDevice(devices, savedId) {
   const inputs = (Array.isArray(devices) ? devices : []).filter((d) => d && d.kind === "audioinput");
-  if (inputs.length === 0) return { deviceId: null, rule: "none", hint: null };
+  const real = inputs.filter((d) => !PSEUDO_IDS.has(d.deviceId));
+  const def = inputs.find((d) => d.deviceId === "default") || null;
+  const defLabel = def ? stripDefaultPrefix(def.label) : "";
+  const out = (deviceId, rule, label, hint = null) => ({ deviceId, rule, hint, label: String(label || ""), savedMissing: !!(savedId && rule !== "saved") });
+  if (inputs.length === 0) return out(null, "none", "");
   if (savedId && inputs.some((d) => d.deviceId === savedId)) {
-    return { deviceId: savedId, rule: "saved", hint: null };
+    const d = inputs.find((x) => x.deviceId === savedId);
+    return out(savedId, "saved", savedId === "default" ? defLabel : d.label);
   }
-  const def = inputs.find((d) => d.deviceId === "default") || inputs[0];
-  if (isBluetoothLabel(def.label)) {
-    const builtin = inputs.find(
-      (d) => d.deviceId !== "default" && d.deviceId !== "communications" && BUILTIN_RE.test(d.label || "") && !isBluetoothLabel(d.label),
-    );
-    if (builtin) {
-      return {
-        deviceId: builtin.deviceId,
-        rule: "builtin",
-        hint: "Using the built-in mic so your headphones keep high-quality audio.",
-      };
+  const missingHint = savedId ? "The microphone you chose isn't connected." : null;
+  const builtin = real.find((d) => BUILTIN_RE.test(d.label || "") && !isBluetoothLabel(d.label));
+  if (def) {
+    if (isBluetoothLabel(defLabel) && builtin) {
+      return out(builtin.deviceId, "builtin", builtin.label, "Using the built-in mic so your headphones keep high-quality audio.");
     }
+    return out("default", "default", defLabel, missingHint);
   }
-  return { deviceId: def.deviceId, rule: "default", hint: null };
+  if (builtin) return out(builtin.deviceId, "builtin", builtin.label, missingHint);
+  const ok = real.find((d) => !isBluetoothLabel(d.label) && !isAvoidedLabel(d.label)) || real.find((d) => !isAvoidedLabel(d.label)) || real[0] || inputs[0];
+  return out(ok.deviceId, "fallback", ok.label, missingHint);
+}
+
+/** Drawer option text for an input: "System default (MacBook Pro Microphone)" for the pseudo device. */
+export function inputOptionLabel(device, index = 0) {
+  if (device?.deviceId === "default") {
+    const name = stripDefaultPrefix(device.label);
+    return name ? `System default (${name})` : "System default";
+  }
+  return deviceLabel(device, index);
 }
 
 /** Pick the saved speaker if it still exists, else "" (the system default sink). */
@@ -390,6 +423,93 @@ export function levelFromRms(value) {
   if (!(value > 0)) return 0;
   const db = 20 * Math.log10(value);
   return Math.min(1, Math.max(0, (db + 60) / 50));
+}
+
+/**
+ * "Can't hear you" detector (§7.5 "Can't hear you"). Two symptoms, each
+ * checked only while live and unmuted, and reported at most once until
+ * start() (a new session or a different mic):
+ *  - "silent": for `silentMs` after going live (or unmuting, or switching the
+ *    mic) the mic's RMS never reached `silentRms` and the user was not heard:
+ *    a dead, muted-in-hardware or far-away mic.
+ *  - "no_transcript": the mic carried voice-level sound (`speechRms`, not
+ *    while the assistant was talking, which is echo) for `speechMs` in total,
+ *    yet no input transcript arrived for `gapMs`: the model is not hearing
+ *    what the mic hears (seen live 2026-09-24: a webcam mic across the room,
+ *    five minutes of talking, no transcript).
+ * Clock-free: pass `now` (ms) to every call.
+ */
+export const HEARING_DEFAULTS = Object.freeze({ silentMs: 20_000, silentRms: 0.003, speechRms: 0.01, speechMs: 6_000, gapMs: 40_000, voiceLevel: 0.08 });
+
+export function createHearingMonitor(opts = {}) {
+  const o = { ...HEARING_DEFAULTS, ...opts };
+  let armedAt = null; // start of the current "silent" window (null: not live)
+  let liveAt = null;
+  let peak = 0;
+  let heardAt = null;
+  let speechMs = 0;
+  let lastAt = null;
+  let fired = null;
+  let wasMuted = false;
+  return {
+    /** Live (again), or a different mic: re-arm both checks. */
+    start(now) {
+      armedAt = liveAt = now;
+      peak = 0;
+      heardAt = null;
+      speechMs = 0;
+      lastAt = null;
+      fired = null;
+      wasMuted = false;
+    },
+    stop() {
+      armedAt = liveAt = null;
+      lastAt = null;
+    },
+    /** An input transcript arrived: the model hears the user. */
+    heard(now) {
+      heardAt = now;
+      speechMs = 0;
+    },
+    get fired() {
+      return fired;
+    },
+    /**
+     * One meter reading. `rms` raw mic RMS, `voice` the assistant's output level (0..1).
+     * @returns {null | {kind:"silent"|"no_transcript", peak_rms:number, speech_ms:number, since_ms:number}}
+     */
+    sample({ rms, muted = false, voice = 0, now }) {
+      if (liveAt === null || fired) return null;
+      const dt = lastAt === null ? 0 : Math.min(250, Math.max(0, now - lastAt));
+      lastAt = now;
+      if (muted) {
+        wasMuted = true;
+        return null;
+      }
+      if (wasMuted) {
+        // Unmuted: the silent window starts over; speech counting continues.
+        wasMuted = false;
+        armedAt = now;
+        peak = 0;
+      }
+      const v = Number(rms) || 0;
+      if (v > peak) peak = v;
+      if (v >= o.speechRms && !(voice > o.voiceLevel)) speechMs += dt;
+      if (armedAt !== null && heardAt === null && now - armedAt >= o.silentMs) {
+        if (peak < o.silentRms) {
+          fired = { kind: "silent", peak_rms: peak, speech_ms: speechMs, since_ms: now - armedAt };
+          return fired;
+        }
+        armedAt = null; // the mic works: only the transcript check from here
+      }
+      const since = heardAt ?? liveAt;
+      if (speechMs >= o.speechMs && now - since >= o.gapMs) {
+        fired = { kind: "no_transcript", peak_rms: peak, speech_ms: speechMs, since_ms: now - since };
+        return fired;
+      }
+      return null;
+    },
+  };
 }
 
 /**

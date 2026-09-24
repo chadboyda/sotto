@@ -96,6 +96,8 @@ const el = {
   voiceHelp: $("voice-help"),
   voiceGrid: $("voice-grid"),
   inputSelect: $("input-select"),
+  micCompare: $("mic-compare"),
+  micList: $("mic-list"),
   outputSelect: $("output-select"),
   echoSummary: $("echo-summary"),
   echoTestBtn: $("echo-test-btn"),
@@ -216,6 +218,7 @@ const S = {
   sender: null,
   mic: null,
   inputHint: null,
+  inputLabel: "", // the name of the mic in use (the real device behind "default")
   liveSessionId: null,
   startedAt: null,
   dcUsage: 0,
@@ -610,17 +613,27 @@ async function acquireMic() {
   const pick = lib.pickInputDevice(devices, saved);
   S.inputHint = pick.hint;
   if (stream) {
+    // The permission-prompt stream was opened without a deviceId, which in Chrome
+    // is its own per-profile favourite, not the macOS default: reopen unless it
+    // already is the device the rules chose.
     const current = stream.getAudioTracks()[0]?.getSettings?.().deviceId;
-    const wanted = pick.deviceId;
-    if (wanted && wanted !== "default" && current !== wanted) {
+    if (pick.deviceId && current !== pick.deviceId) {
       stream.getTracks().forEach((t) => t.stop());
       stream = null;
     }
   }
-  // "default" follows the system default device, which is what no deviceId does too.
-  if (!stream) stream = await openMic(pick.deviceId === "default" ? null : pick.deviceId);
+  // The system default is opened by its id "default" (never by leaving deviceId out).
+  if (!stream) stream = await openMic(pick.deviceId);
+  noteInput(stream, pick);
   fillDeviceSelects(devices);
   return stream;
+}
+
+/** Remember which mic is in use (drawer, banner, log) and say so when a remembered one is missing. */
+function noteInput(stream, pick) {
+  const track = stream?.getAudioTracks()[0];
+  S.inputLabel = lib.stripDefaultPrefix(pick?.label || track?.label || "");
+  if (pick?.savedMissing && S.inputLabel) S.inputHint = `The microphone you chose isn't connected. Using ${S.inputLabel}.`;
 }
 
 function fillSelect(select, options, value) {
@@ -641,9 +654,10 @@ function fillDeviceSelects(devices) {
   const inputs = devices.filter((d) => d.kind === "audioinput" && d.deviceId !== "communications");
   const outputs = devices.filter((d) => d.kind === "audiooutput" && d.deviceId !== "default" && d.deviceId !== "communications");
   const savedIn = store.get(KEY_INPUT) || "";
+  const auto = lib.pickInputDevice(devices, null).label;
   fillSelect(
     el.inputSelect,
-    [["", "Automatic"], ...inputs.filter((d) => d.deviceId).map((d, i) => [d.deviceId, lib.deviceLabel(d, i)])],
+    [["", auto ? `Automatic (${lib.stripDefaultPrefix(auto)})` : "Automatic"], ...inputs.filter((d) => d.deviceId).map((d, i) => [d.deviceId, lib.inputOptionLabel(d, i)])],
     inputs.some((d) => d.deviceId === savedIn) ? savedIn : "",
   );
   S.defaultOutputLabel = devices.find((d) => d.kind === "audiooutput" && d.deviceId === "default")?.label?.replace(/^Default - /, "") || "";
@@ -662,7 +676,16 @@ async function refreshDevices() {
   const track = S.mic?.getAudioTracks()[0];
   if (S.pc && track) {
     const id = track.getSettings?.().deviceId;
-    if (track.readyState === "ended" || (id && !devices.some((d) => d.kind === "audioinput" && d.deviceId === id))) {
+    if (track.readyState === "ended" || (id && id !== "default" && !devices.some((d) => d.kind === "audioinput" && d.deviceId === id))) {
+      switchMic(store.get(KEY_INPUT));
+      return;
+    }
+    // The macOS default input changed (or a remembered mic came back): an open
+    // track stays on the device it was opened on, so follow the rules again.
+    const pick = lib.pickInputDevice(devices, store.get(KEY_INPUT));
+    const want = lib.stripDefaultPrefix(pick.label);
+    if (want && want !== S.inputLabel) {
+      logRemote("info", `mic: following the device change to ${want} (was ${S.inputLabel || "unknown"})`);
       switchMic(store.get(KEY_INPUT));
     }
   }
@@ -676,7 +699,7 @@ async function switchMic(savedId) {
     const devices = await listDevices();
     const pick = lib.pickInputDevice(devices, savedId);
     S.inputHint = pick.hint;
-    const stream = await openMic(pick.deviceId === "default" ? null : pick.deviceId);
+    const stream = await openMic(pick.deviceId);
     if (gen !== S.gen || !S.sender) {
       stream.getTracks().forEach((t) => t.stop());
       return;
@@ -689,6 +712,10 @@ async function switchMic(savedId) {
     old?.getTracks().forEach((t) => t.stop());
     meter.attach(stream);
     echo.setMic(stream);
+    noteInput(stream, pick);
+    fillDeviceSelects(devices);
+    hearing.start(performance.now());
+    dismissBannerKey("cant_hear");
     post("mic_ok", { input_label: track.label || "", output_label: selectedText(el.outputSelect), aec: String(track.getSettings?.().echoCancellation ?? "") });
     render();
   } catch (err) {
@@ -848,6 +875,10 @@ const meter = {
     dial.input(live ? lib.gateLevel(mic) : 0, live ? lib.gateLevel(voice, 0.08) : 0, mBands, vBands);
     if (live) setFloor(this.floor.update(S.muted ? 0 : mic, voice, performance.now()));
     if (live && !S.muted && this.detector.update(value, performance.now())) post("activity");
+    if (live) {
+      const heard = hearing.sample({ rms: value, muted: S.muted || !!S.mutePending, voice, now: performance.now() });
+      if (heard) cantHear(heard);
+    }
     // Quiet: poll at 20 Hz (enough for the floor word and the activity detector);
     // sound: every frame, so the dial follows the voice.
     const quiet = lib.gateLevel(mic) === 0 && lib.gateLevel(voice, 0.08) === 0;
@@ -863,6 +894,131 @@ const meter = {
 };
 
 meter.tick = meter.tick.bind(meter);
+
+// ---------------------------------------------------------------------------
+// "Can't hear you" (§7.5): the mic is silent after going live, or it hears
+// voice-level sound for a long stretch while no input transcript arrives. The
+// page shows a banner naming the mic with a one-click switcher, logs it, and
+// the daemon has the voice say it once (POST cant_hear).
+// ---------------------------------------------------------------------------
+const hearing = lib.createHearingMonitor();
+
+function cantHear(f) {
+  const name = S.inputLabel || S.mic?.getAudioTracks()[0]?.label || "the current microphone";
+  logRemote("warn", `can't hear: ${f.kind} on ${name} (peak rms ${f.peak_rms.toFixed(4)}, ${(f.speech_ms / 1000).toFixed(1)} s of sound, ${(f.since_ms / 1000).toFixed(0)} s without hearing the user)`);
+  post("cant_hear", { kind: f.kind, input_label: name, peak_rms: Number(f.peak_rms.toFixed(4)), speech_ms: Math.round(f.speech_ms), since_ms: Math.round(f.since_ms) });
+  showBanner("warn", `I can't hear you \u2014 using ${name}.`, "cant_hear", { sticky: true, action: { label: "Switch mic", run: openMicSwitcher, keep: true } });
+}
+
+function openMicSwitcher() {
+  if (!el.settings.open) el.settings.showModal();
+  el.micCompare.open = true;
+  micProbe.start();
+  el.micCompare.scrollIntoView?.({ block: "nearest" });
+}
+
+// Live level bars for every input, so the user can see which mic hears them.
+// Measure-only (never connected to the destination); every probe stream is
+// stopped when the list closes, the drawer closes or the session ends.
+const micProbe = {
+  rows: [],
+  raf: 0,
+  ctx: null,
+  gen: 0,
+
+  async start() {
+    this.stop();
+    const gen = ++this.gen;
+    const devices = (await listDevices()).filter((d) => d.kind === "audioinput" && d.deviceId && d.deviceId !== "communications" && d.deviceId !== "default");
+    if (gen !== this.gen) return;
+    const saved = store.get(KEY_INPUT) || "";
+    const current = S.mic?.getAudioTracks()[0]?.getSettings?.().deviceId || "";
+    const rows = devices.map((d, i) => {
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = "mic-row";
+      const inUse = lib.stripDefaultPrefix(d.label) === S.inputLabel || d.deviceId === current || d.deviceId === saved;
+      btn.setAttribute("aria-current", String(!!inUse));
+      const name = document.createElement("span");
+      name.className = "mic-row-name";
+      name.textContent = lib.deviceLabel(d, i) + (inUse ? " (in use)" : "");
+      const meterEl = document.createElement("span");
+      meterEl.className = "mic-row-meter";
+      meterEl.setAttribute("aria-hidden", "true");
+      const bar = document.createElement("span");
+      meterEl.append(bar);
+      btn.append(name, meterEl);
+      btn.onclick = () => chooseMic(d.deviceId);
+      return { id: d.deviceId, btn, bar, stream: null, analyser: null, source: null, buf: null };
+    });
+    el.micList.replaceChildren(...rows.map((r) => r.btn));
+    this.rows = rows;
+    try {
+      this.ctx ??= new AudioContext();
+      if (this.ctx.state === "suspended") this.ctx.resume().catch(() => {});
+    } catch {
+      return; // names only, no bars
+    }
+    for (const r of rows) {
+      // Opening a Bluetooth headset's mic switches it to its low-quality
+      // hands-free profile for everything: list it, don't measure it.
+      if (lib.isBluetoothLabel(r.btn.textContent)) continue;
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({ audio: { deviceId: { exact: r.id }, echoCancellation: false, noiseSuppression: false, autoGainControl: false, channelCount: 1 } });
+        if (gen !== this.gen) {
+          stream.getTracks().forEach((t) => t.stop());
+          return;
+        }
+        r.stream = stream;
+        r.source = this.ctx.createMediaStreamSource(stream);
+        r.analyser = this.ctx.createAnalyser();
+        r.analyser.fftSize = 512;
+        r.source.connect(r.analyser);
+        r.buf = new Float32Array(r.analyser.fftSize);
+      } catch (err) {
+        logRemote("info", `mic compare: cannot open ${r.btn.textContent}: ${err?.name || err}`);
+      }
+    }
+    const tick = () => {
+      if (gen !== this.gen) return;
+      for (const r of this.rows) {
+        if (!r.analyser) continue;
+        r.analyser.getFloatTimeDomainData(r.buf);
+        r.bar.style.transform = `scaleX(${lib.levelFromRms(lib.rms(r.buf)).toFixed(3)})`;
+      }
+      this.raf = requestAnimationFrame(tick);
+    };
+    this.raf = requestAnimationFrame(tick);
+  },
+
+  stop() {
+    this.gen++;
+    cancelAnimationFrame(this.raf);
+    this.raf = 0;
+    for (const r of this.rows) {
+      try {
+        r.source?.disconnect();
+      } catch {
+        /* ignore */
+      }
+      r.stream?.getTracks().forEach((t) => t.stop());
+    }
+    this.rows = [];
+  },
+};
+
+function chooseMic(deviceId) {
+  micProbe.stop();
+  el.micCompare.open = false;
+  store.set(KEY_INPUT, deviceId);
+  el.inputSelect.value = deviceId;
+  logRemote("info", "mic: chosen from the comparison list");
+  if (S.pc) switchMic(deviceId);
+  else if (wake.stream) {
+    wake.release();
+    render();
+  }
+}
 
 /** Who has the floor changed: update the dial word, not the whole page. */
 function setFloor(floor) {
@@ -1676,6 +1832,8 @@ function teardown({ keepMic = false } = {}) {
   else mic?.getTracks().forEach((t) => t.stop());
   echo.detach();
   meter.detach();
+  hearing.stop();
+  micProbe.stop();
   el.audio.srcObject = null;
   dismissBannerKey("autoplay");
   S.muted = false;
@@ -1727,6 +1885,7 @@ function handleDataChannel(data) {
       S.pausedReason = null;
       S.connectStage = null;
       setPhase("live");
+      hearing.start(performance.now());
       announce("Connected. Listening.");
       // A new session starts unmuted server-side. Keep the user's mute across a
       // transparent reconnect; a start or resume begins unmuted (they chose to talk).
@@ -1737,6 +1896,10 @@ function handleDataChannel(data) {
     case "session.input_transcript.delta":
     case "session.output_transcript.delta":
       if (ev.type === "session.output_transcript.delta") wake.onFirstOutput();
+      else if (String(ev.delta ?? "").trim()) {
+        hearing.heard(performance.now());
+        dismissBannerKey("cant_hear");
+      }
       S.captions = lib.reduceCaptions(S.captions, {
         role: ev.type === "session.output_transcript.delta" ? "assistant" : "user",
         text: ev.delta ?? "",
@@ -2104,8 +2267,12 @@ function renderMic() {
   // Stable name "Mute"; aria-pressed carries the state (AUDIT #12).
   el.muteBtn.setAttribute("aria-pressed", String(muted));
   el.muteBtn.dataset.pending = String(!!S.mutePending);
-  el.micHint.hidden = !S.inputHint;
-  el.micHint.textContent = S.inputHint || "";
+  // Always name the mic in use; a hint that already names it replaces the line.
+  const hint = S.inputHint || "";
+  const text = S.inputLabel && !hint.includes(S.inputLabel) ? [`In use: ${S.inputLabel}.`, hint].filter(Boolean).join(" ") : hint;
+  el.micHint.hidden = !text;
+  el.micHint.textContent = text;
+  el.muteBtn.title = S.inputLabel ? `Microphone: ${S.inputLabel}` : "";
 }
 
 const REQUEST_ACTIVE = new Set(["collecting", "sent", "delivered", "held_suspected", "failed"]);
@@ -2702,6 +2869,12 @@ el.settings.addEventListener("close", () => {
 });
 // A sample stops with the drawer.
 el.settings.addEventListener("close", () => { if (sample.state !== "idle") stopSample(); });
+el.settings.addEventListener("close", () => micProbe.stop());
+el.micCompare.addEventListener("toggle", () => {
+  if (el.micCompare.open) {
+    if (!micProbe.rows.length) micProbe.start();
+  } else micProbe.stop();
+});
 el.settings.addEventListener("click", (e) => {
   // A click on the backdrop (the dialog box itself, outside its content) closes it.
   if (e.target !== el.settings) return;

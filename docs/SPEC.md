@@ -190,7 +190,7 @@ Stale files: if `D/daemon.pid` names a dead process, or `/healthz` does not answ
 | `daily_cap_minutes` | number | `120` | min 0, max 1440 | Voice minutes allowed per local day; `0` = no cap |
 | `window` | string | `auto` | `options`: auto, app, chrome, default | Where the voice page opens (§6.16). `SOTTO_BROWSER` overrides it. |
 | `openai_api_key` | string, `sensitive: true` | none | optional | The last-resort API key source (§4.3). Claude Code stores it in its secure storage and exports it to hooks as `CLAUDE_PLUGIN_OPTION_OPENAI_API_KEY`; it is not a `/config` row. |
-| `mirror` | string | `all` | `options`: all, decisions, off | Transcript mirror (§6.18): user speech the Live model did not delegate reaches Claude as FYI. `all` = everything but filler, voice-only commands, short fragments and echoes; `decisions` = only decisions, feedback and requests; `off`. `SOTTO_MIRROR` overrides it. |
+| `mirror` | string | `all` | `options`: all, decisions, off | Transcript mirror (§6.18): user speech the Live model did not delegate reaches Claude as FYI. `all` = everything but filler, mic checks, voice-only commands, short fragments and echoes; `decisions` = only decisions, feedback and requests; `off`. `SOTTO_MIRROR` overrides it. |
 | `echo_guard` | string | `auto` | `options`: auto, on, off | Echo guard (§7.7): the page's soft residual-echo suppressor with double-talk detection. `auto` = only while the measured echo after the browser's echo cancellation stays high (never on headphones); `on` = always engaged (it still only lowers the mic where it holds nothing louder than the predicted echo); `off`. `SOTTO_ECHO_GUARD` overrides it. |
 
 ### 4.2 How values reach the code
@@ -681,6 +681,7 @@ Messages are in §9.2.
 | `echo` | `kind` (`leak`/`guard`/`test`), `level`, `leak_db`, `corr`, `lag_ms`, `speech_s`, `engaged`, `reason`, `mode`, `output`, `aec`, `attenuated_pct`, `results` | Echo measurement, guard changes and echo-test results (§7.7): logged as `echo.<kind>` (numbers rounded, strings clipped), the latest of each kept as `/status` `echo` |
 | `played` | `what` (`sample`/`echo_test`), `voice` | The page plays a voice sample aloud: its words join the echo filter's ledger (§6.8.1) |
 | `log` | `level`, `message` | Write to daemon.log (`src:"page"`) |
+| `cant_hear` | `kind` (`silent`/`no_transcript`), `input_label`, `peak_rms`, `speech_ms`, `since_ms` | The page cannot hear the user (§7.5 "Can't hear you"): logged as `page.cant_hear` (warn); while live, the voice says §8.3's can't-hear line once per session, at most once per 10 minutes |
 | `unload` | | Page closing; if live, close the Live session |
 
 **`GET /api/voices`** (page auth: `X-Sotto-Page` header or `?token=`) → 200:
@@ -1187,7 +1188,7 @@ The daemon picks up new code on its own, at a moment the user will not notice, a
 
 **Rule.** `MIRROR_QUIET_MS` = 6000 ms after the user's last input-transcript delta (re-armed by every delta), while a Live session is attached:
 1. If a delegation is `collecting`, look again in 1 s (the delegation takes the words).
-2. Take the user fragments after `max(consumedThroughMs, checkedMs)`, grouped into lines (1500 ms). Classify each line (`classifyLine`): `noise` (no letters, or ≤ 3 words with no Latin letter or digit), `filler` (≤ 8 words, all backchannels or function words: "okay, cool", "thanks", "what was"), `voice_only` (≤ 12 words starting with a request about the voice itself: "slow down", "repeat that", "can you say something", "be quiet"), `fragment` (≤ 3 words and no decision word: a thought cut by a pause), `decision` (decisions, preferences, approvals, corrections, feedback and requests, by keyword: "agree", "pick", "let's", "we should", "I'm fine", "bug", "cut off", "let me know", "can you", "name", …), else `other`. A line of ≥ 3 words that is an echo of the assistant is `echo`. While Claude awaits an answer (§6.10.3), a line of ≤ 4 words with yes/no/okay/sure/fine is a `decision`.
+2. Take the user fragments after `max(consumedThroughMs, checkedMs)`, grouped into lines (1500 ms). Classify each line (`classifyLine`): `noise` (no letters, or ≤ 3 words with no Latin letter or digit), `filler` (≤ 8 words, all backchannels or function words: "okay, cool", "thanks", "what was"), `mic_check` (≤ 24 words with a mic-check anchor, "hello", "testing", "can you hear", "is this working", "are you there", "hearing my voice", and every word from the mic-check vocabulary or filler: "Hello? Hello? Wow, it's like barely working"; "the build is barely working" stays a decision), `voice_only` (≤ 12 words starting with a request about the voice itself: "slow down", "repeat that", "can you say something", "be quiet"), `fragment` (≤ 3 words and no decision word: a thought cut by a pause), `decision` (decisions, preferences, approvals, corrections, feedback and requests, by keyword: "agree", "pick", "let's", "we should", "I'm fine", "bug", "cut off", "let me know", "can you", "name", …), else `other`. A line of ≥ 3 words that is an echo of the assistant is `echo`. While Claude awaits an answer (§6.10.3), a line of ≤ 4 words with yes/no/okay/sure/fine is a `decision`.
 3. Mode `all` keeps `decision` and `other`; `decisions` keeps `decision`; `off` never runs. `checkedMs` advances to the newest fragment either way.
 4. Nothing kept: nothing is sent and the words stay unconsumed (a later request still carries them within its 90 s lookback).
 5. Otherwise: `consumedThroughMs` advances to the newest fragment **before** the write (a delegation settling meanwhile cannot re-send them), and one inbox message goes out with `priority:"later"` and `msg_id` `clv-mirror-<n>`:
@@ -1263,12 +1264,15 @@ The daemon picks up new code on its own, at a moment the user will not notice, a
   - mic `<select>` and speaker `<select>` (speaker uses `audioEl.setSinkId`), each saved in `localStorage` under `clv.inputDeviceId` / `clv.outputDeviceId` (every access wrapped in try/catch);
   - "Pause" button → POST `pause`;
   - "End voice" button → POST `stop`.
-- **Default mic** (`lib.pickInputDevice(devices, savedId)`):
-  1. the saved id, if present;
-  2. else, if the default input's label matches `/airpods|bluetooth|headset|hands-free|buds/i`, prefer the first device matching `/macbook|built-in|internal/i`;
-  3. else the default.
+- **Default mic** (`lib.pickInputDevice(devices, savedId)` → `{deviceId, rule, hint, label, savedMissing}`):
+  1. the saved id, if present (`"default"` = follow the system default);
+  2. else the system default input (the `"default"` pseudo device of Chrome and the app, label `Default - <name>`), unless its name matches `/airpods|bluetooth|headset|hands-free|buds/i`: then the first device matching `/macbook|built-in|internal/i`;
+  3. no pseudo default (other browsers): the built-in mic, else the first input that is not a webcam, phone or virtual device (`lib.isAvoidedLabel`: OBSBOT, webcam, camera, iPhone, Zoom/Teams/virtual, BlackHole, loopback, …), then a headset, else the first input.
 
-  When rule 2 applies, show the hint "Using the built-in mic so your headphones keep high-quality audio."
+  The system default is opened **by id** (`deviceId: {exact: "default"}`), never by leaving `deviceId` out: Chrome then opens its own per-profile favourite (`media.audio_input.user_preference_ranking` in the profile's Preferences), which can be a webcam whatever macOS says (seen live 2026-09-24: "OBSBOT Meet 2 Microphone" while the macOS default was the MacBook Pro mic). The first-run stream (opened before labels exist) is reopened unless it already is the chosen device.
+  When rule 2 picks the built-in mic, show the hint "Using the built-in mic so your headphones keep high-quality audio."; when a remembered mic is missing, "The microphone you chose isn't connected. Using <name>." The drawer names the mic in use ("In use: <name>."), the mute button's tooltip too, and the select shows "Automatic (<name>)" and "System default (<name>)". On `devicechange` while live, the rules run again and the mic switches (`replaceTrack`) when they now resolve to a different device (the macOS default changed, a remembered mic came back, the one in use vanished).
+  "Compare microphones" in the drawer lists every input with a live level bar (measure-only streams, stopped when the list or the drawer closes; Bluetooth inputs are listed but not opened, because opening one drops the headset to its hands-free profile); a click saves and switches to that mic.
+- **Can't hear you** (`lib.createHearingMonitor()`, fed by the level meter while live): reported once per session or mic when (a) for 20 s after going live, unmuting or switching the mic, the mic's RMS never reached 0.003 and no input transcript arrived (`silent`), or (b) the mic carried sound above 0.01 RMS (not while the assistant's voice is playing) for 6 s in total with no input transcript for 40 s (`no_transcript`). The page shows a sticky banner "I can't hear you — using <name>." with a "Switch mic" action that opens the drawer's microphone comparison, logs it, and POSTs `cant_hear`. An input transcript or a mic switch clears the banner.
 - **Paused overlay:** "Paused after <n> minutes of silence" (or the reason), a Resume button, and "press Space". When there is a `result_pending`, show it: "Claude finished while you were away: <text>".
 - **Hotkeys:** `M` toggles mute while live. `Space` resumes while paused. Ignore both when focus is in a `select`.
 - **Local speech activity:** when the mic RMS is above a threshold for more than 300 ms, POST `activity` (at most once per 10 s).
@@ -1315,6 +1319,7 @@ Full duplex is the product: the user can talk over the voice at any time and gpt
 You are Sotto, the voice of Claude Code, a coding agent working in the user's terminal on the project "{{project}}". The user is a developer talking with you hands-free while Claude Code does the work. You handle the spoken conversation; Claude Code reads code, runs commands, and makes changes.
 Speak naturally and briefly, like a sharp colleague pairing with the user. Keep most replies to one to three short sentences. Never read code, file paths, URLs, commands, or long identifiers aloud character by character; describe them instead, for example "the hooks file" or "a long commit hash". Never say passwords, API keys, tokens, or other secrets aloud, even if one appears in a result; say that one was shown in the terminal.
 If the user sounds frustrated, acknowledge it in a few words and focus on the next helpful step.
+Mic checks are yours to answer, right away: when the user asks whether you can hear them, says "hello?" or "testing", or asks whether this is working, answer at once in a few words, for example "Yes, I can hear you." If they say the audio is cutting out or barely working, say you can hear them now and suggest checking the microphone in the voice window. Never hand a mic check to Claude Code, and never say you will check with Claude.
 
 Backchannel policy: Use light backchannels. A brief "mm-hmm" or "okay" is fine while the user thinks out loud. Do not talk over the user.
 
@@ -1345,10 +1350,11 @@ Delegate to the backend when:
 - A correction or addition changes a request already handed off.
 - The user asks how the work is going and the latest update you have does not answer it.
 - The user asks you to switch to a different voice, for example "use the cedar voice".
-- You are not sure whether it is for Claude Code. When in doubt, delegate.
+- You are not sure whether it is for Claude Code. When in doubt, delegate. Greetings and mic checks are never in doubt: answer them yourself.
 
 Do not delegate to the backend when:
 - The user only greets you, makes small talk, or thanks you.
+- The user checks the mic or the connection: "hello?", "can you hear me?", "testing", "is this working?", "are you there?", or says the voice is barely working. Answer yourself, for example "Yes, I can hear you."
 - You can answer from the conversation or a still-current result from Claude Code, and the user is not deciding, asking for, or correcting anything.
 - You need a brief clarification to understand the request.
 - The user tells you how to speak (pace, length, tone), asks you to be quiet, or asks you to repeat something.
@@ -1390,6 +1396,8 @@ The earlier voice conversation follows as user and assistant messages, oldest fi
 |---|---|
 | `start` (quiet) | `Say only "Ready." Then stop and listen.` |
 | `start` (other policies) | `Greet the user in one short sentence and mention that you're connected to Claude Code in {{project}}. Then stop and listen.` |
+| `start` again within 5 minutes of a greeted start (not quiet) | `Say only "<line>" Then stop and listen.`, the n-th repeat taking the n-th of "I'm here.", "Listening.", "Go ahead.", "Back with you." (cycling) |
+| can't hear the user (page `cant_hear`, §7.5) | `Say only "I can't hear you well — check the mic in the voice window." Then stop and listen.` |
 | `resume` | `Say "I'm back." If a result arrived while voice was paused, tell the user about it briefly. Then stop and listen.` |
 | `reconnect` | none |
 | `reconnect` after a voice switch (§6.14) | `Say only "Switched to <voice>." Then stop and listen; the conversation continues from where it left off.` |
@@ -1645,6 +1653,9 @@ Unit tests: `test/daemon/update.test.js` (fingerprint, settle, quiet polling, fa
 
 ### 11.8 End-to-end decisions (`test/e2e/decisions.mjs`; `npm run e2e:decisions`, also run by `npm run e2e`)
 Fake mic: 8 s lead, "Sotto is a clever name. I think we should go with that one.", 13 s, "Oh, and let me know when the auto restart is ready.", silence (TTS fixtures `decide-name.wav`, `ask-later.wav`). The test plays Claude through the real hook.sh (UserPromptSubmit on delivery, then Stop "Got it." / "Noted." for a mirror). Checks: each utterance reaches the inbox within 12 s of its last word, exactly once, delegated (`next`) or mirrored (`later`, tagged, `clv-mirror-`); reports which; WARN on a self-made promise in the voice's replies; hook.sh gives a mirror the voice context; a mirror turn's "Noted." is silent. About 40 billed seconds.
+
+### 11.10 End-to-end mic check (`test/e2e/miccheck.mjs`; `npm run e2e:miccheck`, also run by `npm run e2e`)
+Fake mic (macOS `say`, built at run time): 8 s lead, "Hello? Hello? Can you hear me? Wow, it's like barely working.", silence. Checks: the voice starts answering within 8 s of the last word, says it can hear the user, does not defer to Claude; no `session.delegation.created` and no inbox message (neither delegated nor mirrored) for 12 s. About 25 billed seconds.
 
 ### 11.9 End-to-end echo and full duplex (`test/e2e/echo.mjs`; `npm run e2e:echo`, also run by `npm run e2e`)
 The page mixes the model's voice back into the mic (`?echo_sim_db=-10`, never played; Chrome is silent). Fake mic: 7 s lead (the greeting and its echo), "Please count slowly from one to thirty for me.", and 5.6 s after its start, over the count, "Hey, can you ask Claude what files are in this project?" (TTS fixtures `ask-count.wav`, `ask-files.wav`). Checks: no inbox message carries a 4-word run of the assistant's speech the user did not say; the barge-in reaches Claude; the page measures the echo (worklet running, level high); the guard engages in `auto`/`on` and never in `off`. Reports: leak, guard timing, share of the voice attenuated, how much of its own speech the model transcribed as the user's, double-talk transcript accuracy (the barge-in's words heard, in order), how long the voice kept talking after the barge-in's onset, backchannels while the user talked, and whether the voice cut itself off before the barge-in. `SOTTO_E2E_ECHO_MATRIX=1` runs no echo / guard off / auto / on; `SOTTO_E2E_ECHO_SIM_DB`, `SOTTO_E2E_ECHO_REPEAT`. About 28 billed seconds per session.

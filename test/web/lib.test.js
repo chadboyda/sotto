@@ -62,7 +62,7 @@ const devs = (...list) => list.map(([deviceId, label, kind = "audioinput"]) => (
 
 test("pickInputDevice prefers a saved id that still exists", () => {
   const d = devs(["default", "Default - AirPods Max"], ["air", "AirPods Max"], ["mbp", "MacBook Pro Microphone"], ["usb", "USB Mic"]);
-  assert.deepEqual(lib.pickInputDevice(d, "usb"), { deviceId: "usb", rule: "saved", hint: null });
+  assert.deepEqual(lib.pickInputDevice(d, "usb"), { deviceId: "usb", rule: "saved", hint: null, label: "USB Mic", savedMissing: false });
   // saved id gone -> falls through to the rules
   assert.equal(lib.pickInputDevice(d, "gone").rule, "builtin");
 });
@@ -87,17 +87,126 @@ test("pickInputDevice avoids a Bluetooth default in favour of the built-in mic",
 test("pickInputDevice falls back to the default", () => {
   // default is already built-in
   const a = lib.pickInputDevice(devs(["default", "Default - MacBook Pro Microphone"], ["mbp", "MacBook Pro Microphone"]), null);
-  assert.deepEqual(a, { deviceId: "default", rule: "default", hint: null });
+  assert.deepEqual(a, { deviceId: "default", rule: "default", hint: null, label: "MacBook Pro Microphone", savedMissing: false });
   // Bluetooth default but no built-in mic available
   const b = lib.pickInputDevice(devs(["default", "Default - AirPods"], ["air", "AirPods"]), null);
   assert.equal(b.deviceId, "default");
   assert.equal(b.rule, "default");
-  // no "default" pseudo device: the first input is the default
+  // no "default" pseudo device: the built-in mic, else the first plain input
   const c = lib.pickInputDevice(devs(["usb", "USB Mic"], ["mbp", "MacBook Pro Microphone"]), undefined);
-  assert.equal(c.deviceId, "usb");
+  assert.equal(c.deviceId, "mbp");
+  assert.equal(c.rule, "builtin");
+  assert.equal(lib.pickInputDevice(devs(["cam", "OBSBOT Meet 2 Microphone"], ["usb", "USB Mic"]), null).deviceId, "usb");
   // no inputs at all
-  assert.deepEqual(lib.pickInputDevice([], null), { deviceId: null, rule: "none", hint: null });
+  assert.deepEqual(lib.pickInputDevice([], null), { deviceId: null, rule: "none", hint: null, label: "", savedMissing: false });
   assert.deepEqual(lib.pickInputDevice(devs(["spk", "Speakers", "audiooutput"]), null).rule, "none");
+});
+
+// The live case (2026-09-24): Chrome's own device ranking put the webcam first,
+// the macOS default was the MacBook mic, and AirPods were connected too.
+const LIVE_2026_09_24 = [
+  ["default", "Default - MacBook Pro Microphone (Built-in)"],
+  ["cam", "OBSBOT Meet 2 Microphone (3564:fefb)"],
+  ["mbp", "MacBook Pro Microphone (Built-in)"],
+  ["phone", "Chad\u2019s iPhone Microphone"],
+  ["teams", "Microsoft Teams Audio Device (Virtual)"],
+  ["zoom", "ZoomAudioDevice (Virtual)"],
+  ["air", "AirPods Pro"],
+];
+
+test("pickInputDevice follows the macOS default by id, never Chrome's ranking (webcam first)", () => {
+  const p = lib.pickInputDevice(devs(...LIVE_2026_09_24), null);
+  assert.equal(p.deviceId, "default", "opened as exact 'default', not by leaving deviceId out");
+  assert.equal(p.rule, "default");
+  assert.equal(p.label, "MacBook Pro Microphone (Built-in)");
+  // A remembered "System default" choice resolves the same way.
+  const s = lib.pickInputDevice(devs(...LIVE_2026_09_24), "default");
+  assert.deepEqual([s.deviceId, s.rule, s.label], ["default", "saved", "MacBook Pro Microphone (Built-in)"]);
+  // An explicit webcam choice is respected.
+  assert.equal(lib.pickInputDevice(devs(...LIVE_2026_09_24), "cam").deviceId, "cam");
+});
+
+test("pickInputDevice: AirPods as the default go to the built-in mic, not the webcam", () => {
+  const list = LIVE_2026_09_24.map(([id, label]) => (id === "default" ? [id, "Default - AirPods Pro"] : [id, label]));
+  const p = lib.pickInputDevice(devs(...list), null);
+  assert.deepEqual([p.deviceId, p.rule, p.label], ["mbp", "builtin", "MacBook Pro Microphone (Built-in)"]);
+});
+
+test("pickInputDevice: a remembered mic that is gone falls back by the rules and says so", () => {
+  const p = lib.pickInputDevice(devs(...LIVE_2026_09_24), "usb-gone");
+  assert.equal(p.deviceId, "default");
+  assert.equal(p.savedMissing, true);
+  assert.match(p.hint, /isn't connected/);
+  // No system default known (no pseudo device): built-in beats webcam, phone and virtual devices.
+  const noDefault = LIVE_2026_09_24.filter(([id]) => id !== "default");
+  const q = lib.pickInputDevice(devs(...noDefault), "usb-gone");
+  assert.deepEqual([q.deviceId, q.rule, q.savedMissing], ["mbp", "builtin", true]);
+  const r = lib.pickInputDevice(devs(...noDefault.filter(([id]) => id !== "mbp")), null);
+  assert.equal(r.deviceId, "air", "virtual, phone and webcam mics are avoided; only the headset is left");
+});
+
+test("isAvoidedLabel and inputOptionLabel", () => {
+  for (const l of ["OBSBOT Meet 2 Microphone (3564:fefb)", "ZoomAudioDevice (Virtual)", "Microsoft Teams Audio Device (Virtual)", "Chad's iPhone Microphone", "BlackHole 2ch", "Logitech BRIO"]) assert.ok(lib.isAvoidedLabel(l), l);
+  for (const l of ["MacBook Pro Microphone (Built-in)", "Shure MV7", "USB Audio CODEC"]) assert.ok(!lib.isAvoidedLabel(l), l);
+  assert.equal(lib.inputOptionLabel({ deviceId: "default", label: "Default - MacBook Pro Microphone", kind: "audioinput" }), "System default (MacBook Pro Microphone)");
+  assert.equal(lib.inputOptionLabel({ deviceId: "default", label: "", kind: "audioinput" }), "System default");
+  assert.equal(lib.inputOptionLabel({ deviceId: "x", label: "USB Mic", kind: "audioinput" }), "USB Mic");
+});
+
+test("hearing monitor: a silent mic is reported once, 20 s after going live", () => {
+  const h = lib.createHearingMonitor();
+  let t = 0;
+  h.start(t);
+  let fired = null;
+  for (; t <= 25_000 && !fired; t += 50) fired = h.sample({ rms: 0.0005, now: t });
+  assert.equal(fired?.kind, "silent");
+  assert.ok(t >= 20_000 && t <= 20_100, String(t));
+  assert.equal(h.sample({ rms: 0, now: t + 50 }), null, "once per start");
+  h.start(t);
+  assert.equal(h.fired, null, "a new session or mic re-arms it");
+});
+
+test("hearing monitor: muted time does not count; a working quiet mic is not 'silent'", () => {
+  const h = lib.createHearingMonitor();
+  h.start(0);
+  let t = 0;
+  for (; t < 30_000; t += 50) assert.equal(h.sample({ rms: 0, muted: true, now: t }), null);
+  // Unmuted: a fresh 20 s window.
+  let fired = null;
+  for (; t < 49_000; t += 50) fired ||= h.sample({ rms: 0.0005, now: t });
+  assert.equal(fired, null);
+  // Room noise above the floor once: the mic works.
+  const g = lib.createHearingMonitor();
+  g.start(0);
+  for (t = 0; t < 60_000; t += 50) fired ||= g.sample({ rms: t === 1000 ? 0.01 : 0.0015, now: t });
+  assert.equal(fired, null);
+  // The user was heard: never "silent".
+  const k = lib.createHearingMonitor();
+  k.start(0);
+  k.heard(3000);
+  for (t = 0; t < 60_000; t += 50) fired ||= k.sample({ rms: 0.0005, now: t });
+  assert.equal(fired, null);
+});
+
+test("hearing monitor: sound at the mic but no transcript for 40 s", () => {
+  const h = lib.createHearingMonitor();
+  h.start(0);
+  let fired = null;
+  let t = 0;
+  // Talking (0.03 rms) half the time; the assistant's voice does not count.
+  for (; t < 60_000 && !fired; t += 50) fired = h.sample({ rms: Math.floor(t / 1000) % 2 ? 0.03 : 0.004, voice: t < 10_000 ? 0.5 : 0, now: t });
+  assert.equal(fired?.kind, "no_transcript");
+  assert.ok(t >= 40_000, String(t));
+  assert.ok(fired.speech_ms >= 6000);
+  // A transcript keeps arriving: never fires.
+  const g = lib.createHearingMonitor();
+  g.start(0);
+  let f2 = null;
+  for (t = 0; t < 120_000; t += 50) {
+    if (t % 10_000 === 0) g.heard(t);
+    f2 ||= g.sample({ rms: 0.03, now: t });
+  }
+  assert.equal(f2, null);
 });
 
 test("pickOutputDevice keeps an existing saved speaker, else system default", () => {

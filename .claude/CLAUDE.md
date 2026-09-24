@@ -42,6 +42,7 @@ Sotto is a Claude Code plugin for full-duplex voice with a running session, buil
 - **Keychain in tests:** unit tests use `test/helpers/fake-keychain.js` (the daemon harness default) or a fake `security` via `SOTTO_SECURITY_BIN`; anything that spawns a real daemon sets `SOTTO_KEYCHAIN_SERVICE` to a throwaway name so the user's real `sotto` item never leaks in. Never point a Keychain *write* at a fake `HOME`: `security` then fails with "authorization was canceled by the user".
   - It also runs `test/e2e/echo.mjs` (the page mixes the model's voice back into the mic with `?echo_sim_db`: no echo may reach Claude, a barge-in over the voice must; ~28 billed seconds); `npm run e2e:echo` alone, `SOTTO_E2E_ECHO_MATRIX=1` for the no-echo / guard off / auto / on comparison.
   - It also runs `test/e2e/decisions.mjs` (a spoken decision and a casual request must reach Claude, delegated or mirrored; ~40 billed seconds); `npm run e2e:decisions` runs it alone.
+  - It also runs `test/e2e/miccheck.mjs` (a spoken mic check must be answered by the voice and reach Claude neither delegated nor mirrored; ~25 billed seconds); `npm run e2e:miccheck` runs it alone.
 - **Headless toggle probe** (no model call):
   - Command: `SOTTO_NO_BROWSER=1 claude -p --plugin-dir . --model haiku --output-format json "/talk status"`. Expect `num_turns: 0`.
   - `/talk on` from `-p` starts a real daemon. It releases itself about 30 s after the `-p` process exits, or you can run `/talk off`.

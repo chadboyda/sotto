@@ -67,6 +67,22 @@ const VOICE_ONLY = new RegExp(
 );
 const VOICE_ONLY_MAX_WORDS = 12;
 
+// Mic and connection checks ("Hello? Hello? Can you hear me? It's barely
+// working"): the voice answers them itself (prompt.js), and they are about the
+// voice, not the project. A line counts when it has one of the anchors and
+// every word is from the mic-check vocabulary (or filler), so "the build is
+// barely working" is still mirrored. Seen live 2026-09-24: a webcam mic across
+// the room, and the model handed "Hello? Hello? ... it's like barely working"
+// to Claude.
+const MIC_ANCHOR = /\b(?:hello+|hallo|testing|test|mic check|hear me|hearing (?:me|my voice)|can you hear|do you hear|are you there|you there|anyone there|is this (?:thing )?(?:on|working)|is it working|does this work|is this working)\b/;
+const MIC_WORDS = new Set((
+  "hello helloo hallo hi hey testing test tests one two three mic microphone check checking can could do does you hear " +
+  "hearing me are there anyone anybody is this thing on working work works it its barely still not no hardly kind " +
+  "sort of cutting out audio sound voice seem seems now again wow like ok okay um uh hmm yes yeah can't cant cannot " +
+  "i im am me my at all even really"
+).split(" "));
+const MIC_MAX_WORDS = 24;
+
 // Decision-like lines (mirror mode "decisions"): decisions, preferences,
 // approvals, corrections, feedback and requests.
 const DECISION = new RegExp("\\b(?:" + [
@@ -81,7 +97,7 @@ const DECISION = new RegExp("\\b(?:" + [
 
 /**
  * What a user line is, for the mirror.
- * @returns {"noise"|"filler"|"voice_only"|"fragment"|"decision"|"other"}
+ * @returns {"noise"|"filler"|"mic_check"|"voice_only"|"fragment"|"decision"|"other"}
  */
 export function classifyLine(text, { awaiting = false } = {}) {
   const w = normalizeWords(text);
@@ -91,6 +107,7 @@ export function classifyLine(text, { awaiting = false } = {}) {
   const joined = w.join(" ");
   if (awaiting && w.length <= 4 && w.some((x) => ANSWERS.has(x))) return "decision";
   if (w.length <= 8 && w.every((x) => BACKCHANNEL.has(x) || FUNCTION.has(x))) return "filler";
+  if (w.length <= MIC_MAX_WORDS && MIC_ANCHOR.test(joined) && w.every((x) => MIC_WORDS.has(x) || BACKCHANNEL.has(x) || FUNCTION.has(x))) return "mic_check";
   if (w.length <= VOICE_ONLY_MAX_WORDS && VOICE_ONLY.test(joined)) return "voice_only";
   if (DECISION.test(joined)) return "decision";
   // A few words that are no decision are the start of a thought cut by a

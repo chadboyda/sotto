@@ -755,6 +755,24 @@ body[data-card="permission"][data-dial="small"] .stage { padding-top: 52px; }
 .voice-chip[data-state="loading"] svg { animation: sample-pulse 900ms ease-in-out infinite alternate; }
 @keyframes sample-pulse { from { opacity: 1; } to { opacity: 0.25; } }
 @media (prefers-reduced-motion: reduce) { .voice-chip[data-state="loading"] svg { animation: none; opacity: 0.5; } }
+/* Microphone comparison (settings drawer, and the "I can't hear you" banner's action):
+   one row per input with a live level bar; a click picks it. */
+.mic-compare summary { cursor: pointer; font-size: var(--text-small); font-weight: 600; color: var(--fg-2); min-height: 32px; display: flex; align-items: center; width: fit-content; }
+.mic-compare summary:hover { color: var(--fg); }
+.mic-list { display: grid; gap: 6px; margin: 6px 0; }
+.mic-row {
+  display: grid; grid-template-columns: 1fr 72px; align-items: center; gap: 10px;
+  min-height: 40px; padding: 0 10px;
+  border: 1px solid var(--edge); border-radius: var(--radius-sm);
+  background: var(--surface-2); color: var(--fg);
+  font-size: var(--text-small); font-weight: 500; text-align: left;
+  cursor: pointer;
+}
+.mic-row:hover { border-color: var(--fg-3); }
+.mic-row[aria-current="true"] { border-color: var(--fg); }
+.mic-row-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mic-row-meter { height: 6px; border-radius: 3px; background: var(--surface-sunken); overflow: hidden; }
+.mic-row-meter > span { display: block; height: 100%; width: 100%; background: var(--live); transform-origin: left; transform: scaleX(0); }
 .segmented { display: grid; grid-template-columns: repeat(3, 1fr); gap: 4px; padding: 4px; border-radius: 12px; background: var(--surface-sunken); border: 1px solid var(--edge); }
 .segmented button {
   min-height: 40px;
