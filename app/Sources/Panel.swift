@@ -38,6 +38,9 @@ final class PanelController: NSObject, NSWindowDelegate, WKNavigationDelegate, W
     private(set) var webView: WKWebView?
     private let pill = PillView()
     private let bridgeSource: String
+    private let micSource: String
+    /// Native mic (MicBridge.swift); nil keeps WebKit's capture only.
+    let mic: MicController?
     private let log: DebugLog
     private let mockCapture: Bool
     weak var delegate: PanelControllerDelegate?
@@ -45,8 +48,10 @@ final class PanelController: NSObject, NSWindowDelegate, WKNavigationDelegate, W
     private(set) var compact: Bool
     private var restoringFrame = false
 
-    init(bridgeSource: String, log: DebugLog, mockCapture: Bool) {
+    init(bridgeSource: String, micSource: String, mic: MicController?, log: DebugLog, mockCapture: Bool) {
         self.bridgeSource = bridgeSource
+        self.micSource = micSource
+        self.mic = mic
         self.log = log
         self.mockCapture = mockCapture
         compact = Prefs.store.bool(forKey: PanelController.compactKey)
@@ -67,6 +72,8 @@ final class PanelController: NSObject, NSWindowDelegate, WKNavigationDelegate, W
         panel.contentView?.wantsLayer = true
         pill.onExpand = { [weak self] in self?.setCompact(false) }
         pill.onMute = { [weak self] in self?.delegate?.panelToggleMute() }
+        mic?.evaluate = { [weak self] js in self?.evaluate(js) }
+        mic?.isOurs = { [weak self] o in self?.isOurs(o) ?? false }
         restoreFrame()
     }
 
@@ -88,6 +95,11 @@ final class PanelController: NSObject, NSWindowDelegate, WKNavigationDelegate, W
         // Persistent store keeps the page's device choices (localStorage); tests use a throwaway one.
         cfg.websiteDataStore = Prefs.testMode ? .nonPersistent() : .default()
         let ucc = WKUserContentController()
+        // mic.js first: bridge.js then observes the getUserMedia that mic.js provides.
+        if let m = mic, !micSource.isEmpty {
+            ucc.addUserScript(WKUserScript(source: m.pageConfigScript + micSource, injectionTime: .atDocumentStart, forMainFrameOnly: true))
+            ucc.addScriptMessageHandler(WeakReplyHandler(m), contentWorld: .page, name: "sottoMic")
+        }
         ucc.addUserScript(WKUserScript(source: bridgeSource, injectionTime: .atDocumentStart, forMainFrameOnly: true))
         ucc.add(WeakScriptHandler(self), name: "sottoHost")
         cfg.userContentController = ucc
@@ -103,6 +115,9 @@ final class PanelController: NSObject, NSWindowDelegate, WKNavigationDelegate, W
         // and playback are never throttled while the user works elsewhere.
         PanelController.setSPI(wv, "_setWindowOcclusionDetectionEnabled:", false)
         if #available(macOS 13.3, *) { wv.isInspectable = log.enabled }
+        // Test mode never plays the model's voice out loud (the user may be
+        // in a voice session on the same speakers): _WKMediaAudioMuted.
+        if Prefs.testMode { PanelController.setSPIUInt(wv, "_setPageMuted:", 1) }
         wv.alphaValue = compact ? 0 : 1
         panel.contentView?.addSubview(wv, positioned: .below, relativeTo: nil)
         webView = wv
@@ -115,6 +130,7 @@ final class PanelController: NSObject, NSWindowDelegate, WKNavigationDelegate, W
     /// which sends session.close + the unload beacon (SPEC §7.3), so the paid
     /// Live session ends even if the app then quits.
     func unload() {
+        mic?.stopAll()
         guard let wv = webView else { return }
         wv.loadHTMLString("", baseURL: nil)
         let old = wv
@@ -125,6 +141,7 @@ final class PanelController: NSObject, NSWindowDelegate, WKNavigationDelegate, W
     }
 
     private func destroyWebView() {
+        mic?.stopAll()
         guard let wv = webView else { return }
         wv.stopLoading()
         wv.loadHTMLString("", baseURL: nil)
@@ -162,6 +179,13 @@ final class PanelController: NSObject, NSWindowDelegate, WKNavigationDelegate, W
         let sel = NSSelectorFromString(selector)
         guard obj.responds(to: sel), let m = class_getInstanceMethod(type(of: obj), sel) else { return }
         typealias Fn = @convention(c) (AnyObject, Selector, Bool) -> Void
+        unsafeBitCast(method_getImplementation(m), to: Fn.self)(obj, sel, value)
+    }
+
+    static func setSPIUInt(_ obj: NSObject, _ selector: String, _ value: UInt) {
+        let sel = NSSelectorFromString(selector)
+        guard obj.responds(to: sel), let m = class_getInstanceMethod(type(of: obj), sel) else { return }
+        typealias Fn = @convention(c) (AnyObject, Selector, UInt) -> Void
         unsafeBitCast(method_getImplementation(m), to: Fn.self)(obj, sel, value)
     }
 
@@ -389,6 +413,7 @@ final class PanelController: NSObject, NSWindowDelegate, WKNavigationDelegate, W
         // code was single-use. Reload without it: the page shows its
         // "not connected" card and the daemon reopens the window on /talk on.
         log.log("webcontent_terminated")
+        mic?.stopAll()
         load(LaunchRequest(port: req.port, code: nil, dataDir: req.dataDir))
     }
 }

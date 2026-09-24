@@ -15,6 +15,8 @@ export const APP_EXE = "Sotto";
 export const ENV_MODES = Object.freeze([...WINDOW_MODES, "none"]);
 /** No page connected this long after launching the app: fall back to Chrome. */
 export const APP_PAGE_TIMEOUT_MS = 15_000;
+/** Passed to a test-mode app launch (test/app/live.test.mjs). */
+export const APP_TEST_ENV = Object.freeze(["SOTTO_APP_DEBUG_LOG", "SOTTO_APP_MIC", "SOTTO_APP_MIC_FIXTURE", "SOTTO_APP_MIC_FIXTURE_LEAD_MS", "SOTTO_APP_ECHO_SIM_DB"]);
 /** How long a measured audio route stays valid for `auto`. */
 export const ROUTE_TTL_MS = 60_000;
 
@@ -106,7 +108,8 @@ export function resolveWant({ env = {}, preference } = {}) {
  *   build      start a background app build (missing or stale bundle)
  *   needRoute  `auto` with a ready app but no fresh audio route: the caller
  *              measures it, then asks again with `route`
- * `route` is {input:{bluetooth}, output:{bluetooth}} from `Sotto --audio-route`.
+ * `route` is {input:{bluetooth}, output:{bluetooth, headphones}, builtin_input, native_mic}
+ * from `Sotto --audio-route`.
  */
 export function chooseWindow({ want, platform, app, chromeExists, route, appBroken = false }) {
   const browser = (reason) => ({ mode: chromeExists ? "chrome" : "default", build: false, needRoute: false, reason });
@@ -123,8 +126,16 @@ export function chooseWindow({ want, platform, app, chromeExists, route, appBrok
   if (!route) return { mode: "app", build: false, needRoute: true, reason: "auto" };
   // WebKit's capture opens the system default input first; a Bluetooth
   // headset there drops to its hands-free profile for the whole session
-  // (see app/Sources/AudioRoute.swift). Chrome keeps it in high quality.
-  if (route.input?.bluetooth && chromeExists) return browser("bluetooth_input");
+  // (see app/Sources/AudioRoute.swift). The app's native mic avoids that on
+  // headphones: it captures another input (the built-in mic) without voice
+  // processing (app/Sources/NativeMic.swift). Otherwise Chrome keeps the
+  // headset in high quality.
+  if (route.input?.bluetooth && chromeExists) {
+    if (route.native_mic === true && route.output?.headphones === true && route.builtin_input === true) {
+      return { mode: "app", build: false, needRoute: false, reason: "native_mic" };
+    }
+    return browser("bluetooth_input");
+  }
   return { mode: "app", build: false, needRoute: false, reason: "auto" };
 }
 
@@ -190,8 +201,9 @@ export function createWindow({
     // else LaunchServices knows under the sotto:// scheme.
     // Test hook (test/app/live.test.mjs): run the app in its test mode
     // (mock mic, hidden panel), since LaunchServices passes no arguments.
+    // The native-mic test settings (fixture, mode, echo simulation) ride along.
     const testEnv = env.SOTTO_APP_TEST === "1"
-      ? ["--env", "SOTTO_APP_TEST=1", ...(env.SOTTO_APP_DEBUG_LOG ? ["--env", `SOTTO_APP_DEBUG_LOG=${env.SOTTO_APP_DEBUG_LOG}`] : [])]
+      ? ["--env", "SOTTO_APP_TEST=1", ...APP_TEST_ENV.filter((k) => env[k]).flatMap((k) => ["--env", `${k}=${env[k]}`])]
       : [];
     const child = detached("open", ["-g", "-a", p.bundle, ...testEnv, `sotto://open?${q}`]);
     if (!child) return fallback("spawn_failed");
@@ -239,7 +251,7 @@ export function createWindow({
         routePending = false;
         if (!wantsWindow()) return;
         const again = chooseWindow({ want, platform, app, chromeExists, route: value || { input: { bluetooth: false } }, appBroken });
-        log?.info("window.choose", { want, mode: again.mode, reason: again.reason, route: value ? { input_bt: !!value.input?.bluetooth, output_bt: !!value.output?.bluetooth } : null });
+        log?.info("window.choose", { want, mode: again.mode, reason: again.reason, route: value ? { input_bt: !!value.input?.bluetooth, output_bt: !!value.output?.bluetooth, headphones: !!value.output?.headphones, native_mic: !!value.native_mic } : null });
         if (again.mode === "app") launchApp();
         else browser.open(again.mode);
       });

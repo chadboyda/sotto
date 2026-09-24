@@ -138,7 +138,8 @@
         } catch {
           /* ignore */
         }
-        post({ kind: "mic", ok: true, echoCancellation: s.echoCancellation, sampleRate: s.sampleRate });
+        // source: "native" | "webkit" when mic.js (the app's mic layer) opened it.
+        post({ kind: "mic", ok: true, echoCancellation: s.echoCancellation, sampleRate: s.sampleRate, ...(s.sottoSource ? { source: String(s.sottoSource) } : {}) });
         return stream;
       } catch (err) {
         post({ kind: "mic", ok: false, name: String((err && err.name) || "Error") });

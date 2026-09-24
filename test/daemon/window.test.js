@@ -71,6 +71,17 @@ describe("chooseWindow", () => {
     assert.equal(pick({ want: "auto", chromeExists: false, route: { input: { bluetooth: true } } }).mode, "app");
   });
 
+  test("auto + Bluetooth default input: the app when its native mic can use another input on headphones", () => {
+    const route = (o) => ({ input: { bluetooth: true }, output: { bluetooth: true, headphones: true }, builtin_input: true, native_mic: true, ...o });
+    assert.deepEqual(pick({ want: "auto", route: route() }), { mode: "app", build: false, needRoute: false, reason: "native_mic" });
+    // Any missing condition: Chrome, as before.
+    assert.equal(pick({ want: "auto", route: route({ native_mic: false }) }).reason, "bluetooth_input");
+    assert.equal(pick({ want: "auto", route: route({ builtin_input: false }) }).reason, "bluetooth_input");
+    assert.equal(pick({ want: "auto", route: route({ output: { bluetooth: false, headphones: false } }) }).reason, "bluetooth_input");
+    // An older app build without the fields: Chrome.
+    assert.equal(pick({ want: "auto", route: { input: { bluetooth: true }, output: { bluetooth: true } } }).reason, "bluetooth_input");
+  });
+
   test("missing or stale app: build in the background, Chrome this time", () => {
     for (const state of ["missing", "stale"]) {
       for (const want of ["auto", "app"]) {
@@ -202,6 +213,29 @@ describe("createWindow", () => {
     await tick();
     assert.equal(h.spawned.length, 0);
     assert.deepEqual(h.browserCalls, ["chrome"]);
+  });
+
+  test("auto + Bluetooth input + headphones + native mic: the app", async () => {
+    const h = harness({ route: { input: { bluetooth: true }, output: { bluetooth: true, headphones: true }, builtin_input: true, native_mic: true } });
+    h.w.open();
+    await tick();
+    assert.equal(h.spawned.length, 1);
+    assert.deepEqual(h.browserCalls, []);
+  });
+
+  test("test-mode launches forward the native-mic test settings to the app", async () => {
+    const h = harness({ env: { SOTTO_BROWSER: "app", SOTTO_APP_TEST: "1", SOTTO_APP_MIC: "native", SOTTO_APP_MIC_FIXTURE: "/tmp/f.wav", SOTTO_APP_ECHO_SIM_DB: "-12" } });
+    h.w.open();
+    await tick();
+    const args = h.spawned[0];
+    for (const kv of ["SOTTO_APP_TEST=1", "SOTTO_APP_MIC=native", "SOTTO_APP_MIC_FIXTURE=/tmp/f.wav", "SOTTO_APP_ECHO_SIM_DB=-12"]) {
+      assert.ok(args.includes(kv), `${kv} in ${args}`);
+    }
+    // Never outside test mode.
+    const h2 = harness({ env: { SOTTO_BROWSER: "app", SOTTO_APP_MIC: "native" } });
+    h2.w.open();
+    await tick();
+    assert.ok(!h2.spawned[0].some((a) => a.startsWith("SOTTO_APP_MIC")));
   });
 
   test("the window is no longer wanted when the route arrives: nothing opens", async () => {

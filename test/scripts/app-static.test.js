@@ -101,3 +101,131 @@ test("bridge.js host API: mute through the page hotkey, stop through /api/page",
   assert.equal(fetches[0].init.headers["X-Sotto-Page"], "tok123");
   assert.equal(fetches[0].init.body, JSON.stringify({ type: "stop" }));
 });
+
+/** Run app/Resources/mic.js against a stub page and a fake `sottoMic` app side. */
+function loadMic({ plan = { mode: "webkit", device: { id: "sotto-b", label: "MacBook Pro Microphone" } }, handler = true } = {}) {
+  const asked = [];
+  const gum = [];
+  const state = { plan, started: [] };
+  class FakeTrack {
+    constructor(label) { this.label = label; this.readyState = "live"; this.l = {}; }
+    getSettings() { return { deviceId: "webkit-id", echoCancellation: true, sampleRate: 48000 }; }
+    stop() { this.readyState = "ended"; }
+    addEventListener(t, fn) { (this.l[t] ||= []).push(fn); }
+    dispatchEvent(e) { for (const fn of this.l[e.type] || []) fn(e); if (this.onended && e.type === "ended") this.onended(e); }
+  }
+  class FakeStream { constructor(tracks) { this.tracks = tracks; } getAudioTracks() { return this.tracks; } getTracks() { return this.tracks; } }
+  class FakeNode { constructor() { this.port = { postMessage: () => {}, onmessage: null }; } connect(n) { return n; } disconnect() {} }
+  class FakeAudioContext {
+    constructor(o) { this.o = o; this.state = "running"; this.audioWorklet = { addModule: async () => {} }; this.destination = {}; }
+    createMediaStreamDestination() { return { channelCount: 2, stream: new FakeStream([new FakeTrack("")]) }; }
+    createGain() { return Object.assign(new FakeNode(), { gain: { value: 1 } }); }
+    async resume() {}
+    async close() { this.state = "closed"; }
+  }
+  const win = {
+    webkit: {
+      messageHandlers: handler ? {
+        sottoMic: {
+          postMessage: async (m) => {
+            asked.push(m);
+            if (m.op === "devices") return { default: { id: "sotto-a", label: "AirPods Max" }, inputs: [{ id: "sotto-a", label: "AirPods Max" }, { id: "sotto-b", label: "MacBook Pro Microphone" }] };
+            if (m.op === "plan") return state.plan;
+            if (m.op === "permission") return "granted";
+            if (m.op === "start") { state.started.push(m); return { ok: true, sampleRate: 48000, label: m.device === "sotto-c" ? "USB Mic" : "MacBook Pro Microphone", device: m.device }; }
+            return true;
+          },
+        },
+      } : {},
+    },
+    navigator: {
+      mediaDevices: {
+        getUserMedia: async (c) => { gum.push(c); return new FakeStream([new FakeTrack("MacBook Pro Microphone")]); },
+        enumerateDevices: async () => [
+          { kind: "audioinput", deviceId: "default", label: "Default - MacBook Pro Microphone" },
+          { kind: "audioinput", deviceId: "webkit-id", label: "MacBook Pro Microphone" },
+          { kind: "audiooutput", deviceId: "out-1", label: "MacBook Pro Speakers" },
+        ],
+      },
+      permissions: { query: async () => ({ state: "prompt" }) },
+    },
+    AudioContext: FakeAudioContext,
+    AudioWorkletNode: FakeNode,
+    MediaStream: FakeStream,
+    Blob: class {},
+    URL: { createObjectURL: () => "blob:x" },
+    Event: class { constructor(type) { this.type = type; } },
+    DOMException: class extends Error { constructor(msg, name) { super(msg); this.name = name; } },
+    atob: (s) => Buffer.from(s, "base64").toString("binary"),
+    setInterval: () => 0,
+    clearInterval: () => {},
+    Date,
+    Promise,
+    Object,
+    Math,
+    Int16Array,
+    String,
+    Array,
+  };
+  win.window = win;
+  vm.runInNewContext(fs.readFileSync(path.join(ROOT, "app/Resources/mic.js"), "utf8"), win);
+  return { win, asked, gum, state };
+}
+
+test("mic.js is inert without the app's sottoMic handler", async () => {
+  const { win } = loadMic({ handler: false });
+  assert.equal(win.__sottoMicFeed, undefined);
+  const list = await win.navigator.mediaDevices.enumerateDevices();
+  assert.equal(list[1].deviceId, "webkit-id");
+});
+
+test("mic.js lists the app's inputs (labelled) and keeps WebKit's outputs", async () => {
+  const { win } = loadMic();
+  const list = JSON.parse(JSON.stringify((await win.navigator.mediaDevices.enumerateDevices()).map((d) => [d.kind, d.deviceId, d.label])));
+  assert.deepEqual(list, [
+    ["audioinput", "default", "Default - AirPods Max"],
+    ["audioinput", "sotto-a", "AirPods Max"],
+    ["audioinput", "sotto-b", "MacBook Pro Microphone"],
+    ["audiooutput", "out-1", "MacBook Pro Speakers"],
+  ]);
+  assert.equal((await win.navigator.permissions.query({ name: "microphone" })).state, "granted");
+});
+
+test("mic.js webkit plan: WebKit capture of the same device by label, reported under the app's id", async () => {
+  const { win, gum } = loadMic();
+  const s = await win.navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, deviceId: { exact: "sotto-b" } } });
+  assert.deepEqual(JSON.parse(JSON.stringify(gum[0].audio)), { echoCancellation: true, deviceId: { exact: "webkit-id" } });
+  const st = s.getAudioTracks()[0].getSettings();
+  assert.equal(st.deviceId, "sotto-b");
+  assert.equal(st.echoCancellation, true);
+  assert.equal(st.sottoSource, "webkit");
+});
+
+test("mic.js native plan: an app capture behind a worklet track; a route flip ends it", async () => {
+  const { win, gum, asked, state } = loadMic({ plan: { mode: "native", device: { id: "sotto-b", label: "MacBook Pro Microphone" } } });
+  const s = await win.navigator.mediaDevices.getUserMedia({ audio: { deviceId: { exact: "sotto-b" } } });
+  assert.equal(gum.length, 0, "WebKit capture never opened");
+  assert.deepEqual({ ...state.started[0] }, { op: "start", id: 1, device: "sotto-b" });
+  const t = s.getAudioTracks()[0];
+  assert.equal(t.label, "MacBook Pro Microphone");
+  assert.deepEqual([t.getSettings().echoCancellation, t.getSettings().sottoSource, t.getSettings().deviceId], [false, "native", "sotto-b"]);
+  // Same mode, another device: moved under the same track.
+  state.plan = { mode: "native", device: { id: "sotto-c", label: "USB Mic" } };
+  await win.__sottoMicRoute();
+  assert.equal(state.started.length, 2);
+  assert.equal(t.readyState, "live");
+  assert.equal(t.label, "USB Mic");
+  // Speakers now: the track ends (the page re-opens the mic) and the app capture stops.
+  let ended = 0;
+  t.onended = () => ended++;
+  state.plan = { mode: "webkit", device: { id: "sotto-b", label: "MacBook Pro Microphone" } };
+  await win.__sottoMicRoute();
+  assert.equal(t.readyState, "ended");
+  assert.equal(ended, 1);
+  assert.ok(asked.some((m) => m.op === "stop" && m.id === 1));
+});
+
+test("mic.js: an exact device the app does not have is OverconstrainedError (the page then retries)", async () => {
+  const { win } = loadMic({ plan: { error: "NotFoundError" } });
+  await assert.rejects(win.navigator.mediaDevices.getUserMedia({ audio: { deviceId: { exact: "gone" } } }), { name: "OverconstrainedError" });
+});

@@ -108,6 +108,68 @@ describe("desktop app", { skip: SKIP }, () => {
     if (j.input) assert.equal(typeof j.input.bluetooth, "boolean");
   });
 
+  test("--audio-route reports what the chooser needs for the native mic", () => {
+    const j = JSON.parse(spawnSync(EXE, ["--audio-route"], { encoding: "utf8", timeout: 10_000 }).stdout);
+    assert.equal(typeof j.builtin_input, "boolean");
+    assert.equal(j.native_mic, true);
+    if (j.output) assert.equal(typeof j.output.headphones, "boolean");
+  });
+
+  test("--mic-plan-eval: native on headphones (built-in mic instead of a Bluetooth default), WebKit on speakers", () => {
+    const plan = (o) => JSON.parse(spawnSync(EXE, ["--mic-plan-eval", JSON.stringify(o)], { encoding: "utf8", timeout: 10_000 }).stdout);
+    const airpods = { name: "AirPods Max", transport: "bluetooth" };
+    const builtin = { name: "MacBook Pro Microphone", transport: "builtin" };
+    const zoom = { name: "ZoomAudioDevice", transport: "virtual" };
+    const hp = { bluetooth: true, headphones: true };
+    const spk = { bluetooth: false, headphones: false };
+    assert.deepEqual(plan({ output: hp, inputs: [airpods, zoom, builtin], default: 0 }), { mode: "native", device: "MacBook Pro Microphone", reason: "headphones" });
+    assert.deepEqual(plan({ output: spk, inputs: [airpods, builtin], default: 1 }), { mode: "webkit", device: "MacBook Pro Microphone", reason: "speakers" });
+    // Wired headphones (built-in jack) count as headphones too.
+    assert.equal(plan({ output: { bluetooth: false, headphones: true }, inputs: [builtin], default: 0 }).mode, "native");
+    // An explicit choice wins, even the headset mic (the user asked for it).
+    assert.equal(plan({ output: hp, inputs: [airpods, builtin], default: 0, requested: "AirPods Max" }).device, "AirPods Max");
+    // Only a Bluetooth mic: it is used (nothing else can hear the user).
+    assert.equal(plan({ output: hp, inputs: [airpods], default: 0 }).device, "AirPods Max");
+    assert.deepEqual(plan({ output: hp, inputs: [builtin], default: 0, requested: "gone" }), { error: "NotFoundError" });
+    assert.equal(plan({ pref: "webkit", output: hp, inputs: [builtin], default: 0 }).mode, "webkit");
+    assert.equal(plan({ pref: "native", output: spk, inputs: [builtin], default: 0 }).mode, "native");
+    assert.equal(plan({ output: hp, inputs: [], default: 0 }).mode, "webkit", "no input: WebKit reports the error");
+  });
+
+  test("native mic launch: the app's capture feeds the page (fixture), WebRTC offer works, no capture leaks", { timeout: 60_000 }, async () => {
+    const log = path.join(tmp, "native.jsonl");
+    const child = spawn(EXE, ["--port", String(port), "--k", daemon.issueLaunchCode(), "--data-dir", path.join(tmp, "data"),
+      "--debug-log", log, "--test", "--probe-media", "--exit-after", "8"], {
+      stdio: "ignore",
+      env: { ...process.env, SOTTO_APP_MIC: "native", SOTTO_APP_MIC_FIXTURE: path.join(ROOT, "test/fixtures/ask-files.wav"), SOTTO_APP_MIC_FIXTURE_LEAD_MS: "0" },
+    });
+    const exited = new Promise((r) => child.on("exit", (c) => r(c)));
+    assert.equal(await Promise.race([exited, sleep(30_000).then(() => "timeout")]), 0);
+    const ev = readLog(log);
+    const find = (name, pred = () => true) => ev.find((e) => e.ev === name && pred(e));
+    assert.equal(find("mic_pref")?.pref, "native");
+    const probe = find("probe")?.result;
+    assert.ok(probe && !probe.error, probe?.error);
+    assert.deepEqual(probe.offer, { opus: true, datachannel: true, audio: true });
+    assert.equal(probe.withAEC.settings.sottoSource, "native");
+    assert.equal(probe.withAEC.settings.echoCancellation, false);
+    assert.equal(probe.withAEC.label, "Test fixture");
+    assert.ok(find("bridge", (e) => e.kind === "mic" && e.ok === true && e.source === "native"), "bridge sees a native mic");
+    assert.ok(!find("media_permission"), "WebKit capture never requested");
+    const hidden = find("probe_hidden")?.result;
+    assert.ok(hidden && !hidden.error, hidden?.error);
+    assert.ok(hidden.peakRms > 0.02, `fixture speech reaches the page (peak RMS ${hidden.peakRms})`);
+    assert.ok(hidden.gumMs < 1000, `${hidden.gumMs} ms`);
+    const starts = ev.filter((e) => e.ev === "native_mic_start").length;
+    const stops = ev.filter((e) => e.ev === "native_mic_stop").length;
+    assert.ok(starts >= 3 && starts === stops, `${starts} starts, ${stops} stops`);
+    const stats = ev.filter((e) => e.ev === "native_mic_stats" && e.transportP95Ms != null);
+    assert.ok(stats.length > 0, "latency stats reported");
+    const p95 = Math.max(...stats.map((e) => e.transportP95Ms));
+    assert.ok(p95 < 60, `app -> page transport p95 ${p95} ms`);
+    console.log(`# native mic: gUM ${hidden.gumMs} ms, transport p95 ${p95} ms, peak RMS ${hidden.peakRms.toFixed(3)}`);
+  });
+
   test("direct launch: loads the page with the launch code, gets status over SSE, WebRTC works", { timeout: 60_000 }, async () => {
     const log = path.join(tmp, "direct.jsonl");
     const code = daemon.issueLaunchCode();

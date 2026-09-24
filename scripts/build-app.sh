@@ -110,7 +110,7 @@ while IFS= read -r f; do SOURCES+=("$f"); done < <(find "$ROOT/app/Sources" -nam
 [[ ${#SOURCES[@]} -gt 0 ]] || fail "no Swift sources in app/Sources"
 
 if ! "$SWIFTC" -O -swift-version 5 ${SDK:+-sdk "$SDK"} -target "$(uname -m)-apple-macos13.0" \
-    -module-name Sotto -framework AppKit -framework WebKit -framework Carbon -framework CoreAudio \
+    -module-name Sotto -framework AppKit -framework WebKit -framework Carbon -framework CoreAudio -framework AudioToolbox -framework AVFoundation \
     -o "$C/MacOS/$EXE_NAME" "${SOURCES[@]}" > "$STAGE/swiftc.log" 2>&1; then
   cat "$STAGE/swiftc.log" >&2
   fail "swiftc failed (see the output above)"

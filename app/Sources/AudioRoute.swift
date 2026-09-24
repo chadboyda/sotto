@@ -7,63 +7,47 @@
 // hands-free (SCO) profile for the whole voice session, even though the page
 // then picks the built-in mic (measured on macOS 26: AirPods Max output
 // 48 kHz -> 24 kHz, and the log shows "changing BT output device's profile to
-// BluetoothFormatSCO"). Chrome does not do this, so `auto` prefers Chrome then.
+// BluetoothFormatSCO"). Chrome does not do this. Since the native mic
+// (NativeMic.swift) the app avoids it on headphones, so `auto` needs Chrome
+// only when there is no other input or the output is not headphones.
 import CoreAudio
 import Foundation
 
 struct AudioDeviceSummary {
     var name: String
     var bluetooth: Bool
+    var headphones: Bool?
 
-    var dictionary: [String: Any] { ["name": name, "bluetooth": bluetooth] }
+    var dictionary: [String: Any] {
+        var d: [String: Any] = ["name": name, "bluetooth": bluetooth]
+        if let h = headphones { d["headphones"] = h }
+        return d
+    }
 }
 
 struct AudioRoute {
     var input: AudioDeviceSummary?
     var output: AudioDeviceSummary?
+    /// A non-Bluetooth, non-virtual input exists (normally the built-in mic).
+    var builtinInput: Bool
+    /// The app captures natively on headphones (MicController.pref != webkit),
+    /// so a Bluetooth default input no longer forces the hands-free profile.
+    var nativeMic: Bool
 
     var dictionary: [String: Any] {
-        ["input": input?.dictionary ?? NSNull(), "output": output?.dictionary ?? NSNull()]
+        ["input": input?.dictionary ?? NSNull(), "output": output?.dictionary ?? NSNull(),
+         "builtin_input": builtinInput, "native_mic": nativeMic]
     }
 
-    var json: String {
-        guard let d = try? JSONSerialization.data(withJSONObject: dictionary, options: [.sortedKeys]),
-              let s = String(data: d, encoding: .utf8) else { return "{}" }
-        return s
-    }
+    var json: String { jsonString(dictionary) }
 
-    static func current() -> AudioRoute {
-        AudioRoute(input: summary(defaultDevice(kAudioHardwarePropertyDefaultInputDevice)),
-                   output: summary(defaultDevice(kAudioHardwarePropertyDefaultOutputDevice)))
-    }
-
-    private static func summary(_ dev: AudioDeviceID?) -> AudioDeviceSummary? {
-        guard let dev = dev else { return nil }
-        let transport = u32Prop(dev, kAudioDevicePropertyTransportType) ?? 0
-        let bt = transport == kAudioDeviceTransportTypeBluetooth || transport == kAudioDeviceTransportTypeBluetoothLE
-        return AudioDeviceSummary(name: stringProp(dev, kAudioObjectPropertyName) ?? "", bluetooth: bt)
-    }
-
-    private static func defaultDevice(_ sel: AudioObjectPropertySelector) -> AudioDeviceID? {
-        var addr = AudioObjectPropertyAddress(mSelector: sel, mScope: kAudioObjectPropertyScopeGlobal, mElement: kAudioObjectPropertyElementMain)
-        var id = AudioDeviceID(0)
-        var size = UInt32(MemoryLayout<AudioDeviceID>.size)
-        let err = AudioObjectGetPropertyData(AudioObjectID(kAudioObjectSystemObject), &addr, 0, nil, &size, &id)
-        return err == noErr && id != 0 ? id : nil
-    }
-
-    private static func stringProp(_ d: AudioObjectID, _ sel: AudioObjectPropertySelector) -> String? {
-        var addr = AudioObjectPropertyAddress(mSelector: sel, mScope: kAudioObjectPropertyScopeGlobal, mElement: kAudioObjectPropertyElementMain)
-        var value: Unmanaged<CFString>?
-        var size = UInt32(MemoryLayout<Unmanaged<CFString>?>.size)
-        guard AudioObjectGetPropertyData(d, &addr, 0, nil, &size, &value) == noErr, let v = value else { return nil }
-        return v.takeRetainedValue() as String
-    }
-
-    private static func u32Prop(_ d: AudioObjectID, _ sel: AudioObjectPropertySelector) -> UInt32? {
-        var addr = AudioObjectPropertyAddress(mSelector: sel, mScope: kAudioObjectPropertyScopeGlobal, mElement: kAudioObjectPropertyElementMain)
-        var v: UInt32 = 0
-        var size = UInt32(MemoryLayout<UInt32>.size)
-        return AudioObjectGetPropertyData(d, &addr, 0, nil, &size, &v) == noErr ? v : nil
+    static func current(env: [String: String] = ProcessInfo.processInfo.environment) -> AudioRoute {
+        let inputs = Devices.inputs()
+        let def = Devices.defaultDevice(input: true)
+        let input = inputs.first(where: { $0.id == def }).map { AudioDeviceSummary(name: $0.name, bluetooth: $0.bluetooth) }
+        let output = Devices.output().map { AudioDeviceSummary(name: $0.name, bluetooth: $0.bluetooth, headphones: $0.headphones) }
+        let pref = (env["SOTTO_APP_MIC"] ?? Prefs.store.string(forKey: MicController.prefKey) ?? "auto").lowercased()
+        return AudioRoute(input: input, output: output, builtinInput: inputs.contains { !$0.bluetooth && !$0.virtual },
+                          nativeMic: pref != "webkit")
     }
 }

@@ -52,7 +52,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, PanelControllerDelegat
                            "os": ProcessInfo.processInfo.operatingSystemVersionString])
         let bridge = Bundle.main.url(forResource: "bridge", withExtension: "js").flatMap { try? String(contentsOf: $0, encoding: .utf8) } ?? ""
         if bridge.isEmpty { log.log("bridge_missing") }
-        panel = PanelController(bridgeSource: bridge, log: log, mockCapture: options.mockCapture)
+        let micJS = Bundle.main.url(forResource: "mic", withExtension: "js").flatMap { try? String(contentsOf: $0, encoding: .utf8) } ?? ""
+        if micJS.isEmpty { log.log("mic_js_missing") }
+        let mic = MicController(log: log, testMode: options.testMode)
+        log.log("mic_pref", ["pref": mic.pref, "echo_sim_db": mic.echoSimDb ?? NSNull()])
+        panel = PanelController(bridgeSource: bridge, micSource: micJS, mic: mic, log: log, mockCapture: options.mockCapture)
+        mic.startRouteWatch()
         panel.delegate = self
         log.log("audio_route", AudioRoute.current().dictionary)
         setupStatusItem()
@@ -146,7 +151,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, PanelControllerDelegat
         if log.enabled && kind != "speaking" {
             // State only: the bridge never sends captions or tokens.
             log.log("bridge", m.filter { ["kind", "state", "command", "muted", "busy", "error", "ok", "name", "live", "reason", "open",
-                                          "echoCancellation", "noiseSuppression", "autoGainControl", "sampleRate", "level", "code", "project"].contains($0.key) })
+                                          "echoCancellation", "noiseSuppression", "autoGainControl", "sampleRate", "level", "code", "project", "source"].contains($0.key) })
         }
         if kind == "command", (m["command"] as? String) == "close_window" {
             // Let the page tear down (it calls window.close() 150 ms later; that
