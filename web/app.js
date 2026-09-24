@@ -20,6 +20,7 @@ const SSE_DOWN_LABEL_MS = 1_500; // grace before the header says "Disconnected"
 const CLOSE_WAIT_MS = 2_000; // how long a page-initiated close waits for `session.closed`
 const MUTE_ACK_MS = 3_000;
 const BANNER_MS = 8_000;
+const BANNER_LEAVE_MS = 160; // styles.css .banner[data-leaving] runs 150 ms
 const KEY_INPUT = "clv.inputDeviceId";
 const KEY_OUTPUT = "clv.outputDeviceId";
 /** Post the wake latency report at the first model output, or after this long. */
@@ -2508,15 +2509,28 @@ function dismissBanner(b) {
   renderBanners();
 }
 
+// The banner on screen, so a re-render of the same one (a "+1" count change) does
+// not replay its enter animation.
+let bannerShown = "";
+
 function renderBanners() {
   const b = banners[0];
   if (!b) {
-    el.banners.replaceChildren();
+    bannerShown = "";
+    // A short, soft exit (styles.css .banner[data-leaving]), then it goes.
+    const cur = el.banners.firstElementChild;
+    if (!cur || cur.dataset.leaving === "true") return;
+    cur.dataset.leaving = "true";
+    setTimeout(() => {
+      if (cur.dataset.leaving === "true") cur.remove();
+    }, BANNER_LEAVE_MS);
     return;
   }
   const div = document.createElement("div");
   div.className = "banner";
   div.dataset.level = b.level;
+  div.dataset.enter = String(b.key !== bannerShown);
+  bannerShown = b.key;
   div.setAttribute("role", b.level === "error" ? "alert" : "status");
   // Static markup only; the banner text itself goes in through textContent.
   div.innerHTML = '<svg aria-hidden="true"><use href="#i-alert"/></svg>';
@@ -2593,8 +2607,9 @@ function renderSamples() {
       b.type = "button";
       b.className = "voice-chip";
       b.dataset.voice = name;
-      b.innerHTML = '<svg aria-hidden="true"><use href="#i-play"/></svg><span></span>';
-      b.querySelector("span").textContent = capName(name);
+      // Play and stop both stay in the DOM and crossfade on data-state (styles.css).
+      b.innerHTML = '<span class="chip-icons" aria-hidden="true"><svg class="chip-play"><use href="#i-play"/></svg><svg class="chip-stop"><use href="#i-stop"/></svg></span><span class="chip-name"></span>';
+      b.querySelector(".chip-name").textContent = capName(name);
       b.addEventListener("click", () => playSample(name));
       return b;
     }));
@@ -2606,7 +2621,6 @@ function renderSamples() {
     b.setAttribute("aria-current", String(name === v.current));
     b.setAttribute("aria-label", state === "playing" ? `Stop the ${capName(name)} sample` : state === "loading" ? `Loading the ${capName(name)} sample` : `Play a sample of ${capName(name)}${name === v.current ? " (current voice)" : ""}`);
     b.setAttribute("aria-busy", String(state === "loading"));
-    b.querySelector("use").setAttribute("href", state === "playing" ? "#i-stop" : "#i-play");
     b.disabled = !S.token;
   }
 }
@@ -3023,3 +3037,6 @@ renderCaptions();
 // resize cannot loop.
 if (typeof ResizeObserver === "function") new ResizeObserver(() => fitCaptions()).observe(el.captionsPanel);
 startEvents();
+// Enter animations (banners, cards, Claude's lines) only once the first render has
+// settled: whatever is on screen when the window opens is simply there.
+setTimeout(() => requestAnimationFrame(() => (document.documentElement.dataset.motion = "on")), 600);

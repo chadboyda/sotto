@@ -148,7 +148,15 @@ export function createDial(canvas, opts = {}) {
   function readColors() {
     const cs = getComputedStyle(box);
     const v = (name) => parseColor(cs.getPropertyValue(name));
+    // Rest-state ink strength per theme (styles.css): the light page wants a calmer
+    // bezel and outer ring than the dark one, where the same alpha reads as texture.
+    const num = (name, d) => {
+      const n = parseFloat(cs.getPropertyValue(name));
+      return Number.isFinite(n) ? n : d;
+    };
     colors = {
+      bezelA: num("--dial-bezel-alpha", 0.45),
+      restA: num("--dial-rest-alpha", 0.9),
       live: v("--live"),
       voice: v("--voice"),
       voiceRest: v("--voice-rest"),
@@ -231,7 +239,7 @@ export function createDial(canvas, opts = {}) {
       }
       g.lineCap = "butt";
       g.lineWidth = Math.max(0.75, 0.9 * scale);
-      g.strokeStyle = rgba(colors.fg3, 0.45);
+      g.strokeStyle = rgba(colors.fg3, colors.bezelA);
       g.stroke();
     }
     // Work chase: 16 bezel ticks lit in blue, head at 12 o'clock, tail fading
@@ -484,7 +492,7 @@ export function createDial(canvas, opts = {}) {
     }
     ctx.lineWidth = Math.max(0.75, 1.1 * scale);
     // Under the envelope the hairlines are texture, not weight.
-    ctx.strokeStyle = rgba(outer, dormantA * (voice > 0 ? 0.3 : 0.9));
+    ctx.strokeStyle = rgba(outer, dormantA * (voice > 0 ? 0.3 : c.restA));
     ctx.stroke();
     if (voice > 0.01) {
       ctx.beginPath();
