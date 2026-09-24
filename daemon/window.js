@@ -8,7 +8,7 @@ import { createHash } from "node:crypto";
 import { spawn as spawnCb, execFile as execFileCb } from "node:child_process";
 import { CHROME_APP, createChrome } from "./chrome.js";
 import { WINDOW_MODES } from "./config.js";
-import { RELEASE_BASE, pluginVersion, readDownloadStamp, shouldDownload } from "./appfetch.js";
+import { INSTALL_STAMP, RELEASE_BASE, pluginVersion, readDownloadStamp, shouldDownload } from "./appfetch.js";
 
 export const APP_BUNDLE = "Sotto.app";
 export const APP_EXE = "Sotto";
@@ -20,6 +20,17 @@ export const APP_PAGE_TIMEOUT_MS = 15_000;
 export const APP_TEST_ENV = Object.freeze(["SOTTO_APP_DEBUG_LOG", "SOTTO_APP_MIC", "SOTTO_APP_MIC_FIXTURE", "SOTTO_APP_MIC_FIXTURE_LEAD_MS", "SOTTO_APP_ECHO_SIM_DB"]);
 /** How long a measured audio route stays valid for `auto`. */
 export const ROUTE_TTL_MS = 60_000;
+/**
+ * How long open() holds the window for an app install in flight before it
+ * opens Chrome instead (the install carries on; the next /talk uses the app).
+ * The signed release (about 350 KB) installs in a few seconds; `app` (asked
+ * for explicitly) also waits out a local build.
+ */
+export const INSTALL_WAIT_MS = Object.freeze({ auto: 15_000, app: 120_000 });
+/** Poll interval while waiting on an install another process started. */
+export const INSTALL_POLL_MS = 1_000;
+/** After an install ended without an app, this daemon does not start another by itself for this long (/talk app does). */
+export const INSTALL_RETRY_MS = 10 * 60_000;
 
 export function appPaths(dataDir, pluginRoot) {
   const dir = path.join(dataDir, "app");
@@ -28,6 +39,7 @@ export function appPaths(dataDir, pluginRoot) {
     dir, bundle,
     exe: path.join(bundle, "Contents", "MacOS", APP_EXE),
     stamp: path.join(dir, "build.json"),
+    installStamp: path.join(dir, INSTALL_STAMP),
     lock: path.join(dir, "build.lock"),
     buildLog: path.join(dataDir, "logs", "app-build.log"),
     script: pluginRoot ? path.join(pluginRoot, "scripts", "build-app.sh") : null,
@@ -157,6 +169,31 @@ export function chooseWindow({ want, platform, app, chromeExists, route, appBrok
 }
 
 /**
+ * Why the app is not installed, for people (SPEC §6.16): from install.json
+ * (the installer's own verdict), else the failed build stamp, else the
+ * installer's exit. Returns {reason, message} or null when nothing failed.
+ */
+export function installFailure({ dataDir, pluginRoot, hash, exitCode = null, fsImpl = fs }) {
+  const p = appPaths(dataDir, pluginRoot);
+  const read = (f) => { try { return JSON.parse(fsImpl.readFileSync(f, "utf8")); } catch { return null; } };
+  const rec = read(p.installStamp);
+  if (rec && rec.ok === false && (!hash || rec.hash === hash)) {
+    return { reason: String(rec.reason || "failed"), message: String(rec.message || rec.reason || "unknown error") };
+  }
+  const b = read(p.stamp);
+  if (b && b.ok === false && (!hash || b.hash === hash)) return { reason: "build_failed", message: `the local build failed: ${b.error || "unknown error"}` };
+  if (exitCode !== null && exitCode !== undefined) {
+    return { reason: "installer_exit", message: `the installer exited (${exitCode}) without installing; see logs/app-build.log` };
+  }
+  return null;
+}
+
+/** Wait for an install in flight instead of opening Chrome? Pure. */
+export function shouldWaitForInstall({ want, platform, appBroken, installing, waitMs }) {
+  return (want === "app" || want === "auto") && platform === "darwin" && !appBroken && !!installing && waitMs > 0;
+}
+
+/**
  * createWindow({dataDir, port, pluginRoot, env, platform, spawn, execFile, fsImpl, exists, kill, log,
  *               launchCode, clock, chrome, getPreference, pageConnected, wantsWindow})
  * → {open(): {mode}, kill(): Promise<number>, notify(text)}, the same surface as createChrome().
@@ -165,6 +202,7 @@ export function createWindow({
   dataDir, port, pluginRoot, env = process.env, platform = process.platform, spawn = spawnCb, execFile = execFileCb,
   fsImpl = fs, exists = fs.existsSync, kill = process.kill.bind(process), log, launchCode, clock,
   chrome, getPreference = () => undefined, pageConnected = () => false, wantsWindow = () => true,
+  installWaitMs, onInstallResult = () => {},
 } = {}) {
   const p = appPaths(dataDir, pluginRoot);
   const browser = chrome || createChrome({ dataDir, port, env, spawn, execFile, exists, kill, log, launchCode });
@@ -174,6 +212,26 @@ export function createWindow({
   let appLaunched = false;
   let watchdog = null;
   let routePending = false;
+  let install = null; // {pid, at}: the installer this daemon spawned, while it runs
+  let installError = null; // {reason, message, at}: the last install that ended without an app
+  let pending = null; // {want, deadline, poll}: open() waiting for that install
+  const nowMs = () => (timers.now ? timers.now() : Date.now());
+  const waitFor = (want) => {
+    const envMs = Number(env.SOTTO_APP_INSTALL_WAIT_MS);
+    if (installWaitMs && typeof installWaitMs === "object") return installWaitMs[want] ?? 0;
+    if (typeof installWaitMs === "number") return installWaitMs;
+    if (env.SOTTO_APP_INSTALL_WAIT_MS !== undefined && Number.isFinite(envMs) && envMs >= 0) return envMs;
+    return INSTALL_WAIT_MS[want] ?? 0;
+  };
+  const buildState = () => appBuildState({ pluginRoot, dataDir, fsImpl, kill });
+
+  /** Append one line to logs/app-build.log (the installer writes there too). */
+  function buildLogLine(text) {
+    try {
+      fsImpl.mkdirSync(path.dirname(p.buildLog), { recursive: true, mode: 0o700 });
+      fsImpl.appendFileSync(p.buildLog, `${new Date(nowMs()).toISOString()} daemon: ${text}\n`, { mode: 0o600 });
+    } catch { /* best effort */ }
+  }
 
   const detached = (cmd, args, opts = {}) => {
     try {
@@ -187,43 +245,130 @@ export function createWindow({
     }
   };
 
-  function startBuild() {
-    if (!p.script || !exists(p.script)) return false;
-    let fd = "ignore";
+  /** Open logs/app-build.log for a child's stdout/stderr, or "ignore". */
+  function logFd() {
     try {
       fsImpl.mkdirSync(path.dirname(p.buildLog), { recursive: true, mode: 0o700 });
-      fd = fsImpl.openSync(p.buildLog, "a", 0o600);
-    } catch { /* log to nowhere */ }
+      return fsImpl.openSync(p.buildLog, "a", 0o600);
+    } catch {
+      return "ignore";
+    }
+  }
+
+  /** Watch a spawned installer: when it exits, find out whether the app is there. */
+  function track(child, kind) {
+    if (!child) return false;
+    install = { pid: child.pid ?? null, at: nowMs(), kind };
+    child.on?.("exit", (code, signal) => installEnded(code ?? (signal ? `signal ${signal}` : null)));
+    child.on?.("error", (e) => { buildLogLine(`installer spawn error: ${e.message}`); installEnded(`spawn error: ${e.message}`); });
+    return true;
+  }
+
+  function installEnded(exitCode) {
+    if (!install) return;
+    const took = Math.round((nowMs() - install.at) / 1000);
+    install = null;
+    const st = buildState();
+    if (st.state === "ready") {
+      installError = null;
+      log?.info("app.install_ready", { seconds: took });
+      onInstallResult({ ok: true });
+    } else if (st.state === "building") {
+      return; // another installer took over; the pending wait polls it
+    } else {
+      const f = installFailure({ dataDir, pluginRoot, hash: st.hash, exitCode, fsImpl }) || { reason: "installer_exit", message: `the installer exited (${exitCode}) without installing; see logs/app-build.log` };
+      installError = { ...f, at: nowMs() };
+      log?.warn("app.install_failed", { reason: f.reason, message: f.message, code: exitCode, state: st.state });
+      buildLogLine(`install failed: ${f.message}`);
+      onInstallResult({ ok: false, ...f });
+    }
+    settlePending();
+  }
+
+  function startBuild() {
+    if (!p.script || !exists(p.script)) return false;
+    const fd = logFd();
+    buildLogLine("starting the local build (scripts/build-app.sh)");
     // Detached with no pipe to us: a 20 s swiftc build never holds /control,
     // the hook, or the daemon's exit.
     const child = detached("/bin/bash", [p.script, "--out", p.dir, "--quiet"], { stdio: ["ignore", fd, fd] });
     if (typeof fd === "number") { try { fsImpl.closeSync(fd); } catch { /* ignore */ } }
     log?.info("app.build_start", { pid: child?.pid ?? null });
-    return !!child;
+    return track(child, "build");
   }
 
   /** Download the release (then build), or just build; detached either way. */
-  function startInstall({ allowBuild = true, hash } = {}) {
+  function startInstall({ allowBuild = true, hash, force = false } = {}) {
+    if (install) return true; // ours is still running
+    if (!force && installError && nowMs() - installError.at < INSTALL_RETRY_MS) return false;
     const plan = installPlan({
       allowBuild, env, version: pluginVersion(pluginRoot, fsImpl), hash,
-      stamp: readDownloadStamp(p.dir, fsImpl), now: timers.now ? timers.now() : Date.now(),
+      stamp: readDownloadStamp(p.dir, fsImpl), now: nowMs(),
     });
     if (plan === "build") return startBuild();
     if (plan !== "download" || !p.fetcher || !exists(p.fetcher)) return false;
-    let fd = "ignore";
-    try {
-      fsImpl.mkdirSync(path.dirname(p.buildLog), { recursive: true, mode: 0o700 });
-      fd = fsImpl.openSync(p.buildLog, "a", 0o600);
-    } catch { /* log to nowhere */ }
+    const fd = logFd();
     const args = [p.fetcher, "--out", p.dir, "--plugin-root", pluginRoot, "--hash", hash];
     const base = String(env.SOTTO_RELEASE_BASE || "").trim();
     if (base && base !== RELEASE_BASE) args.push("--base", base);
     if (!allowBuild) args.push("--no-build");
-    // Same runtime as the daemon (Node, or Bun as its fallback).
-    const child = detached(process.execPath, args, { stdio: ["ignore", fd, fd] });
+    buildLogLine(`starting the installer (${allowBuild ? "signed release, else local build" : "signed release only"})`);
+    // Same runtime as the daemon (Node, or Bun as its fallback), from the
+    // plugin root. appfetch.js compares real paths to know it is the main
+    // module, so a symlinked install (~/.claude/skills/sotto) runs it too.
+    const child = detached(process.execPath, args, { stdio: ["ignore", fd, fd], cwd: pluginRoot, env: env === process.env ? process.env : { ...process.env, ...env } });
     if (typeof fd === "number") { try { fsImpl.closeSync(fd); } catch { /* ignore */ } }
     log?.info("app.download_start", { pid: child?.pid ?? null, build_fallback: allowBuild });
-    return !!child;
+    return track(child, "download");
+  }
+
+  /**
+   * Start an install when the app is missing, stale, or failed with a download
+   * still to try. `force` (/talk app) also retries a failed build and a
+   * failed download. Returns the build state after the decision.
+   */
+  function ensure({ force = false } = {}) {
+    if (platform !== "darwin") return { state: "unsupported" };
+    const st = buildState();
+    if (st.state === "missing" || st.state === "stale") startInstall({ hash: st.hash, force });
+    else if (st.state === "failed") {
+      if (force) {
+        for (const f of [p.stamp, path.join(p.dir, "download.json")]) { try { fsImpl.rmSync(f, { force: true }); } catch { /* ignore */ } }
+        startInstall({ hash: st.hash, force });
+      } else startInstall({ allowBuild: false, hash: st.hash });
+    }
+    return buildState();
+  }
+
+  /** An install in flight: ours, or another process's (build.lock names a live pid). */
+  const installing = () => !!install || buildState().state === "building";
+
+  function settlePending() {
+    if (!pending) return;
+    const want = pending.want;
+    if (pending.deadline) timers.clearTimeout(pending.deadline);
+    if (pending.poll) timers.clearTimeout(pending.poll);
+    pending = null;
+    if (!wantsWindow()) return;
+    openNow({ noWait: true, wantOverride: want });
+  }
+
+  function waitForInstall(want) {
+    const ms = waitFor(want);
+    log?.info("app.wait_install", { want, ms });
+    pending = { want, deadline: null, poll: null };
+    pending.deadline = timers.setTimeout(() => {
+      if (!pending) return;
+      log?.info("app.wait_timeout", { want, ms });
+      settlePending();
+    }, ms);
+    const poll = () => {
+      if (!pending) return;
+      // An installer we did not spawn (a previous daemon's): no exit event.
+      if (!install && buildState().state !== "building") return settlePending();
+      pending.poll = timers.setTimeout(poll, INSTALL_POLL_MS);
+    };
+    pending.poll = timers.setTimeout(poll, INSTALL_POLL_MS);
   }
 
   function fallback(reason) {
@@ -268,41 +413,88 @@ export function createWindow({
     });
   }
 
+  function openNow({ noWait = false, wantOverride } = {}) {
+    const want = wantOverride || resolveWant({ env, preference: getPreference() });
+    const appWanted = want === "app" || want === "auto";
+    const app = appWanted && platform === "darwin" ? buildState() : null;
+    const chromeExists = exists(CHROME_APP);
+    const c = chooseWindow({ want, platform, app, chromeExists, route: freshRoute(), appBroken });
+    log?.info("window.choose", { want, mode: c.mode, reason: c.reason, app: app?.state ?? null });
+    if (c.build) startInstall({ hash: app.hash });
+    else if (app?.state === "failed") startInstall({ allowBuild: false, hash: app.hash });
+    if (c.mode === "none") return { mode: "none" };
+    if (c.mode !== "app") {
+      if (!noWait && shouldWaitForInstall({ want, platform, appBroken, installing: installing(), waitMs: waitFor(want) })) {
+        if (!pending) waitForInstall(want);
+        return { mode: "app", pending: true };
+      }
+      const r = browser.open(c.mode);
+      const failed = app ? api.appStatus() : null;
+      return failed?.state === "failed" ? { ...r, installError: { reason: failed.reason, message: failed.message } } : r;
+    }
+    if (!c.needRoute) { launchApp(); return { mode: "app" }; }
+    if (routePending) return { mode: "app" };
+    routePending = true;
+    measureRoute((value) => {
+      routePending = false;
+      if (!wantsWindow()) return;
+      const again = chooseWindow({ want, platform, app, chromeExists, route: value || { input: { bluetooth: false } }, appBroken });
+      log?.info("window.choose", { want, mode: again.mode, reason: again.reason, route: value ? { input_bt: !!value.input?.bluetooth, output_bt: !!value.output?.bluetooth, headphones: !!value.output?.headphones, native_mic: !!value.native_mic } : null });
+      if (again.mode === "app") launchApp();
+      else browser.open(again.mode);
+    });
+    return { mode: "app" };
+  }
+
   const freshRoute = () => (route && (timers.now ? timers.now() : Date.now()) - route.at < ROUTE_TTL_MS ? route.value : undefined);
 
   const api = {
     get url() { return browser.url; },
     get launched() { return appLaunched || browser.launched; },
 
-    /** Open the voice window. Returns {mode} (for `auto`, the provisional one). */
-    open() {
+    /**
+     * Open the voice window. Returns {mode} (for `auto`, the provisional
+     * one), plus {pending: true} while it waits for an app install, and
+     * {installError} when the app could not be installed.
+     */
+    open() { return openNow(); },
+
+    /** Start installing the app if it is missing (daemon start, every /talk); see ensure(). */
+    ensureInstalled(opts = {}) {
       const want = resolveWant({ env, preference: getPreference() });
-      const appWanted = want === "app" || want === "auto";
-      const app = appWanted && platform === "darwin" ? appBuildState({ pluginRoot, dataDir, fsImpl, kill }) : null;
-      const chromeExists = exists(CHROME_APP);
-      const c = chooseWindow({ want, platform, app, chromeExists, route: freshRoute(), appBroken });
-      log?.info("window.choose", { want, mode: c.mode, reason: c.reason, app: app?.state ?? null });
-      if (c.build) startInstall({ hash: app.hash });
-      else if (app?.state === "failed") startInstall({ allowBuild: false, hash: app.hash });
-      if (c.mode === "none") return { mode: "none" };
-      if (c.mode !== "app") return browser.open(c.mode);
-      if (!c.needRoute) { launchApp(); return { mode: "app" }; }
-      if (routePending) return { mode: "app" };
-      routePending = true;
-      measureRoute((value) => {
-        routePending = false;
-        if (!wantsWindow()) return;
-        const again = chooseWindow({ want, platform, app, chromeExists, route: value || { input: { bluetooth: false } }, appBroken });
-        log?.info("window.choose", { want, mode: again.mode, reason: again.reason, route: value ? { input_bt: !!value.input?.bluetooth, output_bt: !!value.output?.bluetooth, headphones: !!value.output?.headphones, native_mic: !!value.native_mic } : null });
-        if (again.mode === "app") launchApp();
-        else browser.open(again.mode);
-      });
-      return { mode: "app" };
+      if (!opts.force && want !== "app" && want !== "auto") return api.appStatus();
+      ensure(opts);
+      return api.appStatus();
     },
+
+    /**
+     * {state, reason?, message?} for /talk status and messages:
+     *   ready | installing | missing | stale | failed | unsupported | nosource
+     */
+    appStatus() {
+      if (platform !== "darwin") return { state: "unsupported" };
+      const st = buildState();
+      if (install || st.state === "building") return { state: "installing" };
+      if (st.state === "ready") return { state: "ready" };
+      if (installError) return { state: "failed", reason: installError.reason, message: installError.message };
+      if (st.state === "failed") {
+        const f = installFailure({ dataDir, pluginRoot, hash: st.hash, fsImpl });
+        return { state: "failed", reason: f?.reason || "build_failed", message: f?.message || st.error || "the local build failed" };
+      }
+      return { state: st.state };
+    },
+
+    get installing() { return installing(); },
+    get pending() { return !!pending; },
 
     /** Close: the browser window as before, and ask a running app to close its panel. */
     async kill() {
       if (watchdog) { timers.clearTimeout(watchdog); watchdog = null; }
+      if (pending) {
+        if (pending.deadline) timers.clearTimeout(pending.deadline);
+        if (pending.poll) timers.clearTimeout(pending.poll);
+        pending = null;
+      }
       const n = await browser.kill();
       if (!appLaunched) return n;
       appLaunched = false;

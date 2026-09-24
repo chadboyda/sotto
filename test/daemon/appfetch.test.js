@@ -12,7 +12,7 @@ import { spawn, spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import {
   installRelease, parseShaFile, pluginVersion, releaseUrls, shouldDownload, verifyApp, readDownloadStamp,
-  zipEntries, zipEntryProblem,
+  zipEntries, zipEntryProblem, isMainModule, isLoopbackBase, failureMessage,
   RELEASE_BASE, RETRY_MS, REQUIREMENT, TEAM_ID,
 } from "../../daemon/appfetch.js";
 import { appBuildState, appSourceHash } from "../../daemon/window.js";
@@ -159,7 +159,7 @@ describe("installRelease", { skip: DARWIN ? false : "needs ditto (macOS)" }, () 
     assert.equal(stamp.source, "release");
     assert.equal(stamp.sha256, sha(bytes));
     assert.equal(appBuildState({ pluginRoot: pl.root, dataDir: data }).state, "ready");
-    assert.deepEqual(events, ["download_start", "download_ok"]);
+    assert.deepEqual(events, ["download_start", "sha256_ok", "verify_ok", "download_ok"]);
     assert.deepEqual(fs.readdirSync(out).filter((n) => n.startsWith(".dl.")), [], "stage cleaned up");
     assert.equal(readDownloadStamp(out).ok, true);
   });
@@ -288,6 +288,52 @@ z.close()`, craft, pl.hash], { encoding: "utf8" });
     assert.equal(readDownloadStamp(out).reason, "not_found");
   });
 
+  test("the CLI logs every step with a timestamp and records the outcome in install.json", async () => {
+    const pl = fakePlugin("7.2.0");
+    const out = path.join(tmp(), "app");
+    fs.writeFileSync(path.join(pl.root, "scripts/build-app.sh"), `#!/bin/bash\nprintf '{"hash":"x","ok":false,"error":"swiftc not found"}\\n' > "$2/build.json"\nexit 1\n`);
+    const child = spawn(process.execPath, [path.join(ROOT, "daemon/appfetch.js"), "--out", out, "--plugin-root", pl.root, "--hash", pl.hash, "--base", srv.base], { stdio: ["ignore", "pipe", "pipe"] });
+    let log = "";
+    child.stdout.on("data", (d) => { log += d; });
+    child.stderr.on("data", (d) => { log += d; });
+    assert.equal(await new Promise((resolve) => child.on("exit", resolve)), 1, log);
+    for (const ev of ["start", "download_start", "download_failed", "local_build", "local_build_done", "failed"]) {
+      assert.match(log, new RegExp(`^\\d{4}-\\d\\d-\\d\\dT[^ ]+Z appfetch: ${ev} `, "m"), `${ev} in\n${log}`);
+    }
+    const rec = JSON.parse(fs.readFileSync(path.join(out, "install.json"), "utf8"));
+    assert.equal(rec.ok, false);
+    assert.equal(rec.reason, "build_failed");
+    assert.equal(rec.message, "no signed release for this version; the local build failed: swiftc not found");
+  });
+
+  test("a release from other sources is still installed when the local build cannot run", async () => {
+    const pl = fakePlugin("7.3.0");
+    const out = path.join(tmp(), "app");
+    fs.writeFileSync(path.join(pl.root, "scripts/build-app.sh"), "#!/bin/bash\nexit 1\n");
+    srv.publish("7.3.0", makeZip("f".repeat(64)).bytes);
+    const child = spawn(process.execPath, [path.join(ROOT, "daemon/appfetch.js"), "--out", out, "--plugin-root", pl.root, "--hash", pl.hash, "--base", srv.base], {
+      stdio: ["ignore", "pipe", "pipe"], env: { ...process.env, SOTTO_APP_VERIFY: "insecure-test" },
+    });
+    let log = "";
+    child.stdout.on("data", (d) => { log += d; });
+    child.stderr.on("data", (d) => { log += d; });
+    assert.equal(await new Promise((resolve) => child.on("exit", resolve)), 0, log);
+    assert.match(log, /download_failed.*sources_mismatch/);
+    assert.match(log, /release_despite_sources/);
+    const stampJ = JSON.parse(fs.readFileSync(path.join(out, "build.json"), "utf8"));
+    assert.equal(stampJ.hash, pl.hash, "stamped for these sources so the chooser sees ready");
+    assert.equal(stampJ.release_hash, "f".repeat(64));
+    assert.equal(JSON.parse(fs.readFileSync(path.join(out, "install.json"), "utf8")).sources_mismatch, true);
+  });
+
+  test("SOTTO_APP_VERIFY=insecure-test is ignored for a non-loopback base", () => {
+    assert.equal(isLoopbackBase("http://127.0.0.1:9/r"), true);
+    assert.equal(isLoopbackBase("http://localhost/r"), true);
+    assert.equal(isLoopbackBase(RELEASE_BASE), false);
+    assert.equal(isLoopbackBase("http://127.0.0.1.evil.example/"), false);
+    assert.equal(isLoopbackBase("file:///tmp"), false);
+  });
+
   test("the CLI with --no-build only downloads", async () => {
     const pl = fakePlugin("7.1.0");
     const out = path.join(tmp(), "app");
@@ -296,6 +342,34 @@ z.close()`, craft, pl.hash], { encoding: "utf8" });
     const child = spawn(process.execPath, [path.join(ROOT, "daemon/appfetch.js"), "--out", out, "--plugin-root", pl.root, "--hash", pl.hash, "--base", srv.base, "--no-build"], { stdio: "ignore" });
     assert.equal(await new Promise((resolve) => child.on("exit", resolve)), 1);
     assert.ok(!fs.existsSync(path.join(out, "built-by-script")));
+  });
+});
+
+describe("CLI entry", () => {
+  test("isMainModule compares real paths, so a symlinked plugin root runs the installer", () => {
+    const dir = tmp();
+    const link = path.join(dir, "plugin");
+    fs.symlinkSync(ROOT, link);
+    const me = new URL(`file://${path.join(ROOT, "daemon/appfetch.js")}`).href;
+    assert.equal(isMainModule(path.join(link, "daemon/appfetch.js"), me), true);
+    assert.equal(isMainModule(path.join(ROOT, "daemon/appfetch.js"), me), true);
+    assert.equal(isMainModule(path.join(ROOT, "daemon/window.js"), me), false);
+    assert.equal(isMainModule(undefined, me), false);
+  });
+
+  test("run through a symlink, the CLI does its work (it used to exit 0 silently)", () => {
+    const dir = tmp();
+    const link = path.join(dir, "plugin");
+    fs.symlinkSync(ROOT, link);
+    const r = spawnSync(process.execPath, [path.join(link, "daemon/appfetch.js"), "--bogus"], { encoding: "utf8" });
+    assert.equal(r.status, 2);
+    assert.match(r.stderr, /unknown argument --bogus/);
+  });
+
+  test("failureMessage words the release and build outcomes", () => {
+    assert.equal(failureMessage({ release: { ok: false, reason: "not_found" }, buildRan: false }), "no signed release for this version");
+    assert.equal(failureMessage({ release: { ok: false, reason: "codesign" }, build: { ok: false, error: "swiftc not found" }, buildRan: true }), "the release was refused (codesign); the local build failed: swiftc not found");
+    assert.equal(failureMessage({ release: { ok: false, reason: "network" }, build: null, buildRan: true, buildCode: 3 }), "the release download failed (network); the local build failed: exit 3");
   });
 });
 

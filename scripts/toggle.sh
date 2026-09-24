@@ -74,6 +74,7 @@ read -r ARG ARG2 _ <<<"$ARGS_WS"
 
 POLICY=""
 VOICE_ARG=""
+WINDOW_ARG=""
 KEY_SETUP=""
 shopt -s nocasematch
 case "$ARG" in
@@ -86,6 +87,11 @@ case "$ARG" in
                                 POLICY="$(printf '%s' "$ARG" | tr '[:upper:]' '[:lower:]')" ;;
   voice|voices)                 ACTION=voice
                                 VOICE_ARG="$(printf '%s' "$ARG2" | tr '[:upper:]' '[:lower:]')" ;;
+  # /talk app: install the desktop app if needed and open the voice in it
+  # (persists window=app). /talk window [auto|app|chrome]: where it opens.
+  app)                          ACTION=app ;;
+  window|windows)               ACTION=window
+                                WINDOW_ARG="$(printf '%s' "$ARG2" | tr '[:upper:]' '[:lower:]')" ;;
   # /talk key shows where the API key comes from. Anything typed after it
   # (or a bare /talk sk-...) is never read: it opens the setup window instead.
   key|keys|apikey|api-key|api_key)
@@ -97,7 +103,7 @@ esac
 shopt -u nocasematch
 
 if [[ "$ACTION" == usage ]]; then
-  finish "sotto: usage: /talk [on|off|status|restart|quiet|milestones|walkthrough|voice [name]|key]"
+  finish "sotto: usage: /talk [on|off|status|restart|quiet|milestones|walkthrough|voice [name]|app|window [auto|app|chrome]|key]"
 fi
 
 # --- config (SPEC §4.1/§4.2); unset, empty or invalid -> default ---------------
@@ -176,16 +182,41 @@ pref_voice() { # prints the valid voice from prefs.json, or nothing
   # shellcheck disable=SC2086
   if [[ "$p" =~ $re ]] && in_list "${BASH_REMATCH[1]}" $VOICES; then printf '%s' "${BASH_REMATCH[1]}"; fi
 }
+pref_window() { # prints the valid window mode from prefs.json, or nothing
+  local p="" re='"window"[[:space:]]*:[[:space:]]*"([a-z]+)"'
+  [[ -r "$PREFS" ]] && p="$(<"$PREFS")"
+  if [[ "$p" =~ $re ]] && in_list "${BASH_REMATCH[1]}" auto app chrome default; then printf '%s' "${BASH_REMATCH[1]}"; fi
+}
+# write_prefs VOICE WINDOW: rewrite prefs.json with both (either may be empty).
+write_prefs() {
+  local body=""
+  [[ -n "$1" ]] && body="\"voice\":\"$1\""
+  [[ -n "$2" ]] && body="${body:+$body,}\"window\":\"$2\""
+  printf '{%s}\n' "$body" > "$PREFS.tmp" && chmod 600 "$PREFS.tmp" && mv -f "$PREFS.tmp" "$PREFS"
+}
 # voice_local: /talk voice with no daemon of ours to ask (exits).
 voice_local() {
   local cur
   cur="$(pref_voice)"; [[ -n "$cur" ]] || cur="$CFG_VOICE"
   [[ -z "$VOICE_ARG" ]] && finish "$(voice_list "$cur")"
   [[ "$VOICE_ARG" == "$cur" ]] && finish "sotto: voice is already $VOICE_ARG."
-  printf '{"voice":"%s"}\n' "$VOICE_ARG" > "$PREFS.tmp" && chmod 600 "$PREFS.tmp" && mv -f "$PREFS.tmp" "$PREFS" \
+  write_prefs "$VOICE_ARG" "$(pref_window)" \
     || fail prefs_write "sotto: ERROR could not save the voice to $PREFS."
   finish "sotto: voice set to $VOICE_ARG. It applies to the next voice session."
 }
+# window_local: /talk window with no daemon of ours to ask (exits).
+window_local() {
+  local cur
+  cur="$(pref_window)"; [[ -n "$cur" ]] || cur="$CFG_WINDOW"
+  [[ -z "$WINDOW_ARG" ]] && finish "sotto: window is $cur. Change it with /talk window <auto|app|chrome>."
+  write_prefs "$(pref_voice)" "$WINDOW_ARG" \
+    || fail prefs_write "sotto: ERROR could not save the window choice to $PREFS."
+  finish "sotto: window set to $WINDOW_ARG. It applies the next time the voice window opens."
+}
+if [[ "$ACTION" == window && -n "$WINDOW_ARG" ]] && ! in_list "$WINDOW_ARG" auto app chrome default; then
+  SHOWN="${WINDOW_ARG//[^a-z0-9_-]/}"
+  finish "sotto: unknown window \"${SHOWN:0:20}\". Choose auto, app or chrome."
+fi
 if [[ "$ACTION" == voice && -n "$VOICE_ARG" ]]; then
   # shellcheck disable=SC2086
   if ! in_list "$VOICE_ARG" $VOICES; then
@@ -195,7 +226,7 @@ if [[ "$ACTION" == voice && -n "$VOICE_ARG" ]]; then
 fi
 
 # on/toggle need an inbox socket to deliver voice into this session.
-if [[ ( "$ACTION" == on || "$ACTION" == toggle ) && -z "$SOCK" ]]; then
+if [[ ( "$ACTION" == on || "$ACTION" == toggle || "$ACTION" == app ) && -z "$SOCK" ]]; then
   fail no_socket "sotto: ERROR this session has no inbox socket (CLAUDE_CODE_MESSAGING_SOCKET is unset), so voice cannot reach it."
 fi
 
@@ -259,7 +290,8 @@ if [[ -n "$H" ]]; then
       # The voice lives in OUR prefs.json; a foreign daemon has nothing to do with it.
       voice_local
     fi
-    if [[ "$ACTION" == on || "$ACTION" == toggle ]]; then
+    [[ "$ACTION" == window ]] && window_local
+    if [[ "$ACTION" == on || "$ACTION" == toggle || "$ACTION" == app ]]; then
       # Replace it with ours: ask it to shut down, wait for the port, then spawn.
       OKEY=""; [[ -r "$KEYFILE" ]] && OKEY="$(<"$KEYFILE")"
       post_shutdown "$BASE" "${OKEY%%[[:space:]]*}"
@@ -278,7 +310,7 @@ if [[ -z "$H" && -r "$D/daemon.port" ]]; then
     RBASE="http://127.0.0.1:$RECPORT"
     RH="$(healthz "$RBASE")"
     if [[ "$RH" == *'"name":"sotto"'* && "$RH" == *"\"data_dir\":\"$E_D\""* ]]; then
-      if [[ "$ACTION" == on || "$ACTION" == toggle ]]; then
+      if [[ "$ACTION" == on || "$ACTION" == toggle || "$ACTION" == app ]]; then
         RKEY=""; [[ -r "$D/daemon.key" ]] && RKEY="$(<"$D/daemon.key")"
         post_shutdown "$RBASE" "${RKEY%%[[:space:]]*}"
         wait_gone "$RBASE" || fail other_daemon_stuck "sotto: ERROR the voice daemon on port $RECPORT did not stop. See $D/logs/daemon.log"
@@ -301,8 +333,9 @@ daemon_down() {
     restart)    finish "sotto: voice is off. The next /talk on starts the latest code." ;;
     policy)     finish "sotto: voice is off. Turn it on with /talk on first." ;;
     voice)      voice_local ;;
+    window)     window_local ;;
   esac
-  # on/toggle/key continue: key needs a daemon to serve the setup window.
+  # on/toggle/app/key continue: key needs a daemon to serve the setup window.
 }
 
 # pick_runtime: sets NODE to a runtime that can run the daemon (SPEC §6.2), or
@@ -379,7 +412,7 @@ cold_start() {
 # A daemon of ours without any key, while the plugin settings now hold one:
 # the key only reaches a daemon at spawn, so restart it (it cannot be live).
 if [[ -n "$H" && -n "$CLAUDE_PLUGIN_OPTION_OPENAI_API_KEY" && "$H" == *'"api_key":false'* \
-      && "$H" == *"\"data_dir\":\"$E_D\""* && ( "$ACTION" == on || "$ACTION" == toggle || "$ACTION" == key ) ]]; then
+      && "$H" == *"\"data_dir\":\"$E_D\""* && ( "$ACTION" == on || "$ACTION" == toggle || "$ACTION" == app || "$ACTION" == key ) ]]; then
   read_key_file() { local k=""; [[ -r "$D/daemon.key" ]] && k="$(<"$D/daemon.key")"; printf '%s' "${k%%[[:space:]]*}"; }
   post_shutdown "$BASE" "$(read_key_file)"
   wait_gone "$BASE" || fail other_daemon_stuck "sotto: ERROR the voice daemon did not answer. See $D/logs/daemon.log"
@@ -418,6 +451,7 @@ if [[ -n "$CLAUDE_PROJECT_DIR" ]]; then json_escape -v v "$CLAUDE_PROJECT_DIR"; 
 BODY="{\"action\":\"$ACTION\""
 [[ "$ACTION" == policy ]] && BODY+=",\"policy\":\"$POLICY\""
 [[ "$ACTION" == voice && -n "$VOICE_ARG" ]] && BODY+=",\"voice\":\"$VOICE_ARG\""
+[[ "$ACTION" == window && -n "$WINDOW_ARG" ]] && BODY+=",\"window\":\"$WINDOW_ARG\""
 [[ "$ACTION" == key && -n "$KEY_SETUP" ]] && BODY+=",\"setup\":true"
 BODY+=",\"session\":{$SESSION}"
 IDLE_JSON=""

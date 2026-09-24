@@ -7,6 +7,8 @@
 #   sotto voice <name>     set the voice (switches a live session now)
 #   sotto status           same as /talk status
 #   sotto restart          same as /talk restart (reload the daemon's code)
+#   sotto window [mode]    same as /talk window (auto, app or chrome)
+#   sotto app              same as /talk app (install and use the desktop app)
 #
 # It reuses scripts/toggle.sh (the /talk handler) with a synthesized hook
 # input, so both paths share one implementation. The Bash tool does not get
@@ -24,7 +26,7 @@ done
 ROOT="$(cd "${SELF%/*}/.." && pwd)"
 
 usage() {
-  printf 'usage: sotto voice [name] | sotto status | sotto restart\n' >&2
+  printf 'usage: sotto voice [name] | sotto status | sotto restart | sotto window [auto|app|chrome] | sotto app\n' >&2
   exit 2
 }
 
@@ -32,6 +34,8 @@ case "$1" in
   voice|voices) ARGS="voice${2:+ $2}" ;;
   status)       ARGS="status" ;;
   restart)      ARGS="restart" ;;
+  window|windows) ARGS="window${2:+ $2}" ;;
+  app)          ARGS="app" ;;
   -h|--help|help|"") usage ;;
   *) usage ;;
 esac

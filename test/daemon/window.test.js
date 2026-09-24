@@ -8,6 +8,7 @@ import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import {
   appBuildState, appPaths, appSourceHash, chooseWindow, createWindow, installPlan, resolveWant, APP_PAGE_TIMEOUT_MS,
+  INSTALL_WAIT_MS, INSTALL_POLL_MS, installFailure, shouldWaitForInstall,
 } from "../../daemon/window.js";
 import { RETRY_MS } from "../../daemon/appfetch.js";
 import { CHROME_APP } from "../../daemon/chrome.js";
@@ -145,7 +146,7 @@ describe("app build state and sources hash", () => {
 });
 
 /** createWindow with fakes: records spawns, answers --audio-route and ps. */
-function harness({ env = {}, built = true, release = false, route = { input: { bluetooth: false }, output: { bluetooth: true } }, running = false, platform = "darwin", chrome = true } = {}) {
+function harness({ env = {}, built = true, release = false, route = { input: { bluetooth: false }, output: { bluetooth: true } }, running = false, platform = "darwin", chrome = true, installWaitMs } = {}) {
   const root = fakePlugin();
   if (release) {
     // A versioned plugin with the fetcher: the release download applies.
@@ -158,7 +159,10 @@ function harness({ env = {}, built = true, release = false, route = { input: { b
   const p = built ? stamp(root, data) : appPaths(data, root);
   const clock = createFakeClock();
   const spawned = [];
+  const spawnOpts = [];
   const children = [];
+  const results = [];
+  const logs = [];
   const browserCalls = [];
   const execCalls = [];
   const state = { page: false, wants: true, pref: undefined };
@@ -172,9 +176,10 @@ function harness({ env = {}, built = true, release = false, route = { input: { b
   const w = createWindow({
     dataDir: data, port: 47999, pluginRoot: root, env, platform, clock, chrome: browser,
     exists: (f) => (f === CHROME_APP ? chrome : fs.existsSync(f)),
-    spawn: (cmd, args) => {
+    spawn: (cmd, args, opts) => {
       const child = { pid: 4242, handlers: {}, on(ev, fn) { this.handlers[ev] = fn; }, unref() {} };
       spawned.push([cmd, ...args]);
+      spawnOpts.push(opts);
       children.push(child);
       return child;
     },
@@ -188,8 +193,11 @@ function harness({ env = {}, built = true, release = false, route = { input: { b
     getPreference: () => state.pref,
     pageConnected: () => state.page,
     wantsWindow: () => state.wants,
+    installWaitMs,
+    onInstallResult: (r) => results.push(r),
+    log: { info: (ev, o) => logs.push([ev, o]), warn: (ev, o) => logs.push([ev, o]), error: (ev, o) => logs.push([ev, o]) },
   });
-  return { w, p, root, data, clock, spawned, children, browserCalls, execCalls, state };
+  return { w, p, root, data, clock, spawned, spawnOpts, children, browserCalls, execCalls, state, results, logs };
 }
 const tick = () => new Promise((r) => setImmediate(r));
 
@@ -272,21 +280,93 @@ describe("createWindow", () => {
     assert.equal(n.spawned.length + n.browserCalls.length, 0);
   });
 
-  test("first /talk without a built app: background build + Chrome now, never blocking", () => {
+  test("first /talk without a built app: detached build, the window waits for it, never blocking", async () => {
     const h = harness({ built: false });
     const t0 = Date.now();
-    assert.equal(h.w.open().mode, "chrome");
+    assert.deepEqual(h.w.open(), { mode: "app", pending: true });
     assert.ok(Date.now() - t0 < 3000, "the build runs detached (it takes 10-20 s)");
     assert.deepEqual(h.spawned[0], ["/bin/bash", path.join(h.root, "scripts/build-app.sh"), "--out", h.p.dir, "--quiet"]);
-    assert.deepEqual(h.browserCalls, ["chrome"]);
+    assert.deepEqual(h.browserCalls, []);
     assert.ok(fs.existsSync(h.p.buildLog), "build output goes to logs/app-build.log");
+    assert.equal(h.w.appStatus().state, "installing");
+    // The build finishes: the app opens (auto measures the route first).
+    stamp(h.root, h.data);
+    h.children[0].handlers.exit(0);
+    await tick();
+    assert.equal(h.spawned.at(-1)[0], "open");
+    assert.deepEqual(h.browserCalls, []);
+    assert.deepEqual(h.results, [{ ok: true }]);
   });
 
-  test("first /talk with a release to try: the detached download (which builds on failure), Chrome now", () => {
+  test("an install that ends without an app: Chrome, with the reason for /talk and the page", () => {
     const h = harness({ built: false, release: true });
-    assert.equal(h.w.open().mode, "chrome");
-    assert.deepEqual(h.spawned[0], [process.execPath, path.join(h.root, "daemon/appfetch.js"), "--out", h.p.dir, "--plugin-root", h.root, "--hash", appSourceHash(h.root)]);
+    h.w.open();
+    fs.mkdirSync(h.p.dir, { recursive: true });
+    fs.writeFileSync(h.p.installStamp, JSON.stringify({ ok: false, hash: appSourceHash(h.root), reason: "build_failed", message: "no signed release for this version; the local build failed: swiftc not found" }));
+    h.children[0].handlers.exit(1);
     assert.deepEqual(h.browserCalls, ["chrome"]);
+    assert.equal(h.results[0].ok, false);
+    assert.match(h.results[0].message, /swiftc not found/);
+    const st = h.w.appStatus();
+    assert.equal(st.state, "failed");
+    assert.match(st.message, /no signed release/);
+    assert.ok(h.logs.some(([ev, o]) => ev === "app.install_failed" && o.reason === "build_failed"));
+    assert.match(fs.readFileSync(h.p.buildLog, "utf8"), /daemon: install failed: no signed release/);
+  });
+
+  test("an installer that exits without doing anything is reported, not silent", () => {
+    const h = harness({ built: false, release: true });
+    h.w.open();
+    h.children[0].handlers.exit(0);
+    assert.deepEqual(h.browserCalls, ["chrome"]);
+    assert.equal(h.w.appStatus().reason, "installer_exit");
+    assert.match(h.w.appStatus().message, /exited \(0\) without installing/);
+  });
+
+  test("the wait is bounded: Chrome at the deadline, the install carries on", async () => {
+    const h = harness({ built: false });
+    h.w.open();
+    await h.clock.advance(INSTALL_WAIT_MS.auto - 1);
+    assert.deepEqual(h.browserCalls, []);
+    await h.clock.advance(1);
+    assert.deepEqual(h.browserCalls, ["chrome"]);
+    assert.equal(h.w.appStatus().state, "installing");
+    // /talk app waits longer (it may be a local build).
+    const a = harness({ built: false, env: { SOTTO_BROWSER: "app" } });
+    a.w.open();
+    await a.clock.advance(INSTALL_WAIT_MS.auto);
+    assert.deepEqual(a.browserCalls, []);
+    await a.clock.advance(INSTALL_WAIT_MS.app - INSTALL_WAIT_MS.auto);
+    assert.deepEqual(a.browserCalls, ["chrome"]);
+  });
+
+  test("no wait when disabled (installWaitMs 0 or SOTTO_APP_INSTALL_WAIT_MS=0): Chrome at once", () => {
+    const h = harness({ built: false, installWaitMs: 0 });
+    assert.equal(h.w.open().mode, "chrome");
+    assert.equal(h.spawned.length, 1);
+    const e = harness({ built: false, env: { SOTTO_APP_INSTALL_WAIT_MS: "0" } });
+    assert.equal(e.w.open().mode, "chrome");
+  });
+
+  test("closing the voice while waiting cancels the pending window", async () => {
+    const h = harness({ built: false });
+    h.w.open();
+    await h.w.kill();
+    stamp(h.root, h.data);
+    h.children[0].handlers.exit(0);
+    await tick();
+    assert.deepEqual(h.browserCalls, []);
+    assert.equal(h.spawned.length, 1, "only the build");
+  });
+
+  test("first /talk with a release to try: the detached download (which builds on failure)", () => {
+    const h = harness({ built: false, release: true });
+    assert.equal(h.w.open().pending, true);
+    assert.deepEqual(h.spawned[0], [process.execPath, path.join(h.root, "daemon/appfetch.js"), "--out", h.p.dir, "--plugin-root", h.root, "--hash", appSourceHash(h.root)]);
+    assert.equal(h.spawnOpts[0].cwd, h.root, "run from the plugin root");
+    assert.equal(h.spawnOpts[0].detached, true);
+    assert.equal(typeof h.spawnOpts[0].stdio[1], "number", "stdout goes to logs/app-build.log");
+    assert.match(fs.readFileSync(h.p.buildLog, "utf8"), /daemon: starting the installer/);
     // SOTTO_APP_DOWNLOAD=0 skips it; SOTTO_RELEASE_BASE is passed through.
     const off = harness({ built: false, release: true, env: { SOTTO_APP_DOWNLOAD: "0" } });
     off.w.open();
@@ -294,6 +374,34 @@ describe("createWindow", () => {
     const based = harness({ built: false, release: true, env: { SOTTO_RELEASE_BASE: "http://127.0.0.1:9/r" } });
     based.w.open();
     assert.deepEqual(based.spawned[0].slice(-2), ["--base", "http://127.0.0.1:9/r"]);
+  });
+
+  test("ensureInstalled: eager install for auto/app, never for chrome; one installer at a time", () => {
+    const h = harness({ built: false, release: true });
+    assert.equal(h.w.ensureInstalled().state, "installing");
+    h.w.ensureInstalled();
+    h.w.open();
+    assert.equal(h.spawned.length, 1);
+    const c = harness({ built: false, release: true });
+    c.state.pref = "chrome";
+    assert.equal(c.w.ensureInstalled().state, "missing");
+    assert.equal(c.spawned.length, 0);
+    const linux = harness({ built: false, release: true, platform: "linux" });
+    assert.equal(linux.w.ensureInstalled().state, "unsupported");
+    assert.equal(linux.spawned.length, 0);
+  });
+
+  test("ensureInstalled({force}) (/talk app) retries a failed build and download", () => {
+    const h = harness({ built: false, release: true });
+    stamp(h.root, h.data, { ok: false, exe: false });
+    fs.writeFileSync(path.join(h.p.dir, "download.json"), JSON.stringify({ version: "1.2.3", hash: appSourceHash(h.root), ok: false, at: new Date().toISOString() }));
+    h.w.ensureInstalled();
+    assert.equal(h.spawned.length, 0, "a recent failure is not retried by itself");
+    assert.equal(h.w.appStatus().state, "failed");
+    h.w.ensureInstalled({ force: true });
+    assert.equal(h.spawned.length, 1);
+    assert.equal(h.spawned[0][1], path.join(h.root, "daemon/appfetch.js"));
+    assert.ok(!h.spawned[0].includes("--no-build"));
   });
 
   test("a recent failed download of this version goes straight to the local build", () => {
@@ -326,13 +434,19 @@ describe("createWindow", () => {
     assert.equal(installPlan({ ...base, stamp: failed, now: 1e12 + RETRY_MS }), "download");
   });
 
-  test("a build already running is not started twice", () => {
+  test("a build already running (another daemon's) is not started twice; the window waits for it", async () => {
     const h = harness({ built: false });
     fs.mkdirSync(h.p.dir, { recursive: true });
     fs.writeFileSync(h.p.lock, `${process.pid}\n`);
-    h.w.open();
+    assert.equal(h.w.open().pending, true);
     assert.equal(h.spawned.length, 0);
-    assert.deepEqual(h.browserCalls, ["chrome"]);
+    assert.deepEqual(h.browserCalls, []);
+    fs.rmSync(h.p.lock);
+    stamp(h.root, h.data);
+    await h.clock.advance(INSTALL_POLL_MS);
+    await tick();
+    assert.equal(h.spawned.at(-1)?.[0], "open");
+    assert.deepEqual(h.browserCalls, []);
   });
 
   test("not macOS: Chrome, no build, no app", () => {
