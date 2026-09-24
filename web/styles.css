@@ -76,6 +76,7 @@
   --fill: rgba(0, 0, 0, 0.05);
   --fill-hover: rgba(0, 0, 0, 0.08);
   --line: #E0E3E8;
+  --hairline: rgba(0, 0, 0, 0.12); /* the usage readout's slot dividers */
   --edge: #7A8391;
   --fg: #0F1217;
   --fg-2: #434B57;
@@ -142,6 +143,7 @@
     --fill: rgba(255, 255, 255, 0.06);
     --fill-hover: rgba(255, 255, 255, 0.1);
     --line: #252A32;
+    --hairline: rgba(255, 255, 255, 0.12);
     --edge: #626C7B;
     --fg: #ECEFF4;
     --fg-2: #AAB2BF;
@@ -193,6 +195,7 @@
     --fill: rgba(255, 255, 255, 0.06);
     --fill-hover: rgba(255, 255, 255, 0.1);
     --line: #252A32;
+    --hairline: rgba(255, 255, 255, 0.12);
     --edge: #626C7B;
     --fg: #ECEFF4;
     --fg-2: #AAB2BF;
@@ -304,8 +307,8 @@ kbd {
 /* ---------- header ----------
    Two groups on the 4/8 grid. Left: the status glyph, the state word (15/600, in the
    state's ink) and under it a quieter line (the detail, e.g. "Still billing", then the
-   project). Right: the usage pills (Session, Today, Cost), fixed-width tabular figures
-   so nothing moves while they tick; then the gear (44 px hit). */
+   project). Right: the usage readout (Session, Today, Cost), one quiet capsule of
+   fixed-width tabular figures so nothing moves while they tick; then the gear (44 px hit). */
 .top {
   display: flex;
   align-items: center;
@@ -330,37 +333,34 @@ html.host-app .top { padding-top: calc(var(--space-2) + var(--host-inset-top, 28
 .status-detail:not([hidden]) + .project:not([hidden])::before { content: "·"; margin-right: var(--space-1); color: var(--fg-3); }
 /* A very long project name is capped; it is the first thing to go when room is short. */
 .project { flex: 0 1 auto; min-width: 0; max-width: 24ch; overflow: hidden; text-overflow: ellipsis; }
-/* The usage readout: three pills (Session, Today, Cost), displays rather than buttons.
-   Each is a small label over a tabular figure in a box of fixed width, so a ticking
-   clock never moves anything: m:ss and mm:ss both fit 5ch (four digits and a colon),
-   h:mm:ss and hh:mm:ss fit 7ch, and the box widens once, at the hour (data-wide,
+/* The usage readout (design/pills-v2, variant D): ambient metadata, one flat capsule
+   (--fill, no ring, no lift: nothing about it says "button") holding Session, Today
+   and Cost as quiet inline slots split by hairlines. Each slot is an 11 px symbol in
+   --fg-3 (timer, calendar; the cost's "$" is its own) and a 12 px medium tabular
+   figure in a box of fixed width, so a ticking clock never moves anything: m:ss and
+   mm:ss both fit 4.6ch (four tabular digits and a narrow colon), h:mm:ss and
+   hh:mm:ss fit 7ch, and the box widens once, at the hour (data-wide,
    lib.usagePills). The cost reserves "$00.00" (6ch; "<$0.01" fits too) and widens
-   at $100. Figures sit right-aligned so the seconds digit stays put; the labels
-   align with them. Raised like a card: --surface-1 with the shadow ring, no border. */
-.usage { display: flex; align-items: center; gap: var(--space-1); }
+   at $100. Figures sit right-aligned so
+   the seconds digit stays put. The words "Session", "Today", "Cost" stay in the DOM
+   for screen readers. A hairline sits before every slot that follows a shown one
+   (Session hides off-live, Today first when room is short). Text labels were tried
+   (variant A) and need ~40 px more than a 420 px header has beside "Listening". */
+.usage { display: flex; align-items: center; height: 24px; padding: 0 10px; border-radius: 12px; background: var(--fill); }
 .usage[hidden], .pill[hidden] { display: none; }
-.pill {
-  display: flex;
-  flex-direction: column;
-  align-items: flex-end;
-  justify-content: center;
-  height: var(--control);
-  padding: 0 var(--space-2);
-  border-radius: var(--radius-md);
-  background: var(--surface-1);
-  box-shadow: var(--shadow-border);
-  white-space: nowrap;
-}
-.pill-label { font-size: 11px; line-height: 12px; letter-spacing: 0.01em; color: var(--fg-2); }
+.pill { display: flex; align-items: center; gap: var(--space-1); white-space: nowrap; }
+.pill:not([hidden]) ~ .pill::before { content: ""; width: 1px; height: 12px; margin: 0 var(--space-2); background: var(--hairline); }
+.pill-icon { width: 11px; height: 11px; flex: none; stroke-width: 1.8; color: var(--fg-3); }
+.pill-label { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
 .pill-value {
   display: block;
-  width: 5ch;
-  font-size: var(--text-small);
+  width: 4.6ch;
+  font-size: var(--text-meta);
   line-height: 16px;
-  font-weight: 600;
+  font-weight: 500;
   font-variant-numeric: tabular-nums;
   text-align: right;
-  color: var(--fg);
+  color: var(--fg-2);
 }
 .pill-value[data-wide] { width: 7ch; }
 .pill-cost .pill-value { width: 6ch; }

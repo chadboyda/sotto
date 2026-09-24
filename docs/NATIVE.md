@@ -159,7 +159,7 @@ audio_client     "app"|"page"|null      (NEW, added by B2)
   "version": "0.3.0" }
 ```
 
-Usage and timers are derived by the app: the header's Session / Today / Cost pills (v0.3.2, the page's `lib.usagePills`) come from the Live session start, `status.today.seconds` + `status.live.usage_seconds` (throttled by `lib.stableUsage`, advanced by wall time while live by `lib.tickingToday`; the price per second is the page's `lib` constant), and "Claude working for 0:42" comes from the `activity` `turn_start` receive time. The daemon adds nothing for these.
+Usage and timers are derived by the app: the header's Session / Today / Cost readout (v0.3.2, quiet capsule since fix/pills-v2; the page's `lib.usagePills`) come from the Live session start, `status.today.seconds` + `status.live.usage_seconds` (throttled by `lib.stableUsage`, advanced by wall time while live by `lib.tickingToday`; the price per second is the page's `lib` constant), and "Claude working for 0:42" comes from the `activity` `turn_start` receive time. The daemon adds nothing for these.
 
 ### 3.2 App → daemon (non-command)
 
@@ -346,7 +346,7 @@ Target graph: `SottoApp` → {`SottoAudio`, `SottoClient`, `SottoUI`}. `SottoUI`
 ### 5.4 SottoUI (B5)
 - `StateModel` (`@Observable`, main actor) holds: status, settings, captions (the `reduceCaptions` port), Claude card (activity kind/text, `claudeSays`, tool, busy, summary from `turn_end`, agents count, delegations: last 3 via the `upsertDelegation` port), banners (notice/notice_clear, `live` error/closed via the ports of `lib.errorBannerText`/`closedReasonMessage`), pending result, link state, levels, voices, mute-pending, timers (turn start time, session start).
 - Views follow the web page's information design, natively:
-  - header: status dot + word, the detail and project under it, the usage pills (Session while live, Today, Cost; fixed-width figures) and the gear
+  - header: status dot + word, the detail and project under it, the usage readout (one quiet capsule: Session while live, Today, Cost; symbols, hairlines, fixed-width figures; fix/pills-v2) and the gear
   - an instrument dial (`Canvas` + `TimelineView(.animation)` driven by mic/speaker levels and state; animating only while visible) around a mute button
   - Claude card
   - captions (`accessibilityLiveRegion`)
@@ -496,7 +496,7 @@ The native branch forked at #4, so the page's #5 (UI polish) and #7 (header pill
 | Claude card surfaces (#5) | Raised surface, radius 18, rings as shadows so a state change never moves it; approval neutral in light with a 1.5 pt amber ring; static working icon | Bordered card, amber tinted approval, spinning icon | Ported (`CardSurface`, rings drawn outside the shape) |
 | Claude card height (user report on 0.3.1) | Summary clamped to three lines, "More" for the rest, expanded box capped | Grew with long output inside the panel's scroll view; a scroller sat over the text | Collapsed: three lines + More; expanded: a capped scroller in the card's trailing padding, inset from the corner, text padded clear of it; room is reserved under the word so the captions and footer never move (`ClaudeCardLayoutTests`, snapshots 25/26) |
 | Claude card in the live view (#3) | Always there ("Claude is idle" as a quiet line under a hairline) | Hidden while idle | Always there in the live view |
-| Claude's words, one line (#3) | Claude's own words (tool line only after 20 s quiet, quieter), one line | Ported, but up to three lines | One line |
+| Claude's words, one line (#3) | Claude's own latest words, never a tool label (fix/pills-v2), one line | Ported, but up to three lines | One line |
 | Markdown (#3) | `lib.renderMarkdown`, "(code)" when collapsed | Rendered natively | Unchanged |
 | Background agents chip (#3) | Quiet text in the card's head | A capsule under the card (added height) | A chip in the head row; "2 agents" when short of room |
 | Raw tool labels (#3) | Plain words from the daemon | Same (daemon side) | Same; the snapshot fixture now uses a plain label |

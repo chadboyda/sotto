@@ -10,8 +10,6 @@ public enum ViewText {
     public static let captionGapMs: Double = 1500
     public static let maxCaptionLines = 60
     public static let pricePerMinute: Double = 0.05
-    /// Claude's words stay the card's line this long before a tool line may replace them.
-    public static let claudeSaysFreshMs: Double = 20_000
     /// The hero word while Claude Code waits for an approval (AUDIT #5).
     public static let approvalWord = "Approve in the terminal"
 
@@ -326,12 +324,10 @@ public enum ViewText {
                               note: "Waiting for your approval in the terminal", request: request, agents: agents)
         }
         if s.busy == true {
+            // Claude's own latest words, however old; never a tool label (lib.claudeView).
             let says = stripMarkdown(s.says ?? "")
-            let fresh = !says.isEmpty && (s.now == nil || s.saysAt == nil || s.now! - s.saysAt! < claudeSaysFreshMs)
-            let tool = stripMarkdown(s.tool ?? "")
-            var step = "Thinking", secondary = false
-            if fresh { step = says } else if !tool.isEmpty { step = tool; secondary = true } else if !says.isEmpty { step = says }
-            return ClaudeCard(kind: "working", title: "Claude is working", step: truncate(step, 180), secondary: secondary, request: request, agents: agents)
+            let step = says.isEmpty ? "Thinking" : says
+            return ClaudeCard(kind: "working", title: "Claude is working", step: truncate(step, 180), secondary: false, request: request, agents: agents)
         }
         if let sum = s.summary, !sum.isEmpty { return ClaudeCard(kind: "finished", title: "Claude finished", summary: sum, request: request, agents: agents) }
         return ClaudeCard(kind: "idle", title: "Claude is idle", request: request, agents: agents)

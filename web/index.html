@@ -23,6 +23,9 @@
   <!-- Reusable icons (inline SVG, currentColor). -->
   <svg class="sprite" aria-hidden="true" focusable="false">
     <symbol id="i-gear" viewBox="0 0 24 24"><path d="M12 15.25a3.25 3.25 0 1 0 0-6.5 3.25 3.25 0 0 0 0 6.5Z"/><path d="M19.4 13.5a7.7 7.7 0 0 0 0-3l2-1.55-2-3.46-2.38.96a7.6 7.6 0 0 0-2.6-1.5L14 2.5h-4l-.42 2.45a7.6 7.6 0 0 0-2.6 1.5L4.6 5.5l-2 3.46 2 1.55a7.7 7.7 0 0 0 0 3l-2 1.55 2 3.46 2.38-.96a7.6 7.6 0 0 0 2.6 1.5L10 21.5h4l.42-2.45a7.6 7.6 0 0 0 2.6-1.5l2.38.96 2-3.46-2-1.55Z"/></symbol>
+    <!-- The usage readout's symbols (after SF Symbols timer / calendar, as the app draws them). -->
+    <symbol id="i-timer" viewBox="0 0 24 24"><circle cx="12" cy="13.5" r="7.5"/><path d="M12 13.5V9.5M10 3h4"/></symbol>
+    <symbol id="i-calendar" viewBox="0 0 24 24"><rect x="4" y="5.5" width="16" height="14" rx="3"/><path d="M4 10h16M8.5 3.5v3M15.5 3.5v3"/></symbol>
     <symbol id="i-pause" viewBox="0 0 24 24"><path d="M9 6v12M15 6v12"/></symbol>
     <symbol id="i-play" viewBox="0 0 24 24"><path d="M8 5.5v13l10.5-6.5L8 5.5Z"/></symbol>
     <symbol id="i-stop" viewBox="0 0 24 24"><rect x="7" y="7" width="10" height="10" rx="1.5"/></symbol>
@@ -51,10 +54,12 @@
           </span>
         </div>
       </div>
-      <!-- Three fixed-width pills; the figures tick without moving anything (styles.css .pill). -->
+      <!-- One quiet capsule, three fixed-width slots split by hairlines; the figures tick
+           without moving anything (styles.css .usage). Labels are for screen readers;
+           the symbols and the "$" carry them on screen. -->
       <div class="usage" id="usage" role="group" aria-label="Usage" hidden>
-        <span class="pill pill-session" id="usage-session" title="This voice session" hidden><span class="pill-label">Session</span><span class="pill-value" id="usage-session-value">0:00</span></span>
-        <span class="pill pill-today" id="usage-today" title="Voice time billed today"><span class="pill-label">Today</span><span class="pill-value" id="usage-today-value">0:00</span></span>
+        <span class="pill pill-session" id="usage-session" title="This voice session" hidden><svg class="pill-icon" aria-hidden="true"><use href="#i-timer"/></svg><span class="pill-label">Session</span><span class="pill-value" id="usage-session-value">0:00</span></span>
+        <span class="pill pill-today" id="usage-today" title="Voice time billed today"><svg class="pill-icon" aria-hidden="true"><use href="#i-calendar"/></svg><span class="pill-label">Today</span><span class="pill-value" id="usage-today-value">0:00</span></span>
         <span class="pill pill-cost" id="usage-cost" title="Today's cost at $0.05 per minute"><span class="pill-label">Cost</span><span class="pill-value" id="usage-cost-value">$0.00</span></span>
       </div>
       <button type="button" class="icon-btn gear" id="settings-btn" aria-label="Settings" aria-haspopup="dialog" aria-controls="settings">

@@ -41,6 +41,11 @@ public struct Theme: Sendable {
         // Dark: one white ring; depth shadows vanish on a dark page.
         attnIcon: .hex(0xF0B43C), ring: .white.opacity(0.08), drop: .clear, dialBezelAlpha: 0.45, dialRestAlpha: 0.9, dark: true)
 
+    /// The page's --fill: a flat wash for quiet groups (the header's usage capsule).
+    public var fill: Color { dark ? .white.opacity(0.06) : .black.opacity(0.05) }
+    /// The page's --hairline: the usage readout's slot dividers.
+    public var hairline: Color { dark ? .white.opacity(0.12) : .black.opacity(0.12) }
+
     /// Colour for a header key (live | muted | attention | connecting | sleeping | paused | error | off).
     public func headerColor(_ key: String) -> Color {
         switch key {
