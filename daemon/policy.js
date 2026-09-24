@@ -748,11 +748,13 @@ export class Narrator {
 
   /** idle_prompt: "waiting for you", once per idle period, unless its result was just spoken. */
   onIdle() {
+    // Claude Code fires idle_prompt after ~60 s idle whether or not Claude
+    // asked anything, so "Claude's waiting for you" misled the user ("It's not
+    // asking me for anything"). Real asks already arrive as question /
+    // permission / elicitation; the idle notice alone is not sent to the voice.
     if (this.idleSaid) return "deduped";
     this.idleSaid = true;
-    const speak = !this.resultSpoken && !this.recentlyAnnounced(["permission", "question", "elicitation"]);
-    this.route("idle", { speak });
-    return speak && this.policy() !== "quiet" ? "spoken" : "context";
+    return "ignored";
   }
 
   /** A subagent / task / background session finished: batch for COMPLETION_BATCH_MS. */
