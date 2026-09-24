@@ -112,7 +112,7 @@ Every text frame is one JSON object with a `type` string. Unknown types are igno
 | `welcome` | `protocol, version, build, status, settings` | once, after hello |
 | `status` | `status: PageStatus` | **a full snapshot on every change** (the same trigger as the SSE `status`, `voice.changed()`). There are no status patches: the app replaces its copy each time. |
 | `settings` | `Settings` | after `welcome`, and whenever the voice list, persona list or choice, window pref or voice-switch state changes |
-| `activity` | `kind, text, …extra` | verbatim SSE `activity`. `kind` ∈ `turn_start`, `turn_end`, `text`, `tool`, `permission`, `agents` (with `count`), plus any the page's `lib.activityView` knows |
+| `activity` | `kind, text, …extra` | verbatim SSE `activity`. `kind` ∈ `turn_start`, `turn_end`, `text`, `tool`, `permission` (with `agent`: a subagent's approval), `approval_cleared` (with `busy`; SPEC §6.10.4), `agents` (with `count`), plus any the page's `lib.activityView` knows. `status.claude.approval` null clears a shown approval |
 | `delegation` | `id, status, text` | verbatim SSE `delegation` |
 | `notice` | `level` (`info`\|`warn`\|`error`), `code`, `text` | verbatim SSE `notice`. Native adds codes `cant_hear`, `echo_detected`, `app_took_over` (page only), `mic_error` |
 | `notice_clear` | `code` | when a condition ends (e.g. `cant_hear` once the user is heard) |

@@ -3,7 +3,8 @@
 #
 # Registered for UserPromptSubmit, PreToolUse, PermissionRequest,
 # MessageDisplay, Notification, Elicitation, SubagentStop, TaskCompleted,
-# TeammateIdle, PostToolUseFailure, Stop, StopFailure and SessionEnd in EVERY
+# TeammateIdle, PostToolUseFailure, PostToolUse, PermissionDenied, Stop,
+# StopFailure and SessionEnd in EVERY
 # session where the plugin is installed. Invoked as: hook.sh <EventName>, hook
 # JSON on stdin. Only UserPromptSubmit and PreToolUse ever print; every other
 # event is forward-only (an Elicitation hook that printed a decision would
@@ -32,6 +33,10 @@ IFS=$'\t' read -r OWNER PORT KEY NONCE _ < "$D/active"
 
 # --- owner path ---------------------------------------------------------------
 EVENT="$1"
+# PostToolUse follows every tool call; the daemon needs it only while a tool
+# approval is pending (SPEC §6.10.4), which it flags with D/approval-pending.
+# One more stat, and stdin stays unread, like the off path.
+[[ "$EVENT" != "PostToolUse" || -f "$D/approval-pending" ]] || exit 0
 INPUT="$(cat)"
 # Voice marker for this bind: "[sotto voice <nonce>]" (the nonce is hex).
 if [[ "$NONCE" =~ ^[0-9a-f]+$ ]]; then MARK="[sotto voice $NONCE]"; else MARK="[sotto voice]"; fi

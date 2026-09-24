@@ -704,18 +704,23 @@ struct ClaudeCardView: View {
             }
             .frame(width: 16, height: 16)
             .accessibilityHidden(true)
+            // Never wider than the panel (the 0.3.2 report: "A background agent needs your
+            // approval" + "5 agents" + "7 min 0 sec" pushed the card past the panel's right
+            // edge). The title takes the room first and truncates only when even the agents
+            // chip is gone; the chip shortens ("5 agents"), then steps aside.
             Text(card.title).font(.system(size: card.kind == "approval" ? 15 : 13, weight: card.kind == "idle" ? .regular : .semibold))
                 .foregroundStyle(card.kind == "working" ? t.work : card.kind == "approval" ? t.attn : card.kind == "idle" ? t.fg2 : t.fg)
-                .lineLimit(1).fixedSize()
+                .lineLimit(1).truncationMode(.tail)
                 .layoutPriority(1)
             Spacer(minLength: 4)
             if let a = card.agents {
                 // The background agents are a quiet chip; their work never reaches the card's
-                // text. Short of room it keeps the count ("2 agents").
+                // text. Short of room it keeps the count ("2 agents"), then nothing.
                 let n = a.split(separator: " ").first.map(String.init) ?? ""
                 ViewThatFits(in: .horizontal) {
                     agentsChip(t, a)
                     agentsChip(t, n == "1" ? "1 agent" : "\(n) agents")
+                    Color.clear.frame(width: 0, height: 0)
                 }
                 .help(a)
                 .accessibilityLabel(a)
@@ -725,6 +730,7 @@ struct ClaudeCardView: View {
             }
         }
         .frame(minHeight: 20)
+        .background(PanelFrames.reader("claude-head"))
     }
 
     private func agentsChip(_ t: Theme, _ text: String) -> some View {

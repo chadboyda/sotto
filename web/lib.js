@@ -465,6 +465,9 @@ export function activityView(ev) {
         summary: null,
         tone: "attention",
       };
+    case "approval_cleared":
+      // The approval was answered (SPEC §6.10.4): back to what Claude is doing.
+      return { text: ev?.busy === true ? "Claude is working" : "", busy: typeof ev?.busy === "boolean" ? ev.busy : null, summary: null, tone: ev?.busy === true ? "work" : "info" };
     case "turn_end":
       // `summary` is Claude's final message as markdown (the page renders it with
       // renderMarkdown); an older daemon only sent `text`.
@@ -1032,7 +1035,7 @@ export function connectSteps(stage) {
 
 /**
  * The Claude Code card: one of idle | working | approval | finished.
- * @param {{busy:boolean, kind?:string|null, text?:string, summary?:string|null, request?:{text:string,status:string}|null}} s
+ * @param {{busy:boolean, kind?:string|null, text?:string, agent?:boolean, summary?:string|null, request?:{text:string,status:string}|null}} s
  */
 export function claudeView(s) {
   const text = String(s?.text || "").trim();
@@ -1041,7 +1044,8 @@ export function claudeView(s) {
   if (s?.kind === "permission" && s?.busy !== false) {
     return {
       kind: "approval",
-      title: "Claude needs your approval",
+      // A subagent's prompt (SPEC §6.10.4): the user may not know it runs.
+      title: s?.agent ? "A background agent needs your approval" : "Claude needs your approval",
       command: text || null,
       note: "Waiting for your approval in the terminal",
       request,

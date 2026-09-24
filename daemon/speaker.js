@@ -117,7 +117,8 @@ const REPEATABLE = new Set(["voice_result", "typed_result", "other_result", "mir
   "progress_text", "completion", "agents_done", "idle", "tool_failure", "stale_result"]);
 
 // Sources whose commentary is an answer or something the user must act on.
-const HIGH = new Set(["voice_result", "background_voice", "question", "permission", "attention", "voice_notice"]);
+// An approval reminder (SPEC §6.10.4) ranks with them but waits for silence.
+const HIGH = new Set(["voice_result", "background_voice", "question", "permission", "attention", "voice_notice", "approval_reminder"]);
 const URGENT = new Set(["question", "permission", "attention"]);
 const LOW = new Set(["typed_result", "background_result", "progress_text", "completion", "idle", "tool_failure", "tool_milestone"]);
 
@@ -243,10 +244,15 @@ export class SpeechQueue {
     return null;
   }
 
-  /** Queue one commentary action ({kind, content, delegationId, source, priority?, urgent?}). */
+  /**
+   * Queue one commentary action ({kind, content, delegationId, source,
+   * priority?, urgent?, dedupeKey?}). `dedupeKey` replaces the text key: an
+   * approval prompt is keyed by its approval, so a second prompt with the same
+   * words is still spoken (SPEC §6.10.4).
+   */
   enqueue(action) {
     const now = this.clock.now();
-    const key = speechKey(action.content);
+    const key = action.dedupeKey ? `k:${action.dedupeKey}` : speechKey(action.content);
     const dup = this.duplicateOf(key, now);
     if (dup) {
       this.log.info("speech.duplicate", { source: action.source || null, why: dup });
@@ -330,6 +336,18 @@ export class SpeechQueue {
       this.send(head.action);
     }
     this.schedule();
+  }
+
+  /**
+   * Drop held items that are no longer true (an approval answered before the
+   * voice got to say it). Returns how many were dropped.
+   */
+  cancel(pred) {
+    const before = this.items.length;
+    this.items = this.items.filter((it) => !pred(it.action));
+    const n = before - this.items.length;
+    if (n) this.log.info("speech.cancelled", { count: n });
+    return n;
   }
 
   /** A repeat is not spoken; it goes to the voice model as silent context. */

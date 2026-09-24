@@ -173,7 +173,11 @@ export function route(source, policy, payload = {}, ctx = {}) {
       return labels.length ? [act("thinking", null, `${BG}Claude progress: ${labels.join("; ")}`)] : [];
     }
     case "permission":
-      return [act("commentary", null, `Claude Code is waiting for your approval in the terminal to ${payload.label || "use a tool"}.`)];
+      // Spoken under every policy, never deduped away (SPEC §6.10.4). A
+      // subagent's prompt is labelled as such: the user may not know it runs.
+      return [act("commentary", null, permissionSpeech(payload.label, payload.agent))];
+    case "approval_reminder":
+      return [act("commentary", null, reminderSpeech(payload.items))];
     case "policy_change":
       return [act("instructions", null, policyChangeInstruction(payload.policy || p))];
     default:
@@ -309,6 +313,20 @@ export function agentsText(n) {
 export function cardText(md, max = 220) {
   const t = speakable(md).replace(/\s*\((?:code|table) omitted\)\.?/g, "").trim();
   return clip(firstSentences(t, 2), max);
+}
+
+/** The spoken announcement of one approval prompt. */
+export function permissionSpeech(label, agent = false) {
+  return `${agent ? "A background agent is" : "Claude Code is"} waiting for your approval in the terminal to ${label || "use a tool"}.`;
+}
+
+/** The spoken reminder for approvals still pending (SPEC §6.10.4). */
+export function reminderSpeech(items = []) {
+  const list = (items || []).filter(Boolean);
+  if (list.length > 1) return `By the way, ${list.length} approvals are still waiting for you in the terminal.`;
+  const it = list[0] || {};
+  const to = it.label || "use a tool";
+  return it.agent ? `By the way, a background agent is still waiting on your approval to ${to}.` : `By the way, Claude's still waiting on your approval to ${to}.`;
 }
 
 /** Permission label (infinitive) for "…waiting for your approval … to <label>". */
@@ -575,7 +593,7 @@ export class Narrator {
     this.lastLabel = null;
     this.lastProgressSpokenAt = -Infinity;
     this.recentThinking = new Map(); // content → sent at
-    this.recentPermission = new Map(); // label → at
+    this.recentPermission = new Map(); // approval id (or label + input) → at
     // MessageDisplay batches are POSTed by independent background curls, so
     // they can arrive out of order (and after the turn's Stop). Batches are
     // buffered per message and assembled by `index` once the final one and
@@ -623,7 +641,9 @@ export class Narrator {
       ctx.canSpeakLongProgress = this.turnStartedAt !== null && now - this.turnStartedAt >= LONG_PROGRESS_MS && now - this.lastLongProgressAt >= LONG_PROGRESS_MS;
     }
     if (source === "tool_failure") ctx.canSpeakFailure = now - this.lastFailureSpokenAt >= FAILURE_THROTTLE_MS;
-    const actions = route(source, policy, payload, ctx).map((a) => ({ ...a, source }));
+    // A dedupe key (SPEC §6.10.4): two approvals with the same words are two
+    // prompts, so the speech queue keys them by approval, not by text.
+    const actions = route(source, policy, payload, ctx).map((a) => (payload?.dedupeKey && a.kind === "commentary" ? { ...a, source, dedupeKey: payload.dedupeKey } : { ...a, source }));
     const spoke = actions.some((a) => a.kind === "commentary");
     if (source === "progress_text" && spoke) { this.lastProgressSpokenAt = now; if (policy === "milestones") this.lastLongProgressAt = now; }
     if (source === "tool_failure" && spoke) this.lastFailureSpokenAt = now;
@@ -657,16 +677,23 @@ export class Narrator {
     this.route("tool_milestone", { labels });
   }
 
-  /** PermissionRequest: speak once per label per 10 s. Questions are spoken by onQuestion. */
-  onPermission(toolName, toolInput) {
+  /**
+   * PermissionRequest: speak every approval prompt (SPEC §6.10.4). `id` is the
+   * pending approval (approvals.js); only the same id is spoken once. Two
+   * prompts with the same label are two things to approve: observed live, a
+   * label dedupe could swallow a second agent's prompt. Questions are spoken
+   * by onQuestion.
+   */
+  onPermission(toolName, toolInput, { id = null, agent = false } = {}) {
     if (ASKS.has(toolName)) return null;
     const label = permissionLabel(toolName, toolInput);
     const now = this.clock.now();
     this.lastAttention.set("permission", now);
-    const last = this.recentPermission.get(label);
-    if (last !== undefined && now - last < PERMISSION_DEDUPE_MS) return null;
-    this.recentPermission.set(label, now);
-    this.route("permission", { label });
+    const key = id || `${label}\u0000${JSON.stringify(toolInput ?? null)}`;
+    for (const [k, t] of this.recentPermission) if (now - t >= PERMISSION_DEDUPE_MS) this.recentPermission.delete(k);
+    if (this.recentPermission.has(key)) return null;
+    this.recentPermission.set(key, now);
+    this.route("permission", { label, agent, dedupeKey: `approval:${key}` });
     return label;
   }
 

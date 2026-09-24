@@ -64,3 +64,52 @@ test("live view: the Claude card and the captions never move when the status wor
     }
   }
 });
+
+// The approval card at its most crowded (the user's 0.3.2 screenshot: a background
+// agent's prompt, "5 background agents working", "7 min 0 sec", a long command)
+// stays inside the panel at every width: nothing past the card's content box,
+// the card inside the viewport, no horizontal scroll.
+const CROWDED = `(async () => {
+  const lib = await import("/lib.js");
+  const $ = (id) => document.getElementById(id);
+  const b = document.body.dataset;
+  const v = lib.pageView({ phase: "live", state: "live", attention: true });
+  b.view = v.view; b.dial = v.dial; b.floor = v.floor; b.card = "";
+  $("stage-word").textContent = v.word;
+  const m = lib.claudeView({ busy: true, kind: "permission", agent: true, agents: 5,
+    text: "cd /tmp && O=/Users/someone/dev/project/design/concepts-v2/concept-3/stills && rm -f $O/*.png && python3 render_frames_with_a_very_long_script_name_without_spaces.py" });
+  b.claude = m.kind;
+  $("claude-title").textContent = m.title;
+  $("claude-agents").hidden = false; $("claude-agents").textContent = m.agents;
+  $("claude-time").textContent = "7 min 0 sec";
+  $("claude-step").hidden = true;
+  $("claude-command").hidden = false; $("claude-command").textContent = m.command;
+  $("claude-note").hidden = false;
+  $("claude-request").hidden = false; $("claude-request").textContent = "Asked: \\u201CRender every concept at both sizes and in both themes, then compare them\\u201D";
+  await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
+  const card = $("claude").getBoundingClientRect();
+  const cs = getComputedStyle($("claude"));
+  const inner = { left: card.left + parseFloat(cs.paddingLeft) + parseFloat(cs.borderLeftWidth), right: card.right - parseFloat(cs.paddingRight) - parseFloat(cs.borderRightWidth) };
+  const out = [];
+  for (const el of $("claude").querySelectorAll("*")) {
+    if (el.hidden || el.closest("[hidden]")) continue;
+    const r = el.getBoundingClientRect();
+    if (!r.width) continue;
+    if (r.right > inner.right + 0.5 || r.left < inner.left - 0.5) out.push((el.id || el.className) + " " + Math.round(r.left) + ".." + Math.round(r.right));
+  }
+  const tt = $("claude-title");
+  return { out, titleCut: tt.scrollWidth > tt.clientWidth + 1, card: [card.left, card.right], vw: document.documentElement.clientWidth, sw: document.documentElement.scrollWidth, title: $("claude-title").textContent };
+})()`;
+
+test("approval card: a crowded head and a long command stay inside the panel at 360-640 px", { skip: fs.existsSync(CHROME) ? false : "Chrome not installed", timeout: 60000 }, async (t) => {
+  const page = await openPage(t, { width: 360, height: 760 });
+  for (const w of [360, 400, 420, 480, 560, 640]) {
+    await page.setSize(w, 760);
+    const m = await page.eval(CROWDED);
+    assert.equal(m.title, "A background agent needs your approval");
+    if (w >= 560) assert.equal(m.titleCut, false, `${w}px: the agents chip gives way before the title`);
+    assert.deepEqual(m.out, [], `${w}px: past the card's content box: ${JSON.stringify(m)}`);
+    assert.ok(m.card[0] >= 0 && m.card[1] <= m.vw + 0.5, `${w}px: card outside the viewport ${JSON.stringify(m)}`);
+    assert.ok(m.sw <= m.vw, `${w}px: horizontal scroll ${m.sw} > ${m.vw}`);
+  }
+});

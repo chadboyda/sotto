@@ -629,15 +629,21 @@ body[data-floor="muted"] .word { color: var(--mute); }
   transition-duration: var(--dur-base);
   transition-timing-function: var(--ease-out);
 }
-.claude-head { display: flex; align-items: center; gap: var(--space-2); min-height: 20px; color: var(--fg-2); }
-.claude-title { font-weight: 600; color: var(--fg); }
+/* Never wider than the panel (SPEC §6.10.4, the 0.3.2 report of a clipped approval
+   card): grid items may shrink below their content; short of room the agents
+   chip gives way first, then the title, both with an ellipsis; the time keeps its size. */
+.claude { min-width: 0; max-width: 100%; }
+.claude > * { min-width: 0; }
+.claude-head { display: flex; align-items: center; gap: var(--space-2); min-height: 20px; color: var(--fg-2); min-width: 0; }
+.claude-title { font-weight: 600; color: var(--fg); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.claude-time { flex: none; white-space: nowrap; }
 body[data-claude="idle"] .claude-title { font-weight: 400; color: var(--fg-2); }
 .claude-time { margin-left: auto; color: var(--fg-3); }
 .claude-icon { width: 14px; height: 14px; flex: none; border-radius: 50%; border: 2px solid var(--fg-3); }
 .claude-step { color: var(--fg); font-size: var(--text-body); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 /* A plain-words tool line stands in only while Claude has said nothing lately: quieter. */
 .claude-step[data-secondary="true"] { color: var(--fg-2); font-size: var(--text-small); line-height: calc(var(--text-body) * 1.4); }
-.claude-agents { color: var(--fg-3); font-size: var(--text-meta); white-space: nowrap; }
+.claude-agents { color: var(--fg-3); font-size: var(--text-meta); white-space: nowrap; flex: 0 100 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .claude-agents:not([hidden]) + .claude-time:not(:empty)::before { content: "·"; margin-right: var(--space-1); }
 .claude-agents:not([hidden]) { margin-left: auto; }
 /* 4 px either side of the separator: pull the time back over half the 8 px gap. */

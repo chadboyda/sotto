@@ -29,7 +29,7 @@ export const WAKE_SENSITIVITIES = Object.freeze(["off", "low", "medium", "high"]
  * sendAppend()): answers to voice requests and anything Claude is blocked on.
  * Typed-turn results and routine completions only wait as pendingResult.
  */
-export const WAKE_SOURCES = Object.freeze(new Set(["voice_result", "background_voice", "voice_notice", "permission", "question", "attention", "notify"]));
+export const WAKE_SOURCES = Object.freeze(new Set(["voice_result", "background_voice", "voice_notice", "permission", "approval_reminder", "question", "attention", "notify"]));
 
 /**
  * Should the live session go to sleep now?

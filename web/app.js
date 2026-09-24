@@ -259,6 +259,7 @@ const S = {
   connectStage: null, // "mic" | "network" | "session" while connecting
   floor: null, // "you" | "voice" | null, from the level meters
   claudeKind: null, // last SSE activity kind
+  claudeAgent: false, // the approval shown is a subagent's
   claudeText: "",
   claudeSays: "", // Claude's own latest words this turn (SSE activity "text", already plain)
   claudeSaysAt: null,
@@ -456,6 +457,7 @@ function handleDaemonMessage(msg) {
       }
       S.claudeKind = msg.kind || null;
       S.claudeText = msg.text || "";
+      S.claudeAgent = msg.kind === "permission" && msg.agent === true;
       if (msg.kind === "turn_start") announce("Claude is working.");
       else if (msg.kind === "permission") announce(`Claude needs your approval in the terminal${msg.text ? `: ${lib.truncate(msg.text, 120)}` : ""}.`);
       else if (msg.kind === "turn_end") announce("Claude finished.");
@@ -490,6 +492,9 @@ function applyStatus(st) {
   if (!st || typeof st !== "object") return;
   S.status = st;
   if (st.claude && typeof st.claude.busy === "boolean") setBusy(st.claude.busy);
+  // The daemon tracks pending approvals (SPEC §6.10.4): no approval pending
+  // means the card cannot still ask for one, even if an SSE message was lost.
+  if (st.claude && st.claude.approval === null && S.claudeKind === "permission") { S.claudeKind = "approval_cleared"; S.claudeAgent = false; }
   if (S.voices && st.voice && S.voices.current !== st.voice) {
     S.voices = { ...S.voices, current: st.voice };
     renderVoices();
@@ -2363,7 +2368,7 @@ const REQUEST_ACTIVE = new Set(["collecting", "sent", "delivered", "held_suspect
 function renderClaude() {
   const d = S.delegations[0] || null;
   const m = lib.claudeView({
-    busy: !!S.busy, kind: S.claudeKind, text: S.claudeText, says: S.claudeSays, saysAt: S.claudeSaysAt,
+    busy: !!S.busy, kind: S.claudeKind, text: S.claudeText, agent: !!S.claudeAgent, says: S.claudeSays, saysAt: S.claudeSaysAt,
     tool: S.claudeTool, now: Date.now(), agents: S.agents, summary: S.summary, request: d,
   });
   el.body.dataset.claude = m.kind;

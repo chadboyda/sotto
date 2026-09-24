@@ -111,6 +111,13 @@ public enum UISnapshot {
         }, mic: 0, speaker: 0, floor: nil, elapsed: 3600 + 125),
         State(name: "25-claude-finished-long", build: finishedLong(expanded: false), mic: 0, speaker: 0, floor: nil),
         State(name: "26-claude-finished-long-expanded", build: finishedLong(expanded: true), mic: 0, speaker: 0, floor: nil),
+        // The 0.3.2 report: a background agent's approval with five agents at work, 7 minutes in.
+        State(name: "27-agent-approval-crowded", build: { m in
+            connected(m, status("live", busy: true)); working(m)
+            m.apply(object: ev("activity", ["kind": .string("agents"), "text": .string("5 background agents working"), "count": .number(5)]))
+            m.apply(object: ev("activity", ["kind": .string("permission"), "agent": .bool(true),
+                                            "text": .string("A background agent needs approval to run a shell command")]))
+        }, mic: 0, speaker: 0, floor: nil, elapsed: 420),
     ]
 
     /// Claude's long final message (the user's report: the card grew and a scroller sat on the text).
