@@ -7,6 +7,7 @@
 
 import * as lib from "./lib.js";
 import * as wakeLib from "./wake.js";
+import * as echoLib from "./echo.js";
 import { createDial } from "./dial.js";
 
 // ---------------------------------------------------------------------------
@@ -96,6 +97,9 @@ const el = {
   voiceGrid: $("voice-grid"),
   inputSelect: $("input-select"),
   outputSelect: $("output-select"),
+  echoSummary: $("echo-summary"),
+  echoTestBtn: $("echo-test-btn"),
+  echoGuard: $("echo-guard"),
   pauseBtn: $("pause-btn"),
   stopBtn: $("stop-btn"),
 };
@@ -460,6 +464,10 @@ function applyStatus(st) {
   }
   if (st.state === "paused" && st.last_error?.code === "daily_cap") S.pausedReason = "daily_cap";
   renderKeySettings();
+  // The daemon's echo filter caught the model hearing itself (§6.8.1): evidence for the auto guard.
+  S.echoHeardAt = typeof st.echo_heard_ms_ago === "number" ? Date.now() - st.echo_heard_ms_ago : null;
+  echo.apply();
+  renderEcho();
   if (st.state === "off" && S.pc) {
     // Voice was turned off; the daemon has closed (or is closing) the session.
     teardown();
@@ -552,7 +560,8 @@ async function listDevices() {
 }
 
 async function openMic(deviceId) {
-  const audio = { echoCancellation: true, noiseSuppression: true, autoGainControl: true, channelCount: 1 };
+  // echoCancellation: true (the default), or "all" where the echo test measured it better on this output (§7.7).
+  const audio = { echoCancellation: aecSetting(), noiseSuppression: true, autoGainControl: true, channelCount: 1 };
   if (deviceId) audio.deviceId = { exact: deviceId };
   try {
     return await navigator.mediaDevices.getUserMedia({ audio });
@@ -560,6 +569,11 @@ async function openMic(deviceId) {
     // The chosen device vanished between enumerate and open: fall back to the default once.
     if (deviceId && (err?.name === "OverconstrainedError" || err?.name === "NotFoundError")) {
       delete audio.deviceId;
+      return navigator.mediaDevices.getUserMedia({ audio });
+    }
+    // A browser without the newer echoCancellation values: the plain one.
+    if (audio.echoCancellation !== true && (err?.name === "OverconstrainedError" || err?.name === "TypeError")) {
+      audio.echoCancellation = true;
       return navigator.mediaDevices.getUserMedia({ audio });
     }
     throw err;
@@ -632,6 +646,7 @@ function fillDeviceSelects(devices) {
     [["", "Automatic"], ...inputs.filter((d) => d.deviceId).map((d, i) => [d.deviceId, lib.deviceLabel(d, i)])],
     inputs.some((d) => d.deviceId === savedIn) ? savedIn : "",
   );
+  S.defaultOutputLabel = devices.find((d) => d.kind === "audiooutput" && d.deviceId === "default")?.label?.replace(/^Default - /, "") || "";
   fillSelect(
     el.outputSelect,
     [["", "System default"], ...outputs.filter((d) => d.deviceId).map((d, i) => [d.deviceId, lib.deviceLabel(d, i)])],
@@ -673,7 +688,8 @@ async function switchMic(savedId) {
     watchTrack(track);
     old?.getTracks().forEach((t) => t.stop());
     meter.attach(stream);
-    post("mic_ok", { input_label: track.label || "", output_label: selectedText(el.outputSelect) });
+    echo.setMic(stream);
+    post("mic_ok", { input_label: track.label || "", output_label: selectedText(el.outputSelect), aec: String(track.getSettings?.().echoCancellation ?? "") });
     render();
   } catch (err) {
     logRemote("warn", `mic switch failed: ${err?.name || ""} ${err?.message || err}`);
@@ -859,6 +875,400 @@ function setFloor(floor) {
 }
 
 // ---------------------------------------------------------------------------
+// Echo: measurement, the echo guard and the echo test (§7.7, web/echo.js).
+// Full duplex stays the default: the browser's echo canceller (its reference is
+// the <audio> element's real output) does the work. An AudioWorklet measures
+// what it leaves behind (remote voice vs mic, while the assistant talks), logs
+// it, and shows a hint when it is high. Only when that residue stays high does
+// the guard engage: the sender then carries the worklet's output, which lowers
+// the mic only while it holds nothing louder than the predicted echo. Tests
+// can simulate an uncancelled echo with ?echo_sim_db=<gain> (the remote voice
+// mixed into the mic before the worklet; never set by the daemon).
+// ---------------------------------------------------------------------------
+const KEY_ECHO = "sotto.echo."; // + output key: {level, leak_db, aec, at, quick}
+const KEY_AEC = "sotto.aec."; // + output key: the echoCancellation value the echo test measured best
+const pageParams = new URLSearchParams(location.search);
+const ECHO_SIM_DB = pageParams.has("echo_sim_db") && Number.isFinite(Number(pageParams.get("echo_sim_db"))) ? Number(pageParams.get("echo_sim_db")) : null;
+const ECHO_SIM_DELAY_MS = Number(pageParams.get("echo_sim_delay_ms")) || 40;
+const ECHO_LOG_SPEECH_MS = 30_000; // a leak line per this much assistant speech (and on every level change)
+
+function outputLabel() {
+  return el.outputSelect.value ? selectedText(el.outputSelect) : S.defaultOutputLabel || "System default";
+}
+function outputKey() {
+  return el.outputSelect.value || `default:${S.defaultOutputLabel || ""}`;
+}
+function storedEcho() {
+  try {
+    return JSON.parse(store.get(KEY_ECHO + outputKey()) || "null");
+  } catch {
+    return null;
+  }
+}
+/** Headphones: by the output's name, or the desktop app captured natively (it only does that on headphones, §6.16). */
+function onHeadphones() {
+  const src = S.mic?.getAudioTracks()[0]?.getSettings?.().sottoSource;
+  return src === "native" || echoLib.isHeadphones(outputLabel());
+}
+/** The echoCancellation value to ask for: the echo test's pick for this output, else true. */
+function aecSetting() {
+  const v = store.get(KEY_AEC + outputKey());
+  return v === "all" || v === "remote-only" ? v : true;
+}
+
+const echo = {
+  gen: 0,
+  moduleCtx: null,
+  node: null,
+  micSrc: null,
+  refSrc: null,
+  refTrack: null,
+  sim: [],
+  dest: null,
+  processed: null,
+  raw: null,
+  sending: null, // "raw" | "processed"
+  engaged: false,
+  reason: "",
+  level: "unknown",
+  est: null,
+  highStreak: 0,
+  lowSpeechMs: 0,
+  speechMs: 0,
+  loggedLevel: null,
+  attenuated: 0,
+  refQuanta: 0,
+  hinted: false,
+
+  mode() {
+    const m = S.status?.echo_guard;
+    return m === "on" || m === "off" ? m : "auto";
+  },
+
+  async ensureModule(ctx) {
+    if (this.moduleCtx === ctx) return;
+    await ctx.audioWorklet.addModule("echo-worklet.js");
+    this.moduleCtx = ctx;
+  },
+
+  /** Start measuring once the remote voice exists (pc.ontrack). */
+  async attach(stream, remoteTrack) {
+    this.detach();
+    const gen = ++this.gen;
+    const ctx = meter.ctx;
+    if (!ctx || !stream || !remoteTrack) return;
+    try {
+      await this.ensureModule(ctx);
+      if (gen !== this.gen) return;
+      this.refTrack = remoteTrack.clone();
+      this.refSrc = ctx.createMediaStreamSource(new MediaStream([this.refTrack]));
+      this.node = new AudioWorkletNode(ctx, "sotto-echo", {
+        numberOfInputs: 2, numberOfOutputs: 1, outputChannelCount: [1], channelCount: 1, channelCountMode: "explicit",
+        processorOptions: { engaged: false },
+      });
+      this.node.port.onmessage = (e) => this.onStats(e.data);
+      this.refSrc.connect(this.node, 0, 1);
+      if (ECHO_SIM_DB !== null) {
+        // Tests only: speakers with no echo cancellation at all.
+        const d = ctx.createDelay(1);
+        d.delayTime.value = ECHO_SIM_DELAY_MS / 1000;
+        const g = ctx.createGain();
+        g.gain.value = Math.pow(10, ECHO_SIM_DB / 20);
+        this.refSrc.connect(d).connect(g).connect(this.node, 0, 0);
+        this.sim = [d, g];
+      }
+      this.dest = ctx.createMediaStreamDestination();
+      this.node.connect(this.dest);
+      this.processed = this.dest.stream.getAudioTracks()[0];
+      this.highStreak = this.lowSpeechMs = this.speechMs = this.attenuated = this.refQuanta = 0;
+      this.level = "unknown";
+      this.loggedLevel = null;
+      this.hinted = false;
+      this.setMic(stream);
+      const t = stream.getAudioTracks()[0];
+      let caps = null;
+      try {
+        caps = t?.getCapabilities?.().echoCancellation ?? null;
+      } catch {
+        caps = null;
+      }
+      logRemote("info", `echo: measuring (guard ${this.mode()}, output ${outputLabel()}${onHeadphones() ? ", headphones" : ""}, echoCancellation ${JSON.stringify(t?.getSettings?.().echoCancellation ?? null)} of ${JSON.stringify(caps)}${ECHO_SIM_DB !== null ? `, simulated echo ${ECHO_SIM_DB} dB` : ""})`);
+    } catch (err) {
+      logRemote("warn", `echo: measurement unavailable: ${err?.message || err}`);
+      this.detach();
+    }
+  },
+
+  /** The mic changed (switchMic): measure (and send) the new one. */
+  setMic(stream) {
+    if (!this.node || !stream) return;
+    try {
+      this.micSrc?.disconnect();
+    } catch {
+      /* ignore */
+    }
+    this.micSrc = meter.ctx.createMediaStreamSource(stream);
+    this.micSrc.connect(this.node, 0, 0);
+    this.raw = stream.getAudioTracks()[0] || null;
+    this.sending = "raw"; // pc.addTrack / switchMic put the raw track on the sender
+    this.apply();
+  },
+
+  detach() {
+    this.gen++;
+    if (this.node && this.refQuanta > 0) {
+      // One summary per session: the last estimate and how much of the assistant's speech the guard lowered.
+      const e = this.est || {};
+      const qMs = (128 * 1000) / (meter.ctx?.sampleRate || 48000);
+      post("echo", {
+        kind: "leak", mode: "summary", level: this.level, leak_db: e.leakDb, corr: e.corr, lag_ms: e.lagMs, speech_s: (this.refQuanta * qMs) / 1000,
+        output: outputLabel(), engaged: this.engaged, attenuated_pct: (100 * this.attenuated) / this.refQuanta,
+      });
+    }
+    if (this.node) {
+      this.node.port.onmessage = null;
+      try {
+        this.node.port.postMessage({ stop: true });
+      } catch {
+        /* ignore */
+      }
+    }
+    for (const n of [this.micSrc, this.refSrc, this.node, ...this.sim]) {
+      try {
+        n?.disconnect();
+      } catch {
+        /* ignore */
+      }
+    }
+    this.refTrack?.stop();
+    this.processed?.stop();
+    if (this.engaged) post("echo", { kind: "guard", engaged: false, reason: "session_end", mode: this.mode() });
+    this.node = this.micSrc = this.refSrc = this.refTrack = this.dest = this.processed = this.raw = null;
+    this.sim = [];
+    this.sending = null;
+    this.engaged = false;
+  },
+
+  /** Decide the guard, tell the worklet, and put the right track on the sender. */
+  apply() {
+    if (!this.node) return;
+    const d = echoLib.guardDecision({
+      mode: this.mode(), headphones: onHeadphones(), testLevel: storedEcho()?.quick ? null : storedEcho()?.level,
+      engaged: this.engaged, reason: this.reason, highStreak: this.highStreak, lowSpeechMs: this.lowSpeechMs,
+      heard: S.echoHeardAt != null && Date.now() - S.echoHeardAt < echoLib.HEARD_RECENT_MS,
+    });
+    if (d.engaged !== this.engaged) {
+      this.engaged = d.engaged;
+      this.reason = d.reason;
+      this.node.port.postMessage({ engaged: d.engaged });
+      const e = this.est || {};
+      post("echo", { kind: "guard", engaged: d.engaged, reason: d.reason, mode: this.mode(), leak_db: e.leakDb, corr: e.corr, lag_ms: e.lagMs, output: outputLabel() });
+      logRemote("info", `echo: guard ${d.engaged ? "on" : "off"} (${d.reason})`);
+      renderEcho();
+    }
+    const want = this.engaged || ECHO_SIM_DB !== null ? "processed" : "raw";
+    if (want === this.sending || !S.sender) return;
+    const track = want === "processed" ? this.processed : this.raw;
+    if (!track) return;
+    this.sending = want;
+    S.sender.replaceTrack(track).catch((err) => {
+      this.sending = null;
+      logRemote("warn", `echo: replaceTrack failed: ${err?.message || err}`);
+    });
+  },
+
+  onStats(m) {
+    if (!m || m.type !== "stats") return;
+    const e = m.est || {};
+    this.est = e;
+    const lvl = m.level || "unknown";
+    const qMs = (128 * 1000) / (meter.ctx?.sampleRate || 48000);
+    const refMs = (m.gate?.ref || 0) * qMs;
+    this.speechMs += refMs;
+    this.refQuanta += m.gate?.ref || 0;
+    this.attenuated += m.gate?.attenuated || 0;
+    if (refMs > 0) {
+      if (lvl === "high") this.highStreak++;
+      else if (lvl !== "unknown") this.highStreak = 0;
+      if (lvl === "low") this.lowSpeechMs += refMs;
+      else if (lvl === "high" || lvl === "some") this.lowSpeechMs = 0;
+    }
+    this.level = lvl;
+    if (lvl === "high" && !this.hinted && !onHeadphones()) {
+      this.hinted = true;
+      showBanner("warn", "Echo detected — headphones recommended", "echo");
+    }
+    if (lvl !== "unknown" && (lvl !== this.loggedLevel || this.speechMs >= ECHO_LOG_SPEECH_MS)) {
+      post("echo", {
+        kind: "leak", level: lvl, leak_db: e.leakDb, corr: e.corr, lag_ms: e.lagMs, speech_s: (e.activeMs || 0) / 1000,
+        output: outputLabel(), aec: String(this.raw?.getSettings?.().echoCancellation ?? ""), engaged: this.engaged,
+        attenuated_pct: this.refQuanta ? (100 * this.attenuated) / this.refQuanta : 0,
+      });
+      this.loggedLevel = lvl;
+      this.speechMs = 0;
+    }
+    this.apply();
+  },
+};
+
+// The echo test (settings drawer, and once per new speaker, quietly, §7.7).
+const echoTest = { running: false, result: null };
+
+/** A quiet sweep 300 Hz → 3 kHz with a syllable-like on/off pattern (the estimator follows level changes). */
+function sweepBuffer(ctx, dbfs, seconds) {
+  const sr = ctx.sampleRate;
+  const buf = ctx.createBuffer(1, Math.round(seconds * sr), sr);
+  const x = buf.getChannelData(0);
+  const amp = Math.pow(10, dbfs / 20) * Math.SQRT2;
+  let phase = 0;
+  for (let i = 0; i < x.length; i++) {
+    const t = i / sr;
+    const f = 300 * Math.pow(10, t / seconds);
+    phase += (2 * Math.PI * f) / sr;
+    const on = Math.sin(Math.PI * ((t * 4) % 1)) ** 2; // 4 "syllables" a second
+    x[i] = amp * on * Math.sin(phase);
+  }
+  return buf;
+}
+
+/** Play `buffer` on the session's speaker and measure how much of it the mic `stream` hears. */
+async function measurePlayback(ctx, stream, buffer) {
+  const node = new AudioWorkletNode(ctx, "sotto-echo", { numberOfInputs: 2, numberOfOutputs: 0, channelCount: 1, channelCountMode: "explicit", processorOptions: { windowMs: 10000 } });
+  let last = null;
+  node.port.onmessage = (e) => { if (e.data?.type === "stats") last = e.data; };
+  const mic = ctx.createMediaStreamSource(stream);
+  mic.connect(node, 0, 0);
+  const src = ctx.createBufferSource();
+  src.buffer = buffer;
+  const dest = ctx.createMediaStreamDestination();
+  src.connect(dest);
+  src.connect(node, 0, 1);
+  const a = new Audio();
+  a.srcObject = dest.stream;
+  const sink = el.outputSelect.value || "";
+  if (sink && typeof a.setSinkId === "function") { try { await a.setSinkId(sink); } catch { /* default output */ } }
+  try {
+    await a.play();
+    src.start();
+    // Echo cancellers take a moment to converge: judge the steady state.
+    await new Promise((r) => setTimeout(r, 500));
+    node.port.postMessage({ reset: true });
+    await new Promise((r) => setTimeout(r, Math.max(0, buffer.duration * 1000 - 500) + 700));
+  } finally {
+    try { src.stop(); } catch { /* ended */ }
+    a.pause();
+    a.srcObject = null;
+    node.port.postMessage({ stop: true });
+    for (const n of [mic, src, node]) { try { n.disconnect(); } catch { /* ignore */ } }
+  }
+  const est = last?.est || {};
+  return { level: last?.level || "unknown", leak_db: est.leakDb ?? null, corr: est.corr ?? null, below_floor: !!est.belowFloor, lag_ms: est.lagMs ?? null };
+}
+
+/**
+ * Run the echo test. quiet: a short, soft sweep, no mute, result kept only
+ * when conclusive (the automatic first run on a new speaker). Otherwise the
+ * current voice's recorded sample if there is one (never a new recording),
+ * the live input is muted for the test, and Chrome's echoCancellation "all"
+ * is measured too where supported; the better setting is kept for this output.
+ */
+async function runEchoTest({ quiet = false } = {}) {
+  if (echoTest.running) return null;
+  echoTest.running = true;
+  echoTest.result = null;
+  renderEcho();
+  const muted = !quiet && S.phase === "live" && !S.muted && !S.mutePending;
+  if (muted) sendMute(true);
+  const extra = [];
+  try {
+    meter.ctx ??= new AudioContext();
+    const ctx = meter.ctx;
+    if (ctx.state === "suspended") await ctx.resume().catch(() => {});
+    await echo.ensureModule(ctx);
+    let stream = S.mic || wake.stream;
+    if (!stream || stream.getAudioTracks()[0]?.readyState !== "live") {
+      stream = await acquireMic();
+      extra.push(stream);
+    }
+    let buffer = null;
+    let voice = null;
+    if (!quiet) {
+      voice = S.voices?.current || S.status?.voice || null;
+      try {
+        const res = voice ? await fetch(`/api/voice-preview?voice=${encodeURIComponent(voice)}&cached=1`, { headers: { "X-Sotto-Page": S.token || "" } }) : null;
+        if (res?.ok) buffer = await ctx.decodeAudioData(await res.arrayBuffer());
+      } catch {
+        buffer = null;
+      }
+      if (buffer) post("played", { what: "echo_test", voice });
+    }
+    buffer ??= sweepBuffer(ctx, quiet ? -24 : -14, quiet ? 1.4 : 2.0);
+    const current = String(stream.getAudioTracks()[0]?.getSettings?.().echoCancellation ?? aecSetting());
+    const results = [{ aec: current, ...(await measurePlayback(ctx, stream, buffer)) }];
+    // Chrome 141+: echoCancellation "all" also cancels every sound the system plays.
+    const caps = stream.getAudioTracks()[0]?.getCapabilities?.().echoCancellation;
+    if (!quiet && HOST === "browser" && Array.isArray(caps) && caps.includes("all") && current !== "all") {
+      try {
+        const deviceId = stream.getAudioTracks()[0]?.getSettings?.().deviceId;
+        const alt = await navigator.mediaDevices.getUserMedia({ audio: { ...(deviceId ? { deviceId: { exact: deviceId } } : {}), echoCancellation: { exact: "all" }, noiseSuppression: true, autoGainControl: true, channelCount: 1 } });
+        extra.push(alt);
+        results.push({ aec: "all", ...(await measurePlayback(ctx, alt, buffer)) });
+      } catch (err) {
+        logRemote("info", `echo test: echoCancellation "all" not available: ${err?.name || ""} ${err?.message || err}`);
+      }
+    }
+    const rank = { low: 0, some: 1, high: 2, unknown: 3 };
+    const best = [...results].sort((a, b) => rank[a.level] - rank[b.level] || (a.leak_db ?? 0) - (b.leak_db ?? 0))[0];
+    const verdict = echoLib.echoTestVerdict(best.level);
+    echoTest.result = { ...verdict, leak_db: best.leak_db, aec: best.aec, quick: quiet };
+    post("echo", { kind: "test", level: verdict.level, leak_db: best.leak_db, corr: best.corr, aec: best.aec, mode: quiet ? "quick" : "full", output: outputLabel(), results });
+    logRemote("info", `echo test (${quiet ? "quick" : "full"}, ${outputLabel()}): ${results.map((r) => `aec=${r.aec} ${r.level} leak ${r.leak_db === null ? "?" : r.leak_db.toFixed(1)} dB${r.below_floor ? " (below floor)" : ""} corr ${r.corr === null ? "?" : r.corr.toFixed(2)}`).join("; ")}`);
+    const conclusive = verdict.level !== "unknown" && !(quiet && best.below_floor && best.leak_db > -35);
+    if (conclusive) {
+      store.set(KEY_ECHO + outputKey(), JSON.stringify({ level: verdict.level, leak_db: best.leak_db, aec: best.aec, at: Date.now(), quick: quiet }));
+      if (!quiet && best.aec !== current && (best.aec === "all" || best.aec === "true")) {
+        store.set(KEY_AEC + outputKey(), best.aec === "true" ? "" : best.aec);
+        if (S.pc) switchMic(store.get(KEY_INPUT)); // reopen with the better setting
+      }
+    }
+    return echoTest.result;
+  } catch (err) {
+    logRemote("warn", `echo test failed: ${err?.name || ""} ${err?.message || err}`);
+    echoTest.result = { level: "unknown", title: "Could not test", advice: String(err?.message || err) };
+    return null;
+  } finally {
+    for (const s of extra) stopStream(s);
+    if (muted && S.phase === "live") sendMute(false);
+    echoTest.running = false;
+    renderEcho();
+    echo.apply();
+  }
+}
+
+/** The first session on a speaker that is not headphones runs the quick test once (quietly, while connecting). */
+function maybeAutoEchoTest() {
+  if (echo.mode() === "off" || onHeadphones() || storedEcho() || echoTest.running || ECHO_SIM_DB !== null) return;
+  runEchoTest({ quiet: true });
+}
+
+function renderEcho() {
+  if (!el.echoSummary) return;
+  const r = echoTest.running ? null : echoTest.result || storedEcho();
+  let text;
+  if (echoTest.running) text = "Listening for the speaker…";
+  else if (r && r.title) text = `${r.title}. ${r.advice}`;
+  else if (r && r.level) {
+    const v = echoLib.echoTestVerdict(r.level === "good" ? "low" : r.level === "heavy" ? "high" : r.level);
+    text = `${v.title}${r.quick ? " (quick check)" : ""}. ${v.advice}`;
+  } else text = onHeadphones() ? "Headphones: no echo to worry about." : "Not tested on this speaker yet.";
+  el.echoSummary.textContent = text;
+  el.echoTestBtn.disabled = echoTest.running;
+  el.echoTestBtn.textContent = echoTest.running ? "Testing…" : "Test echo";
+  const m = echo.mode();
+  el.echoGuard.textContent = m === "off" ? "Echo guard: off." : m === "on" ? "Echo guard: always on." : echo.engaged ? "Echo guard: on (the mic hears the speaker; you can still talk over Sotto)." : "Echo guard: automatic, not needed now.";
+}
+
+// ---------------------------------------------------------------------------
 // Local voice wake (§7.6). While the daemon is `sleeping` there is no Live
 // session; the mic stays open here (no network, nothing billed) and a local
 // voice-activity detector (wake.js) listens. Speech re-creates the session, and
@@ -982,6 +1392,8 @@ const wake = {
     const r = this.vad.process(frame);
     this.paint(lib.levelFromRms(10 ** (r.db / 20)));
     if (this.triggered || !this.listening || !r.trigger) return;
+    // Our own sound (a voice sample, the echo test) is not the user starting to talk.
+    if (sample.state === "playing" || echoTest.running) return;
     const cfg = S.status?.wake;
     if (wakeLib.cooldownLeft(cfg, Date.now()) > 0) return;
     const now = performance.now();
@@ -1115,7 +1527,8 @@ async function connect(reason, { wakeMeta = null } = {}) {
   watchTrack(track);
   meter.attach(stream);
   await applySink();
-  post("mic_ok", { input_label: track?.label || "", output_label: selectedText(el.outputSelect) });
+  post("mic_ok", { input_label: track?.label || "", output_label: selectedText(el.outputSelect), aec: String(track?.getSettings?.().echoCancellation ?? "") });
+  maybeAutoEchoTest();
   S.connectStage = "network";
   render();
 
@@ -1128,6 +1541,7 @@ async function connect(reason, { wakeMeta = null } = {}) {
       el.audio.srcObject = new MediaStream([e.track]);
       // The dial meters an unplayed clone; the <audio> element stays the AEC reference.
       meter.attachVoice(e.track);
+      echo.attach(S.mic, e.track);
       el.audio.play().catch(() => audioBlocked());
     };
     pc.onconnectionstatechange = () => {
@@ -1260,6 +1674,7 @@ function teardown({ keepMic = false } = {}) {
   // released there unless the daemon goes to sleep (§7.6).
   if (keepMic && mic && mic.getAudioTracks()[0]?.readyState === "live") wake.hold(mic);
   else mic?.getTracks().forEach((t) => t.stop());
+  echo.detach();
   meter.detach();
   el.audio.srcObject = null;
   dismissBannerKey("autoplay");
@@ -2030,6 +2445,7 @@ async function playSample(name) {
     a.onended = () => { if (sample.audio === a) stopSample(); };
     renderSamples();
     await a.play();
+    post("played", { what: "sample", voice: name }); // the daemon's echo filter learns its words (§6.8.1)
   } catch (err) {
     if (gen !== sample.gen) return;
     stopSample();
@@ -2113,10 +2529,16 @@ el.wakeSelect?.addEventListener("change", () => {
   render();
 });
 
-el.outputSelect.addEventListener("change", () => {
+el.outputSelect.addEventListener("change", async () => {
   store.set(KEY_OUTPUT, el.outputSelect.value);
-  applySink();
+  await applySink();
+  // Another speaker: another echo path (§7.7). Headphones turn an auto guard off.
+  echoTest.result = null;
+  echo.apply();
+  renderEcho();
 });
+
+el.echoTestBtn?.addEventListener("click", () => runEchoTest());
 
 el.voiceSelect.addEventListener("change", () => chooseVoice(el.voiceSelect.value));
 

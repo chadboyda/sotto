@@ -108,8 +108,8 @@ test("/status is the full Status object", async (t) => {
   const h = await server(t);
   await h.req({ method: "POST", path: "/control", body: { action: "on", session: SESSION(), config: {} }, headers: h.key });
   const s = (await h.req({ path: "/status", headers: h.key })).json;
-  assert.deepEqual(Object.keys(s), ["state", "owner", "live", "today", "config", "claude", "page", "delegations", "counters", "last_error", "wake", "api_key"]);
-  assert.deepEqual(Object.keys(s.counters), ["delegations", "inbox_sent", "inbox_failed", "thinking_sent", "commentary_sent", "instructions_sent", "appends_acked", "appends_failed", "hooks", "sessions_created", "mirror_sent", "mirror_failed"]);
+  assert.deepEqual(Object.keys(s), ["state", "owner", "live", "today", "config", "claude", "page", "delegations", "counters", "last_error", "wake", "api_key", "echo"]);
+  assert.deepEqual(Object.keys(s.counters), ["delegations", "inbox_sent", "inbox_failed", "thinking_sent", "commentary_sent", "instructions_sent", "appends_acked", "appends_failed", "hooks", "sessions_created", "mirror_sent", "mirror_failed", "echo_guard_on", "echo_heard"]);
   assert.equal(s.live, null);
   assert.equal(s.owner.project, "proj-a");
   assert.ok(!JSON.stringify(s).includes("inbox-token-a"));

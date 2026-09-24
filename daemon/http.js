@@ -177,7 +177,8 @@ export function createHttpServer({ voice, port, daemonKey, pageToken, pageSecret
     // Voice sample for the picker (preview.js). GET, page token; audio/wav.
     if (p === "/api/voice-preview" && method === "GET") {
       if (!pageOk(req, url)) return err(res, 403, "bad_token");
-      const r = await voice.voicePreview(url.searchParams.get("voice") || "");
+      // cached=1 (the echo test, §7.7): only an already recorded sample, never a new (billed) recording.
+      const r = await voice.voicePreview(url.searchParams.get("voice") || "", { cachedOnly: url.searchParams.get("cached") === "1" });
       if (!r.wav) return send(res, r.status, r.body);
       return send(res, 200, r.wav, { "Content-Type": "audio/wav", "Cache-Control": "private, max-age=86400" });
     }

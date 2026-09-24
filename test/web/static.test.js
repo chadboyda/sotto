@@ -58,10 +58,12 @@ test("app.js uses the oai-events channel, the page header, and a persistent audi
   const app = read("app.js");
   assert.ok(app.includes('createDataChannel("oai-events")'));
   assert.ok(app.includes('"X-Sotto-Page"'));
-  assert.ok(app.includes("echoCancellation: true"));
+  // echoCancellation is true unless the echo test measured "all" better on this output (§7.7).
+  assert.ok(app.includes("echoCancellation: aecSetting()"));
+  assert.match(app, /return v === "all" \|\| v === "remote-only" \? v : true;/);
   assert.ok(app.includes("noiseSuppression: true"));
   assert.ok(app.includes("autoGainControl: true"));
-  assert.ok(!/createMediaStreamDestination|\.connect\([^)]*destination/.test(app), "no WebAudio playback path");
+  assert.ok(!/\.connect\([^)]*\.destination\b/.test(app), "no WebAudio playback path");
   assert.ok(app.includes('"clv.inputDeviceId"') && app.includes('"clv.outputDeviceId"'));
 });
 
@@ -78,8 +80,16 @@ test("the voice meter reads an unplayed clone; nothing in web/ plays through Web
   assert.ok(app.includes("el.audio.srcObject = new MediaStream([e.track])"), "the <audio> element plays the remote track");
   for (const name of ["app.js", "dial.js"]) {
     const src = stripComments(name, read(name));
-    assert.ok(!/\.destination\b|createMediaStreamDestination/.test(src), `${name}: no WebAudio playback path`);
+    assert.ok(!/\.destination\b/.test(src), `${name}: no WebAudio playback path`);
   }
+  // MediaStream destinations exist for exactly two things (§7.7): the echo
+  // guard's track for the sender (never played) and the echo test's sound,
+  // played by an <audio> element on the session's speaker (the echo
+  // canceller's reference), never by the AudioContext.
+  const app2 = stripComments("app.js", app);
+  assert.equal((app2.match(/createMediaStreamDestination\(\)/g) || []).length, 2);
+  assert.match(app2, /this\.processed = this\.dest\.stream\.getAudioTracks\(\)\[0\];/);
+  assert.match(app2, /a\.srcObject = dest\.stream;/);
 });
 
 test("the page keeps one polite announcer and no live region on the caption stream", () => {

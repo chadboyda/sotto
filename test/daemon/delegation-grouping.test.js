@@ -94,8 +94,8 @@ test("a request longer than the cap keeps the newest words and says it was trimm
 
 test("an echo line inside a long request is dropped and not re-sent later", async () => {
   const h = harness();
-  h.transcript.add("assistant", " I'll check the current git branch for you", 0, 1500);
-  h.say("I'll check the current git branch", 1600); // mic picked the assistant up
+  h.hear("I'll check the current git branch for you", 0);
+  h.say("I'll check the current git branch", 400); // mic picked the assistant up, 400 ms behind
   await h.clock.advance(20000);
   h.say("now also run the tests please", 20000);
   const rec = h.create("item_1", 21600);

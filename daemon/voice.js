@@ -2,7 +2,7 @@
 // §6.13 shutdown). Wires the sideband, transcript, delegation engine, narrator,
 // page (SSE) and Chrome window together. All time goes through `clock`.
 import { randomBytes } from "node:crypto";
-import { normalizeConfig, POLICIES, VOICES, openaiBase, wssBase, VERSION, MAX_APPEND_TOKENS, voiceMarker, BG } from "./config.js";
+import { normalizeConfig, POLICIES, VOICES, ECHO_GUARD_MODES, openaiBase, wssBase, VERSION, MAX_APPEND_TOKENS, voiceMarker, BG } from "./config.js";
 import { estTokens, fitTokens, tokenChunks, speakable, summary, clip, awaitingQuestion } from "./speech.js";
 import { makeOwner, ownerStatus, isOwnerAlive } from "./owner.js";
 import { writeActive, removeActive, createPendingContext, removePendingContext, readUsage, writeUsage, localDate, StatusFileWriter } from "./statefiles.js";
@@ -15,7 +15,7 @@ import { renderForPolicy, buildSeedInput, greeting, ownerSwitchInstruction, voic
 import { readPrefs, writePrefs, resolveVoice, normalizeVoice, voiceListMessage, unknownVoiceMessage } from "./prefs.js";
 import { collectVocabulary, renderVocabulary, vocabularyHint, TIER } from "./vocabulary.js";
 import { buildSessionBody, createLiveSession, Sideband } from "./live.js";
-import { PreviewCache, recordPreview } from "./preview.js";
+import { PreviewCache, recordPreview, previewText } from "./preview.js";
 import { readTranscriptTail, readAbsorbed, gitBranch } from "./claude-context.js";
 import { truncate } from "./log.js";
 import { usageToday } from "./format.js";
@@ -78,7 +78,7 @@ const RESTART_WAIT_WORDS = {
 export function newCounters() {
   return {
     delegations: 0, inbox_sent: 0, inbox_failed: 0, thinking_sent: 0, commentary_sent: 0, instructions_sent: 0,
-    appends_acked: 0, appends_failed: 0, hooks: 0, sessions_created: 0, mirror_sent: 0, mirror_failed: 0,
+    appends_acked: 0, appends_failed: 0, hooks: 0, sessions_created: 0, mirror_sent: 0, mirror_failed: 0, echo_guard_on: 0, echo_heard: 0,
   };
 }
 
@@ -174,6 +174,19 @@ export class Voice {
     });
 
     this.transcript = new Transcript({ clock: this.clock });
+    // The model heard its own voice (echo filter, §6.8.1): tell the page, whose
+    // echo guard in `auto` engages only with this evidence (§7.7).
+    this.selfEchoAt = 0;
+    this.transcript.onSelfEcho = ({ words, delay_ms }) => {
+      const now = this.clock.now();
+      const first = now - this.selfEchoAt > 10_000;
+      this.selfEchoAt = now;
+      if (first) {
+        this.counters.echo_heard++;
+        this.log.info("echo.heard", { words, delay_ms });
+        this.changed();
+      }
+    };
     // Every commentary goes through the speech queue, so a spoken update never
     // cuts off what the assistant is saying (§6.10.2).
     this.speech = new SpeechQueue({
@@ -259,6 +272,7 @@ export class Voice {
       config: {
         voice: this.config.voice, idle_minutes: this.config.idle_minutes, idle_seconds: idleSecondsOf(this.config), speaking_policy: this.policy,
         daily_cap_minutes: this.config.daily_cap_minutes, wake_sensitivity: this.config.wake_sensitivity, mirror: this.mirrorMode(),
+        echo_guard: this.echoGuardMode(),
       },
       claude: { busy: this.delegation.claudeBusy, last_event_at: iso(this.lastClaudeEventAt), awaiting_input: !!this.awaiting },
       page: { connected: this.sse.count > 0 || false, clients: this.sse.count },
@@ -267,6 +281,7 @@ export class Voice {
       last_error: this.lastError ? { ...this.lastError } : null,
       wake: { ...this.governor.status(this.config.wake_sensitivity), queued: this.wakeQueue.length },
       api_key: { source: this.keyInfo().source },
+      echo: this.echoState ? { ...this.echoState } : null,
     };
   }
 
@@ -278,6 +293,8 @@ export class Voice {
       speaking_policy: this.policy,
       idle_minutes: this.config.idle_minutes,
       idle_seconds: idleSecondsOf(this.config),
+      echo_guard: this.echoGuardMode(),
+      echo_heard_ms_ago: this.selfEchoAt ? this.clock.now() - this.selfEchoAt : null,
       wake: this.governor.pageConfig(this.config.wake_sensitivity, true),
       live: this.live ? { session_id: this.live.id, expires_at: this.live.expires_at, usage_seconds: this.live.usage_seconds, muted: this.live.muted } : null,
       today: { seconds: Math.round(this.todaySeconds() * 10) / 10, cap_minutes: this.config.daily_cap_minutes },
@@ -464,6 +481,42 @@ export class Voice {
   mirrorMode() {
     const e = this.env.SOTTO_MIRROR;
     return MIRROR_MODES.includes(e) ? e : this.config.mirror || "all";
+  }
+
+  /** userConfig `echo_guard` (§7.7), overridden by env SOTTO_ECHO_GUARD (tests, e2e). */
+  echoGuardMode() {
+    const e = this.env.SOTTO_ECHO_GUARD;
+    return ECHO_GUARD_MODES.includes(e) ? e : this.config.echo_guard || "auto";
+  }
+
+  /**
+   * Echo reports from the page (§7.7): the measured leak, the guard turning
+   * on or off, and echo-test results. Logged, and the latest kept for /status.
+   */
+  onPageEcho(msg) {
+    const num = (v, d = 1) => (Number.isFinite(Number(v)) ? Math.round(Number(v) * 10 ** d) / 10 ** d : null);
+    const kind = ["leak", "guard", "test", "aec"].includes(msg.kind) ? msg.kind : "leak";
+    const f = {
+      kind, level: typeof msg.level === "string" ? truncate(msg.level, 16) : null,
+      leak_db: num(msg.leak_db), corr: num(msg.corr, 2), lag_ms: num(msg.lag_ms, 0), speech_s: num(msg.speech_s),
+      engaged: typeof msg.engaged === "boolean" ? msg.engaged : undefined, reason: typeof msg.reason === "string" ? truncate(msg.reason, 40) : undefined,
+      mode: typeof msg.mode === "string" ? truncate(msg.mode, 16) : undefined, output: typeof msg.output === "string" ? truncate(msg.output, 80) : undefined,
+      aec: msg.aec === undefined ? undefined : truncate(String(msg.aec), 16), attenuated_pct: num(msg.attenuated_pct),
+      results: Array.isArray(msg.results) ? msg.results.slice(0, 4).map((r) => ({ aec: truncate(String(r?.aec ?? ""), 16), leak_db: num(r?.leak_db), corr: num(r?.corr, 2), level: truncate(String(r?.level ?? ""), 16) })) : undefined,
+    };
+    for (const k of Object.keys(f)) if (f[k] === undefined || f[k] === null) delete f[k];
+    this.log.info(`echo.${kind}`, f);
+    this.echoState = { ...(this.echoState || {}), [kind]: { ...f, at: iso(this.clock.now()) } };
+    if (kind === "guard" && f.engaged === true) this.counters.echo_guard_on++;
+  }
+
+  /** The page played something aloud outside the session (a voice sample, the echo test): the echo filter knows its words (§6.8.1). */
+  onPagePlayed(msg) {
+    const v = normalizeVoice(msg.voice);
+    if (msg.what === "sample" || msg.what === "echo_test") {
+      if (v) this.transcript.addSpoken(previewText(v), msg.what);
+      this.log.info("page.played", { what: msg.what, voice: v || null });
+    }
   }
 
   onMirrorSent({ text, lines, dropped, reason, ok, code }) {
@@ -763,9 +816,10 @@ export class Voice {
    * records it (about 4 s, billed about 4 s and booked to today's usage);
    * later ones read the cached file.
    */
-  async voicePreview(name) {
+  async voicePreview(name, { cachedOnly = false } = {}) {
     const v = normalizeVoice(name);
     if (!v) return { status: 400, body: { error: { code: "bad_voice", message: unknownVoiceMessage(name) } } };
+    if (cachedOnly && !this.previews.has(v)) return { status: 404, body: { error: { code: "not_cached", message: "No sample of this voice has been recorded yet." } } };
     if (!this.previews.has(v)) {
       if (!this.getApiKey()) return { status: 503, body: { error: { code: "no_api_key", message: "OPENAI_API_KEY was not found." } } };
       if (this.capReached()) return { status: 429, body: { error: { code: "daily_cap", message: `Daily voice cap reached (${this.config.daily_cap_minutes} min).` } } };
@@ -1016,14 +1070,14 @@ export class Voice {
   // ---- page events ----------------------------------------------------------------------
   handlePage(msg = {}) {
     const t = msg.type;
-    if (t !== "activity" && t !== "log" && t !== "wake_audio" && t !== "wake_timing") this.log.info("page", { type: t, state: msg.state, name: msg.name, muted: msg.muted });
+    if (t !== "activity" && t !== "log" && t !== "wake_audio" && t !== "wake_timing" && t !== "echo" && t !== "played") this.log.info("page", { type: t, state: msg.state, name: msg.name, muted: msg.muted });
     switch (t) {
       case "hello":
         this.pageHello = true;
         if (this.helloNotice) { const n = this.helloNotice; this.helloNotice = null; this.notice(n.level, n.code, n.text); }
         this.changed();
         break;
-      case "mic_ok": this.log.info("page.mic_ok", { input: truncate(msg.input_label, 120), output: truncate(msg.output_label, 120) }); break;
+      case "mic_ok": this.log.info("page.mic_ok", { input: truncate(msg.input_label, 120), output: truncate(msg.output_label, 120), aec: msg.aec === undefined ? undefined : truncate(String(msg.aec), 16) }); break;
       case "mic_error": {
         const denied = /NotAllowed|Permission|Security/i.test(String(msg.name || ""));
         this.setLastError(denied ? "mic_denied" : "mic_error", truncate(String(msg.message || msg.name || "microphone error"), 200));
@@ -1041,6 +1095,8 @@ export class Voice {
       case "set_wake": this.setWakeSensitivity(msg.sensitivity); break;
       case "wake_audio": this.onWakeAudio(msg).catch((e) => this.log.error("wake.error", { message: String(e && e.message) })); break;
       case "wake_timing": this.onWakeTiming(msg); break;
+      case "echo": this.onPageEcho(msg); break;
+      case "played": this.onPagePlayed(msg); break;
       case "log": {
         const lvl = msg.level === "error" ? "error" : msg.level === "warn" ? "warn" : "info";
         this.log[lvl]("page.log", { src: "page", message: truncate(String(msg.message ?? ""), 500) });
@@ -1447,6 +1503,15 @@ export class Voice {
     if (this.sideband !== sb || !this.live) return;
     this.live.wakeHandled = true;
     this.clear("wakeNote");
+    if (text) {
+      // The clip is checked against what was played aloud just before
+      // (§6.8.1): a voice sample or the end of the last session is not the user.
+      const e = this.transcript.filterEchoText(text);
+      if (e.verdict !== "clean") {
+        this.log.info("wake.echo", { verdict: e.verdict, words: e.words, echo_words: e.echoWords + e.phraseWords });
+        text = e.verdict === "echo" ? null : e.frags.map((f) => f.text).join(" ").replace(/\s+/g, " ").trim() || null;
+      }
+    }
     if (text) {
       this.governor.onHeardUser();
       // Part of the user's turn: the delegation text (built from user

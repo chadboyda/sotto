@@ -92,6 +92,37 @@
     };
   }
 
+  // ---- the page's speaker choice (SPEC §6.16 "Native mic", §7.7) ----
+  // Native capture has no echo cancellation, and the app picks it when the
+  // SYSTEM default output is headphones. If the page plays the voice on
+  // another output (its Speaker picker, setSinkId), that output decides: a
+  // speaker needs WebKit's capture (Apple voice processing), or the mic would
+  // hear the voice with nothing to cancel it.
+  let sinkLabel = null; // null: the system default output
+  const HEADPHONES = /airpods|headphone|headset|earbud|earphone|buds\b|beats|bluetooth/i;
+  const overridePlan = (plan) =>
+    plan && plan.mode === "native" && sinkLabel !== null && !HEADPHONES.test(sinkLabel) ? { ...plan, mode: "webkit", reason: "sink_speakers" } : plan;
+  const MP = window.HTMLMediaElement && window.HTMLMediaElement.prototype;
+  if (MP && typeof MP.setSinkId === "function") {
+    const origSink = MP.setSinkId;
+    MP.setSinkId = async function (id) {
+      const r = await origSink.call(this, id);
+      if (this.id === "remote-audio") {
+        let next = null;
+        if (id) {
+          const outs = (await origEnum().catch(() => [])).filter((d) => d.kind === "audiooutput");
+          const d = outs.find((o) => o.deviceId === id);
+          next = d ? String(d.label || "") : null;
+        }
+        if (next !== sinkLabel) {
+          sinkLabel = next;
+          if (window.__sottoMicRoute) window.__sottoMicRoute();
+        }
+      }
+      return r;
+    };
+  }
+
   // ---- getUserMedia ----
   md.getUserMedia = async (constraints) => {
     const a = constraints && constraints.audio;
@@ -101,6 +132,7 @@
     try {
       plan = await ask({ op: "plan", device: want });
       if (plan && plan.error === "NotFoundError" && !isExact(a)) plan = await ask({ op: "plan", device: null });
+      plan = overridePlan(plan);
     } catch {
       return origGUM(constraints);
     }
@@ -313,6 +345,7 @@ registerProcessor("sotto-native-mic", SottoNativeMic);
         try {
           plan = await ask({ op: "plan", device: c.requested });
           if (plan && plan.error === "NotFoundError") plan = await ask({ op: "plan", device: null });
+          plan = overridePlan(plan);
         } catch {
           continue;
         }

@@ -54,6 +54,11 @@
       "type": "string", "title": "Mirror speech to Claude", "default": "all",
       "options": ["all", "decisions", "off"],
       "description": "What you say to the voice that it does not hand to Claude still reaches Claude a few seconds later as background: all (everything but filler), decisions (only decisions, feedback and requests), or off."
+    },
+    "echo_guard": {
+      "type": "string", "title": "Echo guard", "default": "auto",
+      "options": ["auto", "on", "off"],
+      "description": "Keeps the voice from hearing itself on speakers. auto: a soft echo suppressor turns on only when the voice window measures echo that the browser's echo cancellation left behind (you can still talk over the voice); on: always; off: never. Headphones never need it."
     }
   }
 }

@@ -1,6 +1,6 @@
 // Desktop app against the REAL gpt-live-1 (opt-in):
 //   SOTTO_APP_LIVE=1 npm run test:app          (two sessions, about 35 billed seconds)
-//   SOTTO_APP_LIVE=1 SOTTO_APP_ECHO=1 ...      (+ the echo measurement, about 40 more)
+//   SOTTO_APP_LIVE=1 SOTTO_APP_ECHO=1 ...      (+ the echo measurement, about 40 more; SOTTO_ECHO_GUARD=off|auto|on picks the page's echo guard)
 // The daemon (in-process, temp data dir, spare port, fake inbox) opens the
 // window through the real chooser (daemon/window.js, SOTTO_BROWSER=app),
 // the app loads the page, WebKit's WebRTC connects to OpenAI, the session goes
@@ -156,6 +156,9 @@ test("echo measurement: native mic without echo cancellation on simulated speake
     out.spoken = transcript(daemonLog, "session.output_transcript.delta", tStop).trim();
     out.heardDuring = transcript(daemonLog, "session.input_transcript.delta", tStop).trim();
     out.delegations = d.voice.status().delegations?.length ?? null;
+    // The page's echo measurement and guard (SPEC §7.7) run in WKWebView too.
+    await sleep(1000);
+    out.echo = daemonLog().filter((e) => /^echo\./.test(e.ev) || (e.ev === "page.log" && /echo:/.test(e.message || "")));
   });
   const words = (t) => t.split(/\s+/).filter(Boolean).length;
   const echoEv = r.appEvents.filter((e) => e.ev === "native_mic_stats" && e.echoSim === true).length;
@@ -166,4 +169,8 @@ test("echo measurement: native mic without echo cancellation on simulated speake
   console.log(`# echo sim ${ECHO_DB} dB/40 ms (echo peak ${echoDb} dBFS in the mic): spoke ${words(r.spoken)}/${words(LONG_ANSWER)} words of the answer; `
     + `own voice heard as user: ${JSON.stringify(r.heardDuring.slice(0, 160))}; delegations ${r.delegations}; billed ${r.billed} s`);
   console.log(`# spoken: ${JSON.stringify(r.spoken.slice(0, 400))}`);
+  const leak = r.echo.filter((e) => e.ev === "echo.leak");
+  const guard = r.echo.filter((e) => e.ev === "echo.guard");
+  assert.ok(r.echo.some((e) => e.ev === "page.log" && /echo: measuring/.test(e.message)), "the page's echo worklet runs in the app");
+  console.log(`# page echo (guard ${process.env.SOTTO_ECHO_GUARD || "auto"}): leak ${leak.map((e) => `${e.level} ${e.leak_db} dB corr ${e.corr}`).join(", ") || "none"}; guard ${guard.map((e) => `${e.engaged ? "on" : "off"} (${e.reason})`).join(", ") || "never"}`);
 });

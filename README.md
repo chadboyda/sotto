@@ -124,6 +124,16 @@ As a safety net, whatever you said that the voice did **not** hand over still re
 
 When Claude ends a turn with a question or a list of options, or asks one with AskUserQuestion, the voice is told Claude is waiting, so your next words count as the answer and go to Claude.
 
+### Speakers, echo and talking over the voice
+
+You can interrupt the voice at any time, on headphones or speakers: it is a full-duplex conversation, and Sotto never mutes you while the voice talks. On speakers, three things keep the voice from hearing itself:
+
+1. **Echo cancellation** in the browser (Chrome) or in macOS (the desktop app on speakers), which knows exactly what the voice plays on which speaker. This does nearly all the work.
+2. **An echo filter** on what reaches Claude: words that are the voice's own speech heard back (matched in time and wording, allowing for how speech recognition spells things), and Sotto's own fixed sentences from another Sotto in the room, are never sent to Claude as yours. When you talk over the voice, only its words are cut; yours go through.
+3. **An echo guard**, only when needed. The voice window measures how much of the voice the microphone still hears after echo cancellation. If that stays high (a speaker the echo canceller cannot see, a very loud speaker), a banner says "Echo detected — headphones recommended" and the guard turns on: it lowers the microphone only at moments it holds nothing louder than the echo, and opens instantly when you speak, so you can still talk over the voice and say "mm-hm". The `echo_guard` option: `auto` (default), `on`, `off`.
+
+**Test echo** in the settings (the gear) plays a short sound on the selected speaker and tells you Good, Some echo or Heavy echo. In Chrome it also tries Chrome's stronger echo cancellation mode and keeps whichever works better on that speaker. The first time you use a new speaker, a quiet version runs once by itself while connecting. Headphones need none of this.
+
 ### Speaking policies
 
 | Policy | The voice speaks… |
@@ -190,6 +200,7 @@ Set these in `/config` (the sotto rows). An unset or invalid value uses the defa
 | `speaking_policy` | `milestones` | Default narration level |
 | `daily_cap_minutes` | `120` | Voice minutes allowed per local day. You get a spoken warning at 80 %; at 100 % voice pauses. 0 = no cap. |
 | `mirror` | `all` | What you said to the voice that it did not hand to Claude still reaches Claude as background ([details](#decisions-reach-claude-even-ones-the-voice-answered)): `all`, `decisions`, or `off` |
+| `echo_guard` | `auto` | Keeps the voice from hearing itself on speakers ([details](#speakers-echo-and-talking-over-the-voice)): `auto` (only when the window measures echo that echo cancellation left), `on`, or `off` |
 | `window` | `auto` | Where the voice window opens: `auto` (the Sotto app on macOS once built, unless your default input is a Bluetooth headset; else Chrome), `app`, `chrome`, or `default` (your default browser) |
 | `openai_api_key` | none | Optional, sensitive (asked for when you enable the plugin, not shown in `/config`). The last place the key is looked for; see [Install](#install). |
 
@@ -201,6 +212,7 @@ Environment overrides, for debugging and tests:
 | `SOTTO_NO_BROWSER=1` | Same as `SOTTO_BROWSER=none` |
 | `SOTTO_DEBUG=1` | Log full hook bodies and every non-audio Live event |
 | `SOTTO_MIRROR=all\|decisions\|off` | Overrides the `mirror` option |
+| `SOTTO_ECHO_GUARD=auto\|on\|off` | Overrides the `echo_guard` option |
 | `SOTTO_OPENAI_BASE` | Replace `https://api.openai.com/v1` (tests) |
 | `SOTTO_SIGN_IDENTITY` | Sign the desktop app with this identity instead of ad hoc |
 | `SOTTO_APP_DOWNLOAD` | `0`: never download the signed desktop app; build it locally |
@@ -286,7 +298,7 @@ Design and contracts: [docs/SPEC.md](docs/SPEC.md) (binding spec), [docs/ARCHITE
 | The window says "Allow the microphone" | Allow it in the voice window (it uses its own Chrome profile, so it asks once), or check System Settings → Privacy → Microphone → Google Chrome (or → Sotto for the desktop app). |
 | The desktop app never opens (always Chrome) | `/talk status` shows the state; the daemon log has a `window.choose` line with the reason (`app_missing` while it builds, `app_failed` with the error in `app/build.json` and `logs/app-build.log`, `bluetooth_input` with a Bluetooth default input the app cannot avoid; `native_mic` means the app was chosen because it records the built-in mic itself). Run `bash scripts/build-app.sh` in the plugin directory to build it by hand. |
 | The Sotto panel is gone but the icon is still there | Press ⌥⌘T or use Show Panel in the icon's menu; the panel hides rather than closes. |
-| The voice hears itself or cuts out | Use Chrome (not the default-browser fallback). With AirPods, keep the built-in mic selected; the picker does this by default, so AirPods stay in high-quality output mode. |
+| The voice hears itself or cuts out | Use headphones, or Chrome / the desktop app (not the default-browser fallback). Run **Test echo** in the settings: "Heavy echo" means the microphone hears the speaker despite echo cancellation (turn the speaker down or use headphones; the echo guard is on meanwhile). The daemon log has `echo.leak` lines (the measured echo, in dB) and `echo.guard` when the guard turns on or off. With AirPods, keep the built-in mic selected; the picker does this by default, so AirPods stay in high-quality output mode. |
 | OpenAI 401 / 429 in status | The key is invalid or lacks `gpt-live-1` access, or you hit the rate limit. If the key came from the voice window or the plugin settings, the window asks for a new one; a key from the environment or a `.env` file has to be changed there. |
 | Voice paused on its own | "Sleeping" is the idle sleep (`idle_seconds`): just talk, or press Space. "Paused" is the daily cap, a manual pause, or idle sleep with wake off. Press Space in the window, or run `/talk on`. |
 | Voice wakes on its own (TV, music) | Lower the Wake picker to Low, or press M while sleeping. Repeated false wakes back off automatically (up to 2 minutes). |

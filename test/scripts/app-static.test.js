@@ -181,6 +181,7 @@ function loadMic({ plan = { mode: "webkit", device: { id: "sotto-b", label: "Mac
     },
     AudioContext: FakeAudioContext,
     AudioWorkletNode: FakeNode,
+    HTMLMediaElement: class { async setSinkId(id) { this.sinkId = id; } },
     MediaStream: FakeStream,
     Blob: class {},
     URL: { createObjectURL: () => "blob:x" },
@@ -253,6 +254,30 @@ test("mic.js native plan: an app capture behind a worklet track; a route flip en
   assert.equal(t.readyState, "ended");
   assert.equal(ended, 1);
   assert.ok(asked.some((m) => m.op === "stop" && m.id === 1));
+});
+
+test("mic.js: the page's speaker choice overrides native capture (no echo cancellation on speakers)", async () => {
+  const { win, gum, state } = loadMic({ plan: { mode: "native", device: { id: "sotto-b", label: "MacBook Pro Microphone" } } });
+  const s = await win.navigator.mediaDevices.getUserMedia({ audio: { deviceId: { exact: "sotto-b" } } });
+  const t = s.getAudioTracks()[0];
+  assert.equal(t.getSettings().sottoSource, "native");
+  let ended = 0;
+  t.onended = () => ended++;
+  // The page's <audio id="remote-audio"> moves to the laptop speakers while the system default is headphones.
+  const audio = new win.HTMLMediaElement();
+  audio.id = "remote-audio";
+  await audio.setSinkId("out-1");
+  await new Promise((r) => setTimeout(r, 0));
+  assert.equal(t.readyState, "ended", "the native capture ends; the page re-opens the mic");
+  assert.equal(ended, 1);
+  const s2 = await win.navigator.mediaDevices.getUserMedia({ audio: { deviceId: { exact: "sotto-b" } } });
+  assert.equal(gum.length, 1, "WebKit capture (Apple voice processing) this time");
+  assert.equal(s2.getAudioTracks()[0].getSettings().sottoSource, "webkit");
+  // Back to the system default: the app's plan applies again.
+  await audio.setSinkId("");
+  const s3 = await win.navigator.mediaDevices.getUserMedia({ audio: { deviceId: { exact: "sotto-b" } } });
+  assert.equal(s3.getAudioTracks()[0].getSettings().sottoSource, "native");
+  assert.equal(state.started.length, 2);
 });
 
 test("mic.js: an exact device the app does not have is OverconstrainedError (the page then retries)", async () => {

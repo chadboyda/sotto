@@ -224,8 +224,8 @@ export class DelegationEngine {
     const req = collectRequest(this.transcript, this.consumedThroughMs, rec.offset_ms);
     const { text } = req;
     rec.text = text;
-    if (req.trimmed || req.echoLines) {
-      this.log.info("delegation.request", { id: rec.id, rev: rec.rev, chars: text.length, trimmed_chars: req.trimmed, echo_lines: req.echoLines });
+    if (req.trimmed || req.echoLines || req.echoWords) {
+      this.log.info("delegation.request", { id: rec.id, rev: rec.rev, chars: text.length, trimmed_chars: req.trimmed, echo_lines: req.echoLines, echo_words: req.echoWords });
     }
     const consume = () => { this.consumedThroughMs = Math.max(this.consumedThroughMs, req.consumedTo); };
 
@@ -259,13 +259,10 @@ export class DelegationEngine {
       this.fx.append("commentary", "I didn't catch the request clearly. Could you say it again?", this.idFor(rec));
       return;
     }
-    if (this.transcript.isEcho(text)) {
-      consume();
-      this.setStatus(rec, "dropped_echo");
-      // Close the Live-side delegation quietly so the model does not wait on it.
-      this.fx.append("thinking", ECHO_NOTE, this.idFor(rec));
-      return;
-    }
+    // No second, untimed echo check of the whole text here: collectRequest
+    // already judged every line against what the assistant said at that
+    // moment (§6.8.1), and an untimed check would drop a user quoting the
+    // assistant back ("yes, run all the tests").
 
     let content = mirrored
       ? `${this.marker()} Please act on and answer what I just said to the voice assistant: "${clip(mirrored.text, 1500).replace(/"/g, "'")}"`
@@ -606,7 +603,7 @@ const ECHO_NOTE = "[sotto] Not a request: that was your own voice picked up by t
  * the assistant said just before that line was heard, is left out.
  * Bounded to the newest REQUEST_LOOKBACK_MS before `offsetMs` and the newest
  * REQUEST_MAX_CHARS; a trimmed request starts with "...".
- * @returns {{text:string, frags:object[], consumedTo:number, trimmed:number, echoLines:number}}
+ * @returns {{text:string, frags:object[], consumedTo:number, trimmed:number, echoLines:number, echoWords:number}}
  */
 export function collectRequest(transcript, consumedMs, offsetMs) {
   const fresh = transcript.userFragmentsAfter(consumedMs);
@@ -617,13 +614,18 @@ export function collectRequest(transcript, consumedMs, offsetMs) {
   let frags = fresh.filter((f) => f.end_ms > offsetMs - REQUEST_LOOKBACK_MS);
   if (frags.length < fresh.length) trimmed += norm(fresh.filter((f) => !frags.includes(f))).length;
 
-  // Echo check per line (same 1500 ms grouping as the transcript model).
+  // Echo filter per line (same 1500 ms grouping as the transcript model,
+  // §6.8.1): a line that is all echo is left out; echo words inside a line
+  // the user also spoke in (double talk) are cut, the user's words stay.
   let echoLines = 0;
+  let echoWords = 0;
   const kept = [];
   for (const line of groupFragments(frags)) {
     const members = frags.filter((f) => f.start_ms >= line.start_ms && f.end_ms <= line.end_ms);
-    if (words(line.text).length >= 3 && transcript.isEcho(line.text, 20000, line.at)) { echoLines++; continue; }
-    kept.push(...members);
+    const e = transcript.filterEcho(members);
+    if (e.verdict === "echo") { echoLines++; echoWords += e.words; continue; }
+    echoWords += e.echoWords + e.phraseWords;
+    kept.push(...e.frags);
   }
   frags = kept;
 
@@ -640,7 +642,7 @@ export function collectRequest(transcript, consumedMs, offsetMs) {
     text = cut;
   }
   if (trimmed && text) text = `... ${text}`;
-  return { text, frags, consumedTo, trimmed, echoLines };
+  return { text, frags, consumedTo, trimmed, echoLines, echoWords };
 }
 
 export function humanizeError(code) {

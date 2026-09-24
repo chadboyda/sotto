@@ -185,6 +185,14 @@
       <label class="field-label" for="output-select">Speaker</label>
       <select id="output-select"></select>
     </div>
+    <div class="field" id="echo-field">
+      <span class="field-label" id="echo-label">Echo</span>
+      <div class="key-summary">
+        <span class="key-summary-text" id="echo-summary" aria-live="polite">Not tested on this speaker yet.</span>
+        <button type="button" class="btn small" id="echo-test-btn" aria-describedby="echo-help">Test echo</button>
+      </div>
+      <p class="field-help" id="echo-help">Plays a short sound on this speaker and listens for it with echo cancellation on. <span id="echo-guard">Echo guard: automatic, not needed now.</span></p>
+    </div>
     <div class="field" id="key-settings">
       <span class="field-label" id="key-settings-label">OpenAI API key</span>
       <div class="key-summary">

@@ -185,8 +185,9 @@ test("mirror: decisions mode sends only decisions; off sends nothing", async () 
 
 test("mirror: an echo of the assistant is not sent", async () => {
   const h = mirrorHarness();
-  h.transcript.add("assistant", " The build is done and its pull request is open", 0, 2000);
-  await h.speak("the build is done and its pull request is open", 2200);
+  let t = 0;
+  for (const w of "The build is done and its pull request is open".split(" ")) { h.transcript.add("assistant", " " + w, t, t + 200); t += 200; }
+  await h.speak("the build is done and its pull request is open", 300);
   await h.clock.advance(MIRROR_QUIET_MS + 100);
   assert.equal(h.mirrorSends.length, 0);
 });

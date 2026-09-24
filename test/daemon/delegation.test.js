@@ -81,10 +81,10 @@ test("E3: empty text → dropped_empty with a spoken retry prompt", async () => 
 
 test("E3: echo of the assistant → dropped_echo, closed with one silent thinking note", async () => {
   const h = harness();
-  for (const w of " I'll check the current git branch for you".split(/(?= )/)) h.transcript.add("assistant", w, 0, 100);
-  h.say("I'll check the current git branch", 1000);
+  h.hear("I'll check the current git branch for you", 0);
+  h.say("I'll check the current git branch", 300); // heard back 300 ms later
   await h.clock.advance(500);
-  const rec = h.create("item_1", 2000);
+  const rec = h.create("item_1", 1600);
   await h.clock.advance(700);
   assert.equal(rec.status, "dropped_echo");
   assert.equal(h.appends.length, 1);
@@ -92,6 +92,16 @@ test("E3: echo of the assistant → dropped_echo, closed with one silent thinkin
   assert.equal(h.appends[0].id, "item_1", "closes the Live-side delegation");
   assert.match(h.appends[0].content, /Not a request/);
   assert.equal(h.sends.length, 0);
+});
+
+test("E3: the user quoting the assistant back after it spoke is a request, not an echo", async () => {
+  const h = harness();
+  h.hear("Should I run all the tests or just the unit tests?", 0); // ends at 2000
+  h.say("yes run all the tests", 2800);
+  const rec = h.create("item_q", 3900);
+  await h.clock.advance(1500);
+  assert.equal(rec.status, "sent");
+  assert.equal(rec.text, "yes run all the tests");
 });
 
 test("E3: an older collecting record is superseded by a newer one", async () => {

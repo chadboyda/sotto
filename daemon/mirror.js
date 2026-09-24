@@ -186,9 +186,12 @@ export class Mirror {
     const dropped = {};
     for (const line of groupFragments(frags)) {
       const members = frags.filter((f) => f.start_ms >= line.start_ms && f.end_ms <= line.end_ms);
-      const text = joinUserFragments(members).replace(/\s+/g, " ").trim();
-      let cls = classifyLine(text, { awaiting });
-      if (cls !== "noise" && normalizeWords(text).length >= 3 && this.transcript.isEcho(text, 20000, line.at)) cls = "echo";
+      // Echo of the assistant (§6.8.1): a line that is all echo is dropped;
+      // echo words inside a line the user also spoke in are cut first.
+      const e = this.transcript.filterEcho(members);
+      const text = joinUserFragments(e.verdict === "echo" ? members : e.frags).replace(/\s+/g, " ").trim();
+      let cls = e.verdict === "echo" && normalizeWords(text).length ? "echo" : classifyLine(text, { awaiting });
+      if (e.verdict === "partial") dropped.echo_words = (dropped.echo_words || 0) + e.echoWords + e.phraseWords;
       if (mirrorWants(cls, mode)) kept.push({ text, line });
       else dropped[cls] = (dropped[cls] || 0) + 1;
     }

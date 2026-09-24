@@ -42,6 +42,12 @@ export function delegationHarness(opts = {}) {
     for (const w of text.split(" ")) { transcript.add("user", " " + w, t, t + 200); t += 200; }
     return t;
   };
+  /** The assistant speaks `text` as 200 ms fragments from session time `startMs` (output transcript). */
+  h.hear = (text, startMs) => {
+    let t = startMs;
+    for (const w of text.split(" ")) { transcript.add("assistant", " " + w, t, t + 200); t += 200; }
+    return t;
+  };
   h.create = (id, offset_ms) => h.engine.onCreated({ type: "session.delegation.created", offset_ms, delegation: { id, type: "delegation", target: "client" } });
   return h;
 }

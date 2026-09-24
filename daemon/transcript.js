@@ -1,11 +1,14 @@
 // Voice transcript model (SPEC §6.8): fragments, grouping into lines, rolling
-// cross-session history, speech timestamps, and echo detection.
+// cross-session history, speech timestamps, and echo detection (echo.js, §6.8.1).
+import { analyzeEcho, sessionReference, ECHO_WINDOW_MS } from "./echo.js";
 
 const GAP_MS = 1500;
 // A delegated request can span up to ~90 s of speech (delegation.js
 // REQUEST_LOOKBACK_MS) interleaved with assistant fragments, so keep enough.
 const MAX_FRAGMENTS = 1200;
 const MAX_HISTORY = 60;
+/** Speech kept for the echo filter without a shared timeline (earlier sessions, samples). */
+const SPOKEN_KEEP_MS = 60000;
 
 export function normalizeWords(text) {
   return String(text ?? "")
@@ -59,12 +62,63 @@ export class Transcript {
     this.history = []; // finished lines from earlier Live sessions (plus current, on demand)
     this.lastUserSpeechAt = 0;
     this.lastAssistantSpeechAt = 0;
+    // What was played aloud without a place on this session's timeline (§6.8.1):
+    // the previous sessions' assistant speech, voice samples, the echo test.
+    this.spoken = [];
   }
 
   /** Start a new Live session: session timelines restart at 0. */
   newSession() {
     this.history = [...this.history, ...this.lines().map((l) => ({ role: l.role, text: l.text.trim() }))].filter((l) => l.text).slice(-MAX_HISTORY);
+    for (const f of this.fragments) if (f.role === "assistant") this.spoken.push({ text: f.text, at: f.at, source: "session" });
+    this.pruneSpoken();
     this.fragments = [];
+  }
+
+  /** Something sotto plays aloud outside the Live session (a voice sample, the echo test). */
+  addSpoken(text, source = "other") {
+    if (typeof text !== "string" || !text.trim()) return;
+    this.spoken.push({ text, at: this.clock.now(), source });
+    this.pruneSpoken();
+  }
+
+  pruneSpoken() {
+    const since = this.clock.now() - SPOKEN_KEEP_MS;
+    this.spoken = this.spoken.filter((s) => s.at >= since).slice(-400);
+  }
+
+  /**
+   * Echo filter for user fragments (one line or a whole request, §6.8.1):
+   * compared with the assistant speech of this session around the same time
+   * and with anything else played aloud recently.
+   * @returns see echo.js analyzeEcho
+   */
+  filterEcho(frags) {
+    const list = Array.isArray(frags) ? frags : [];
+    const assistant = this.fragments.filter((f) => f.role === "assistant");
+    const firstAt = Math.min(...list.map((f) => f.at || Infinity));
+    const lastAt = Math.max(0, ...list.map((f) => f.at || 0));
+    this.pruneSpoken();
+    const ledger = this.spoken.filter((s) => s.at >= firstAt - ECHO_WINDOW_MS - 5000 && s.at <= lastAt + 3000);
+    const r = analyzeEcho(list, { session: sessionReference(assistant, list), ledger });
+    // The Live model transcribed its own voice (a time-aligned run): the
+    // evidence the page's echo guard waits for in `auto` (§7.7).
+    const self = r.runs.filter((x) => x.src === "session");
+    if (self.length && this.onSelfEcho) {
+      try { this.onSelfEcho({ words: self.reduce((n, x) => n + x.n, 0), delay_ms: self[0].delay_ms }); } catch { /* observer only */ }
+    }
+    return r;
+  }
+
+  /** Echo filter for a text without timing (the wake clip): recent speech by wall clock. */
+  filterEchoText(text, atMs = this.clock.now(), windowMs = ECHO_WINDOW_MS + 5000) {
+    const since = atMs - windowMs;
+    this.pruneSpoken();
+    const ledger = [
+      ...this.spoken.filter((s) => s.at >= since),
+      ...this.fragments.filter((f) => f.role === "assistant" && f.at >= since).map((f) => ({ text: f.text, at: f.at })),
+    ];
+    return analyzeEcho([{ text: String(text ?? ""), start_ms: 0, end_ms: 0, at: atMs, prefix: true }], { ledger }, { timed: false });
   }
 
   add(role, text, start_ms, end_ms) {
@@ -126,23 +180,17 @@ export class Transcript {
   }
 
   /**
-   * Echo check: ≥ 3 words and ≥ 80 % of them appear, in order, inside the
-   * assistant speech of the 20 s before `atMs` (default: now), as a
-   * subsequence match. `atMs` lets an older line of a long request be checked
-   * against what the assistant was saying when that line was heard.
+   * Echo check for a bare text (no timing): the text is an echo when, after
+   * removing runs of ≥ 3 words that match (in order, allowing for ASR
+   * spelling) the assistant speech of the `windowMs` before `atMs` (default
+   * now), fewer than two meaningful words are left (§6.8.1).
    */
   isEcho(text, windowMs = 20000, atMs = this.clock.now()) {
-    const words = normalizeWords(text);
-    if (words.length < 3) return false;
-    const ref = normalizeWords(this.assistantTextBefore(atMs, windowMs));
-    if (!ref.length) return false;
-    let j = 0;
-    let matched = 0;
-    for (const w of words) {
-      let k = j;
-      while (k < ref.length && ref[k] !== w) k++;
-      if (k < ref.length) { matched++; j = k + 1; }
-    }
-    return matched / words.length >= 0.8;
+    if (normalizeWords(text).length < 3) return false;
+    const ref = this.assistantTextBefore(atMs, windowMs);
+    const ledger = this.spoken.filter((s) => s.at >= atMs - windowMs && s.at <= atMs).map((s) => s.text).join(" ");
+    const all = [ref, ledger].filter((x) => x.trim()).join(" ");
+    if (!all.trim()) return false;
+    return analyzeEcho([{ text, start_ms: 0, end_ms: 0 }], { ledger: [{ text: all, at: 0 }] }, { timed: false }).verdict === "echo";
   }
 }
