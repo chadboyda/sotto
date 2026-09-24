@@ -6,6 +6,11 @@
   <meta name="color-scheme" content="dark light">
   <title>Sotto</title>
   <link rel="icon" href="icon.svg" type="image/svg+xml">
+  <!-- Appearance before first paint (Settings > Appearance): "light" or "dark" is set
+       on <html> here, synchronously, so the page never flashes the other theme; System
+       leaves it unset and the OS decides. Keep in step with lib.themeAttr and app.js
+       setTheme (test/web/theme.test.js). -->
+  <script>try { var t = localStorage.getItem("clv.theme"); if (t === "light" || t === "dark") document.documentElement.setAttribute("data-theme", t); } catch (e) { /* storage blocked: System */ }</script>
   <link rel="stylesheet" href="styles.css">
   <script type="module" src="app.js"></script>
 </head>
@@ -38,15 +43,20 @@
         <div class="status-text">
           <span class="status-word" id="status-label">Starting</span>
           <!-- Priority when the header is short of room (app.js fitHeader): the word and
-               the money always stay; the project goes first, then the detail, then "Today",
-               then "Session". -->
+               the money always stay; the project goes first, then the detail, then the "Today"
+               pill, then "Session". -->
           <span class="status-sub">
             <span class="status-detail" id="status-detail" hidden></span>
             <span class="project" id="project" title=""></span>
           </span>
         </div>
       </div>
-      <span class="usage" id="usage" title="This voice session, the voice time billed today, and its cost at $0.05 per minute" hidden></span>
+      <!-- Three fixed-width pills; the figures tick without moving anything (styles.css .pill). -->
+      <div class="usage" id="usage" role="group" aria-label="Usage" hidden>
+        <span class="pill pill-session" id="usage-session" title="This voice session" hidden><span class="pill-label">Session</span><span class="pill-value" id="usage-session-value">0:00</span></span>
+        <span class="pill pill-today" id="usage-today" title="Voice time billed today"><span class="pill-label">Today</span><span class="pill-value" id="usage-today-value">0:00</span></span>
+        <span class="pill pill-cost" id="usage-cost" title="Today's cost at $0.05 per minute"><span class="pill-label">Cost</span><span class="pill-value" id="usage-cost-value">$0.00</span></span>
+      </div>
       <button type="button" class="icon-btn gear" id="settings-btn" aria-label="Settings" aria-haspopup="dialog" aria-controls="settings">
         <svg aria-hidden="true"><use href="#i-gear"/></svg>
       </button>
@@ -224,6 +234,14 @@
         <option value="high">High</option>
       </select>
       <p class="field-help">How readily your voice wakes a sleeping session. Nothing is sent or billed until it wakes.</p>
+    </div>
+    <div class="field">
+      <span class="field-label" id="theme-label">Appearance</span>
+      <div class="segmented" role="radiogroup" aria-labelledby="theme-label" id="theme">
+        <button type="button" role="radio" data-theme-choice="system" aria-checked="true">System</button>
+        <button type="button" role="radio" data-theme-choice="light" aria-checked="false">Light</button>
+        <button type="button" role="radio" data-theme-choice="dark" aria-checked="false">Dark</button>
+      </div>
     </div>
     <p class="drawer-foot"><kbd>Esc</kbd> to close · changes apply right away</p>
   </dialog>

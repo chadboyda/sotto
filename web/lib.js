@@ -108,6 +108,49 @@ export function formatClock(seconds) {
 }
 
 /**
+ * The header's usage pills (SPEC-DEVIATIONS "header pills"): Session (only while
+ * live), Today and Cost, each a label over a figure in a fixed-width box. `wide`
+ * says when the box needs its one wider size: a clock from the first hour on
+ * (h:mm:ss; styles.css reserves 5ch for m:ss/mm:ss and 7ch for h:mm:ss/hh:mm:ss),
+ * the cost from $100 (6ch holds "$00.00" and "<$0.01"). Ticking within a magnitude
+ * never changes a pill's width, so nothing in the header moves.
+ */
+export function usagePills({ sessionSeconds = null, todaySeconds = 0, costSeconds = 0 } = {}) {
+  const clock = (sec) => {
+    const text = formatClock(sec);
+    return { text, wide: text.length > 5 };
+  };
+  const cost = formatCost(costSeconds);
+  return {
+    session: sessionSeconds == null ? null : clock(sessionSeconds),
+    today: clock(todaySeconds),
+    cost: { text: cost, wide: cost.length > 6 },
+  };
+}
+
+/** Settings > Appearance: "system" (the default), "light" or "dark". */
+export const THEMES = ["system", "light", "dark"];
+export function normalizeTheme(v) {
+  const s = typeof v === "string" ? v.trim().toLowerCase() : "";
+  return THEMES.includes(s) ? s : "system";
+}
+
+/**
+ * The value of <html data-theme> for a choice: "light" / "dark", or null for System
+ * (the attribute is removed and prefers-color-scheme decides, following the OS live).
+ * index.html's inline head script applies the same rule before first paint.
+ */
+export function themeAttr(choice) {
+  const t = normalizeTheme(choice);
+  return t === "system" ? null : t;
+}
+
+/** The theme actually shown: the choice, or the OS's when the choice is System. */
+export function resolveTheme(choice, systemDark) {
+  return themeAttr(choice) || (systemDark ? "dark" : "light");
+}
+
+/**
  * Today's billed seconds for the ticking header clock: the last daemon/data-channel
  * reading (`reading` from stableUsage), advanced by wall time while a session is
  * live, but never more than `maxAheadS` past it (billing is confirmed by the next
@@ -476,9 +519,16 @@ export function levelFromRms(value) {
 }
 
 /**
- * "Can't hear you" detector (§7.5 "Can't hear you"). Two symptoms, each
- * checked only while live and unmuted, and reported at most once until
- * start() (a new session or a different mic):
+ * "Can't hear you" detector (§7.5 "Can't hear you"; SPEC-DEVIATIONS "can't hear
+ * you, only before the first words"). It only ever warns while the user has NOT yet
+ * been heard (no input transcript) since connecting or since the last mic change:
+ * once the model has heard them on this device, quiet is a choice, never a fault,
+ * however long it lasts. The heard state is kept across start() on the same device
+ * (a transparent reconnect, a wake from sleep onto the same mic) and cleared only by
+ * reset() (a new connect, a mic change, a lost device) or a start() on a different
+ * device. Digital silence (exact zeros, a dead track) is a separate detector
+ * (createDigitalSilenceDetector) that works at any time. Two symptoms, each checked
+ * only while live and unmuted, and reported at most once until start():
  *  - "silent": for `silentMs` after going live (or unmuting, or switching the
  *    mic) the mic's RMS never reached `silentRms` and the user was not heard:
  *    a dead, muted-in-hardware or far-away mic.
@@ -534,30 +584,44 @@ export function createHearingMonitor(opts = {}) {
   let armedAt = null; // start of the current "silent" window (null: not live)
   let liveAt = null;
   let peak = 0;
-  let heardAt = null;
+  let heardOn = undefined; // the device the user was heard on (undefined: not heard)
+  let device = null;
   let speechMs = 0;
   let lastAt = null;
   let fired = null;
   let wasMuted = false;
+  const isHeard = () => heardOn !== undefined && heardOn === device;
   return {
-    /** Live (again), or a different mic: re-arm both checks. */
-    start(now) {
+    /**
+     * Live (again) on `dev` (a device id or label; null when unknown). Re-arms both
+     * checks; a user already heard on this same device stays heard.
+     */
+    start(now, dev = null) {
+      device = dev;
+      if (heardOn !== undefined && heardOn !== dev) heardOn = undefined;
       armedAt = liveAt = now;
       peak = 0;
-      heardAt = null;
       speechMs = 0;
       lastAt = null;
       fired = null;
       wasMuted = false;
     },
+    /** A new connect, a mic change or a lost device: not heard yet. */
+    reset() {
+      heardOn = undefined;
+    },
     stop() {
       armedAt = liveAt = null;
       lastAt = null;
     },
-    /** An input transcript arrived: the model hears the user. */
-    heard(now) {
-      heardAt = now;
+    /** An input transcript arrived: the model hears the user on this device. */
+    heard() {
+      heardOn = device;
       speechMs = 0;
+    },
+    /** True once the user was heard on the current device. */
+    get hasHeard() {
+      return isHeard();
     },
     get fired() {
       return fired;
@@ -567,7 +631,7 @@ export function createHearingMonitor(opts = {}) {
      * @returns {null | {kind:"silent"|"no_transcript", peak_rms:number, speech_ms:number, since_ms:number}}
      */
     sample({ rms, muted = false, voice = 0, now }) {
-      if (liveAt === null || fired) return null;
+      if (liveAt === null || fired || isHeard()) return null;
       const dt = lastAt === null ? 0 : Math.min(250, Math.max(0, now - lastAt));
       lastAt = now;
       if (muted) {
@@ -583,16 +647,15 @@ export function createHearingMonitor(opts = {}) {
       const v = Number(rms) || 0;
       if (v > peak) peak = v;
       if (v >= o.speechRms && !(voice > o.voiceLevel)) speechMs += dt;
-      if (armedAt !== null && heardAt === null && now - armedAt >= o.silentMs) {
+      if (armedAt !== null && now - armedAt >= o.silentMs) {
         if (peak < o.silentRms) {
           fired = { kind: "silent", peak_rms: peak, speech_ms: speechMs, since_ms: now - armedAt };
           return fired;
         }
         armedAt = null; // the mic works: only the transcript check from here
       }
-      const since = heardAt ?? liveAt;
-      if (speechMs >= o.speechMs && now - since >= o.gapMs) {
-        fired = { kind: "no_transcript", peak_rms: peak, speech_ms: speechMs, since_ms: now - since };
+      if (speechMs >= o.speechMs && now - liveAt >= o.gapMs) {
+        fired = { kind: "no_transcript", peak_rms: peak, speech_ms: speechMs, since_ms: now - liveAt };
         return fired;
       }
       return null;
