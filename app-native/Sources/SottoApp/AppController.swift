@@ -41,6 +41,7 @@ final class AppController: NSObject, NSApplicationDelegate, PanelControllerDeleg
     private var closedByDaemon = false
     private var mutePending = false
     private var testMuteScheduled = false
+    private var testActionTimer: Timer?
     /// `data_dir` from the daemon's settings (for Open Logs after a direct launch without --data-dir).
     private var settingsDataDir: String?
 
@@ -93,6 +94,7 @@ final class AppController: NSObject, NSApplicationDelegate, PanelControllerDeleg
         wireModel()
         wireSettings()
         observeSleep()
+        startTestActions()
         launched = true
         if let req = options.request { open(req, source: "argv") }
         // A LaunchServices launch delivers its URL before didFinishLaunching.
@@ -271,6 +273,39 @@ final class AppController: NSObject, NSApplicationDelegate, PanelControllerDeleg
         if let d = m.settingsPayload?.data_dir, d.hasPrefix("/") { settingsDataDir = d }
         maybeShowOnboarding()
         refresh()
+    }
+
+    /// Test mode only (Options.testActionDir): drive Settings actions from a test, through the same
+    /// SettingsModel calls the Settings window makes. Polled; never armed outside `--test`.
+    private func startTestActions() {
+        guard options.testMode, let dir = options.testActionDir else { return }
+        testActionTimer = Timer.scheduledTimer(withTimeInterval: 0.2, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated { self?.runTestActions(dir: dir) }
+        }
+    }
+
+    private func runTestActions(dir: String) {
+        let fm = FileManager.default
+        guard let names = try? fm.contentsOfDirectory(atPath: dir) else { return }
+        for name in names.filter({ $0.hasSuffix(".json") }).sorted() {
+            let path = (dir as NSString).appendingPathComponent(name)
+            let data = fm.contents(atPath: path)
+            try? fm.removeItem(atPath: path)
+            guard let data, let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let action = obj["action"] as? String else { log.log("test_action", ["ok": false]); continue }
+            switch action {
+            case "persona":
+                guard let id = obj["persona"] as? String else { continue }
+                log.log("test_action", ["action": action, "persona": id])
+                settings.setPersona(id)
+            case "persona_voice":
+                let on = obj["on"] as? Bool ?? true
+                log.log("test_action", ["action": action, "on": on])
+                settings.setPersonaUseVoice(on)
+            default:
+                log.log("test_action", ["action": action, "ok": false])
+            }
+        }
     }
 
     private func command(_ name: String, _ args: [String: JSONValue] = [:]) async -> Result<JSONValue, CommandError> {

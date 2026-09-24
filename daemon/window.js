@@ -17,7 +17,7 @@ export const ENV_MODES = Object.freeze([...WINDOW_MODES, "none"]);
 /** The app has not said hello on /api/native this long after its launch: fall back to Chrome. */
 export const APP_PAGE_TIMEOUT_MS = 15_000;
 /** Passed to a test-mode app launch (test/app/*.test.mjs): fake audio in, output WAV out (docs/NATIVE.md §5.3). */
-export const APP_TEST_ENV = Object.freeze(["SOTTO_APP_DEBUG_LOG", "SOTTO_APP_MIC_FIXTURE", "SOTTO_APP_MIC_FIXTURE_LEAD_MS", "SOTTO_APP_OUT_WAV", "SOTTO_APP_ECHO_SIM_DB", "SOTTO_APP_TEST_MUTE_AFTER_MS", "SOTTO_APP_MIC_QUEUE_DIR"]);
+export const APP_TEST_ENV = Object.freeze(["SOTTO_APP_DEBUG_LOG", "SOTTO_APP_MIC_FIXTURE", "SOTTO_APP_MIC_FIXTURE_LEAD_MS", "SOTTO_APP_OUT_WAV", "SOTTO_APP_ECHO_SIM_DB", "SOTTO_APP_TEST_MUTE_AFTER_MS", "SOTTO_APP_MIC_QUEUE_DIR", "SOTTO_APP_TEST_ACTION_DIR"]);
 /** The SwiftPM package the app is built from, and the directories its hash skips (build products). */
 export const APP_SOURCE_DIR = "app-native";
 export const APP_SOURCE_SKIP = Object.freeze([".build", ".swiftpm"]);

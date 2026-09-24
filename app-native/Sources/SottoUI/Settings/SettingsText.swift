@@ -173,6 +173,29 @@ public enum SettingsText {
     public static let voiceHelp = "Changing it restarts the voice session; the conversation carries over."
     public static let voiceSamplesHelp = "Plays a short sample; the live session keeps its voice. Each sample is recorded once (a few seconds of voice time) and then kept."
 
+    // MARK: Persona (the page's persona picker, web/app.js renderPersonas / choosePersona)
+
+    public static let personaDefaultHelp = "How the voice talks: its tone, humor and opinions. What Claude does stays the same."
+    public static let personaVoiceToggle = "Switch to the persona's own voice"
+    public static let personaSwitching = "Switching the persona…"
+    public static func personaSwitched(_ name: String) -> String { "Switching to \(name). The conversation carries over." }
+
+    /// The picker row: the name, tagged when it comes from a file (web personaLabel).
+    public static func personaLabel(_ p: Settings.Personas.Persona) -> String {
+        switch p.source {
+        case "project": return "\(p.name) (project)"
+        case "user": return "\(p.name) (yours)"
+        default: return p.name
+        }
+    }
+
+    /// The one-line description plus the persona's own voice, else the general help.
+    public static func personaHelp(_ p: Settings.Personas.Persona?) -> String {
+        guard let p, let d = p.description, !d.isEmpty else { return personaDefaultHelp }
+        guard let v = p.voice, !v.isEmpty else { return d }
+        return "\(d) Voice: \(voiceLabel(v))."
+    }
+
     // MARK: Echo (port of echo.echoTestVerdict + the page's renderEcho)
 
     public struct EchoVerdict: Equatable, Sendable { public var level: String; public var title: String; public var advice: String }

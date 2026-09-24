@@ -7,7 +7,7 @@ import os from "node:os";
 import http from "node:http";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { CHROME, spawnSilentChrome } from "./silent-chrome.js";
+import { CHROME, spawnSilentChrome, stopChrome } from "./silent-chrome.js";
 
 export { CHROME };
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
@@ -46,11 +46,11 @@ export async function openPage(t, { width = 420, height = 760 } = {}) {
   const userDir = fs.mkdtempSync(path.join(os.tmpdir(), "sotto-webpage-"));
   const chrome = spawnSilentChrome({ wav: WAV, extra: ["--remote-debugging-port=0", `--user-data-dir=${userDir}`, `--window-size=${width},${height}`, base] });
   let ws;
-  t.after(() => {
+  // Awaited: Chrome must be gone before its profile is removed (stopChrome).
+  t.after(async () => {
     try { ws?.close(); } catch { /* ignore */ }
-    try { chrome.kill("SIGTERM"); } catch { /* gone */ }
     server.close();
-    setTimeout(() => fs.rmSync(userDir, { recursive: true, force: true }), 500).unref();
+    await stopChrome(chrome, userDir);
   });
   const devPort = await until(() => fs.readFileSync(path.join(userDir, "DevToolsActivePort"), "utf8").split("\n")[0].trim(), 10000);
   const target = await until(async () => (await (await fetch(`http://127.0.0.1:${devPort}/json/list`)).json())

@@ -90,6 +90,8 @@ public struct PageStatus: Codable, Equatable, Sendable {
     public var state: String
     public var owner: Owner?
     public var voice: String?
+    /// The persona in effect (SPEC §4.6), also set from the terminal (`/talk persona`).
+    public var persona: String?
     public var speaking_policy: String?
     public var idle_minutes: Double?
     public var idle_seconds: Double?
@@ -114,7 +116,30 @@ public struct Settings: Codable, Equatable, Sendable {
             self.voices = voices; self.current = current; self.live = live; self.live_voice = live_voice
         }
     }
+    /// The persona picker (SPEC §4.6, `voice.personas()`): summaries only, never a persona's text.
+    public struct Personas: Codable, Equatable, Sendable {
+        public struct Persona: Codable, Equatable, Sendable, Identifiable {
+            public var id: String; public var name: String; public var description: String?
+            /// The persona's own voice, if it names one.
+            public var voice: String?
+            /// "builtin" | "user" (D/personas) | "project" (<project>/.claude/sotto-personas).
+            public var source: String?
+            public init(id: String, name: String, description: String? = nil, voice: String? = nil, source: String? = nil) {
+                self.id = id; self.name = name; self.description = description; self.voice = voice; self.source = source
+            }
+        }
+        public var personas: [Persona]
+        public var current: String?
+        /// "Switch to the persona's own voice" (default on).
+        public var use_voice: Bool?
+        public var live: Bool?
+        public var live_persona: String?
+        public init(personas: [Persona], current: String? = nil, use_voice: Bool? = nil, live: Bool? = nil, live_persona: String? = nil) {
+            self.personas = personas; self.current = current; self.use_voice = use_voice; self.live = live; self.live_persona = live_persona
+        }
+    }
     public var voices: Voices?
+    public var personas: Personas?
     public var window: String?
     public var policies: [String]?
     public var wake_sensitivities: [String]?

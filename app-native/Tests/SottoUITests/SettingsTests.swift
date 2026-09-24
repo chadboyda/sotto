@@ -112,8 +112,22 @@ final class SettingsTextTests: XCTestCase {
         XCTAssertTrue((4...7).contains(mid), "speech-level RMS lights about half: \(mid)")
     }
 
+    // The page's persona picker words (web/app.js personaLabel, renderPersonas, choosePersona).
+    func testPersonaCopyMatchesPage() {
+        typealias P = Settings.Personas.Persona
+        XCTAssertEqual(SettingsText.personaLabel(P(id: "moss", name: "Moss", source: "builtin")), "Moss")
+        XCTAssertEqual(SettingsText.personaLabel(P(id: "r", name: "Reviewer", source: "project")), "Reviewer (project)")
+        XCTAssertEqual(SettingsText.personaLabel(P(id: "p", name: "Pirate", source: "user")), "Pirate (yours)")
+        XCTAssertEqual(SettingsText.personaHelp(P(id: "moss", name: "Moss", description: "Dry wit.", voice: "cedar")), "Dry wit. Voice: Cedar.")
+        XCTAssertEqual(SettingsText.personaHelp(P(id: "p", name: "Pirate", description: "Arr.", voice: nil)), "Arr.")
+        XCTAssertEqual(SettingsText.personaHelp(P(id: "x", name: "X", description: "")), SettingsText.personaDefaultHelp)
+        XCTAssertEqual(SettingsText.personaHelp(nil), "How the voice talks: its tone, humor and opinions. What Claude does stays the same.")
+        XCTAssertEqual(SettingsText.personaVoiceToggle, "Switch to the persona's own voice")
+        XCTAssertEqual(SettingsText.personaSwitched("June"), "Switching to June. The conversation carries over.")
+    }
+
     func testNoEmojiInCopy() {
-        let strings = [SettingsText.voiceHelp, SettingsText.voiceSamplesHelp, SettingsText.wakeHelp, SettingsText.echoHelp,
+        let strings = [SettingsText.personaDefaultHelp, SettingsText.personaVoiceToggle, SettingsText.personaSwitching, SettingsText.voiceHelp, SettingsText.voiceSamplesHelp, SettingsText.wakeHelp, SettingsText.echoHelp,
                        SettingsText.keyIntro, SettingsText.keyKeep, SettingsText.micCompareHelp]
             + ["quiet", "milestones", "walkthrough"].map(SettingsText.policyHelp)
             + ["auto", "app", "chrome", "default"].map(SettingsText.windowHelp)
@@ -149,6 +163,9 @@ final class SettingsModelTests: XCTestCase {
         XCTAssertEqual(m.settings?.window, "auto")
         XCTAssertEqual(m.wakeLevels, ["off", "low", "medium", "high"])
         XCTAssertEqual(m.settings?.data_dir, "/tmp/sotto-data")
+        XCTAssertEqual(m.personas.map(\.name), ["Sotto", "Moss", "Pirate"])
+        XCTAssertEqual(m.settings?.personas?.current, "sotto")
+        XCTAssertTrue(m.personaUseVoice)
         m.ingest(.other(type: "settings", raw: ["type": .string("settings"), "window": .string("chrome"),
                                                  "voices": .object(["voices": .array([.string("ash")]), "current": .string("ash")])]))
         XCTAssertEqual(m.window, "chrome")
@@ -191,6 +208,75 @@ final class SettingsModelTests: XCTestCase {
         m.setPolicy("walkthrough")
         await settle()
         XCTAssertEqual(m.error("policy"), "sotto: unknown voice")
+    }
+
+    private func personaSettings(current: String = "sotto", useVoice: Bool = true) -> NativeSettings {
+        NativeSettings(voices: .init(voices: ["marin", "cedar", "coral"], current: "marin"),
+                       personas: .init(personas: [
+                           .init(id: "sotto", name: "Sotto", description: "Balanced and friendly.", voice: "marin", source: "builtin"),
+                           .init(id: "moss", name: "Moss", description: "Dry-witted senior engineer.", voice: "cedar", source: "builtin"),
+                           .init(id: "pirate", name: "Pirate", description: "Talks like a ship's captain.", voice: nil, source: "user"),
+                       ], current: current, use_voice: useVoice, live: true, live_persona: current))
+    }
+
+    func testPersonaPickerSendsSetPersonaAndFollowsTheResult() async {
+        let (m, rec) = make()
+        m.settings = personaSettings()
+        XCTAssertEqual(m.persona, "sotto")
+        XCTAssertEqual(m.personas.map(\.id), ["sotto", "moss", "pirate"])
+        XCTAssertEqual(m.personaHelp, "Balanced and friendly. Voice: Marin.")
+        XCTAssertTrue(m.personaUseVoice)
+        m.setPersona("sotto")
+        XCTAssertTrue(rec.calls.isEmpty, "same persona: no command")
+        rec.reply = { _, _ in .success(.object(["persona": .string("moss"), "voice": .string("cedar"), "switching": .bool(true),
+                                                "message": .string("sotto: persona set to moss with the cedar voice. Switching the live session now."),
+                                                "use_voice": .bool(true)])) }
+        m.setPersona("moss")
+        XCTAssertEqual(m.persona, "moss", "shows the choice while the command is in flight")
+        XCTAssertEqual(m.personaHelp, SettingsText.personaSwitching)
+        await settle()
+        XCTAssertEqual(rec.calls.map(\.0), ["set_persona"])
+        XCTAssertEqual(rec.calls[0].1, ["persona": .string("moss")], "only the persona; the toggle is its own command")
+        XCTAssertEqual(m.persona, "moss")
+        XCTAssertEqual(m.voice, "cedar", "the persona's voice came along")
+        XCTAssertEqual(m.personaHelp, "Switching to Moss. The conversation carries over.")
+        // The new session runs in Moss: the help goes back to the description.
+        var live = personaSettings(current: "moss")
+        live.voices?.current = "cedar"
+        m.ingest(.settings({ var s = Settings(); s.personas = live.personas; s.voices = .init(voices: ["marin", "cedar"], current: "cedar"); return s }()))
+        XCTAssertEqual(m.personaHelp, "Dry-witted senior engineer. Voice: Cedar.")
+        // A failure shows the daemon's words and leaves the daemon's choice.
+        rec.reply = { _, _ in .failure(CommandError(code: "bad_persona", message: "sotto: unknown persona \"pirate\".")) }
+        m.setPersona("pirate")
+        await settle()
+        XCTAssertEqual(m.error("persona"), "sotto: unknown persona \"pirate\".")
+        XCTAssertEqual(m.persona, "moss")
+    }
+
+    func testPersonaVoiceToggle() async {
+        let (m, rec) = make()
+        m.settings = personaSettings()
+        rec.reply = { _, args in .success(.object(["use_voice": args["use_voice"] ?? .null])) }
+        m.setPersonaUseVoice(false)
+        XCTAssertFalse(m.personaUseVoice, "shows the choice while the command is in flight")
+        await settle()
+        XCTAssertEqual(rec.calls.map(\.0), ["set_persona"])
+        XCTAssertEqual(rec.calls[0].1, ["use_voice": .bool(false)])
+        XCTAssertFalse(m.personaUseVoice)
+        XCTAssertEqual(m.settings?.personas?.use_voice, false)
+        rec.reply = { _, _ in .failure(CommandError(code: "not_connected", message: "Sotto is not connected to its daemon.")) }
+        m.setPersonaUseVoice(true)
+        await settle()
+        XCTAssertFalse(m.personaUseVoice, "a failed toggle keeps the saved value")
+        XCTAssertEqual(m.error("persona_voice"), "Sotto is not connected to its daemon.")
+    }
+
+    func testPersonaFromTerminalAndOlderDaemon() {
+        let (m, _) = make(SettingsSnapshots.decodeStatus(["state": "live", "persona": "moss"]))
+        XCTAssertTrue(m.personas.isEmpty, "no personas in settings: the row is hidden")
+        XCTAssertEqual(m.personaHelp, SettingsText.personaDefaultHelp)
+        m.settings = personaSettings(current: "sotto")
+        XCTAssertEqual(m.persona, "moss", "status carries a /talk persona switch first")
     }
 
     func testKeySaveSendsOnlyThroughCommandAndKeepsNothing() async {

@@ -32,6 +32,8 @@ public struct SettingsView: View {
                 FieldHelp(SettingsText.policyHelp(model.policy), error: model.error("policy"))
             }
 
+            if !model.personas.isEmpty { personaRow }
+
             VStack(alignment: .leading, spacing: 6) {
                 Picker("Voice", selection: Binding(get: { model.voice }, set: { model.setVoice($0) })) {
                     if model.voices.isEmpty { Text(SettingsText.voiceLabel(model.voice)).tag(model.voice) }
@@ -54,6 +56,24 @@ public struct SettingsView: View {
                 FieldHelp(SettingsText.wakeHelp, error: model.error("wake"))
             }
         } header: { Text("Conversation") }
+    }
+
+    /// Persona picker, as the page's drawer has it: the names (tagged when they come from a file),
+    /// the chosen one's one-line description and voice under it, and the voice toggle.
+    private var personaRow: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Picker("Persona", selection: Binding(get: { model.persona }, set: { model.setPersona($0) })) {
+                if model.currentPersona == nil { Text(model.persona).tag(model.persona) }
+                ForEach(model.personas) { p in
+                    Text(SettingsText.personaLabel(p)).tag(p.id)
+                }
+            }
+            .accessibilityHint(model.personaHelp)
+            FieldHelp(model.personaHelp, error: model.error("persona"))
+            Toggle(SettingsText.personaVoiceToggle, isOn: Binding(get: { model.personaUseVoice }, set: { model.setPersonaUseVoice($0) }))
+                .toggleStyle(.checkbox)
+            if let e = model.error("persona_voice") { FieldHelp("", error: e) }
+        }
     }
 
     // MARK: Audio

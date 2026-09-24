@@ -74,7 +74,7 @@ enum SelfTest {
         let p = Options.parse(argv, env: env)
         return jsonString([
             "test": p.testMode, "hidden": p.hidden, "hotkeys": p.hotkeys, "show": p.show,
-            "exit_after": orNull(p.exitAfter), "debug_log": orNull(p.debugLog),
+            "exit_after": orNull(p.exitAfter), "debug_log": orNull(p.debugLog), "test_action_dir": orNull(p.testActionDir),
             "port": orNull(p.request?.port), "has_code": p.request?.code != nil, "data": orNull(p.request?.dataDir),
             "wants_audio": ["off", "waiting_page", "connecting", "live", "reconnecting", "sleeping", "paused", "closing"]
                 .filter { AppController.wantsAudio(state: $0) },

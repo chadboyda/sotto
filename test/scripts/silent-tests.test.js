@@ -6,7 +6,8 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { assertSilentChromeArgs, spawnSilentChrome, REQUIRED_FLAGS } from "../helpers/silent-chrome.js";
+import { EventEmitter } from "node:events";
+import { assertSilentChromeArgs, spawnSilentChrome, stopChrome, REQUIRED_FLAGS } from "../helpers/silent-chrome.js";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 const read = (rel) => fs.readFileSync(path.join(ROOT, rel), "utf8");
@@ -71,4 +72,39 @@ test("every desktop-app launch in the tests is in test mode (fake audio, never t
   const src = fs.readdirSync(dir).filter((f) => f.endsWith(".swift")).map((f) => fs.readFileSync(path.join(dir, f), "utf8")).join("\n");
   assert.match(src, /makeAudioIO\(test: options\.testMode\)/);
   assert.match(src, /if o\.testMode \{[^}]*o\.hidden = !o\.show[^}]*o\.hotkeys = false/);
+});
+
+// stopChrome: the profile is removed only after Chrome has exited (the
+// layout test's old 500 ms timer raced Chrome's own writes: ENOTEMPTY in CI).
+
+function fakeChild({ exitAfterMs = null, onSignal = () => {} } = {}) {
+  const c = new EventEmitter();
+  c.exitCode = null; c.signalCode = null; c.signals = [];
+  c.kill = (sig) => {
+    c.signals.push(sig);
+    onSignal(sig);
+    const ms = sig === "SIGKILL" ? 5 : exitAfterMs;
+    if (ms != null) setTimeout(() => { c.signalCode = sig; c.emit("exit", null, sig); }, ms);
+    return true;
+  };
+  return c;
+}
+
+test("stopChrome waits for Chrome to exit before removing the profile", async () => {
+  const order = [];
+  const child = fakeChild({ exitAfterMs: 50, onSignal: (s) => order.push(`kill:${s}`) });
+  child.once("exit", () => order.push("exit"));
+  await stopChrome(child, "/tmp/profile", { rm: (dir, o) => { order.push(`rm:${dir}`); assert.equal(o.recursive, true); assert.ok(o.maxRetries > 0); } });
+  assert.deepEqual(order, ["kill:SIGTERM", "exit", "rm:/tmp/profile"]);
+});
+
+test("stopChrome escalates to SIGKILL when SIGTERM is ignored, and never throws", async () => {
+  const child = fakeChild({ exitAfterMs: null });
+  let removed = false;
+  await stopChrome(child, "/tmp/p", { graceMs: 30, rm: () => { removed = true; throw Object.assign(new Error("ENOTEMPTY"), { code: "ENOTEMPTY" }); } });
+  assert.deepEqual(child.signals, ["SIGTERM", "SIGKILL"]);
+  assert.equal(removed, true, "removal attempted after the exit; its error is swallowed");
+  const gone = fakeChild(); gone.exitCode = 0;
+  await stopChrome(gone, null);
+  assert.deepEqual(gone.signals, [], "an exited Chrome is not signalled");
 });

@@ -52,7 +52,7 @@ export const CLIENT_TYPES = Object.freeze([
 ]);
 /** `cmd` names (app -> daemon); each is answered by one `result` with the same id. */
 export const COMMANDS = Object.freeze([
-  "mute", "pause", "resume", "wake", "end", "set_voice", "set_policy", "set_wake", "set_window",
+  "mute", "pause", "resume", "wake", "end", "set_voice", "set_persona", "set_policy", "set_wake", "set_window",
   "key_save", "key_remove", "get_voices", "echo_test", "open_browser",
 ]);
 /** Live server events forwarded as {type:"live", event} (transcript deltas go as `caption`). */

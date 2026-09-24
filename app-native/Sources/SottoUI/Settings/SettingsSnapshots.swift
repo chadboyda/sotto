@@ -19,6 +19,12 @@ public enum SettingsSnapshots {
         let m = SettingsModel(state: state)
         m.settings = NativeSettings(
             voices: .init(voices: ["alloy", "ash", "ballad", "cedar", "coral", "echo", "marin", "sage", "shimmer", "verse"], current: status.voice, live: true),
+            personas: .init(personas: [
+                .init(id: "sotto", name: "Sotto", description: "Balanced and friendly, with real opinions and a light touch of humor.", voice: "marin", source: "builtin"),
+                .init(id: "june", name: "June", description: "Warm, encouraging partner who celebrates progress and keeps you steady.", voice: "coral", source: "builtin"),
+                .init(id: "moss", name: "Moss", description: "Dry-witted senior engineer: understated, seen-it-all, quietly funny.", voice: "cedar", source: "builtin"),
+                .init(id: "reviewer", name: "Reviewer", description: "Our team's code-review voice.", voice: nil, source: "project"),
+            ], current: "sotto", use_voice: true, live: true, live_persona: "sotto"),
             window: "auto", policies: ["quiet", "milestones", "walkthrough"], wake_sensitivities: ["off", "low", "medium", "high"],
             data_dir: "/tmp/sotto-data", version: "0.3.0")
         m.inputDevices = [DeviceChoice(id: "builtin-mic", name: "MacBook Pro Microphone"),
@@ -76,7 +82,7 @@ public enum SettingsSnapshots {
         let keyRejected = fixtureModel(status: fixtureStatus(state: "paused", key: badKey, lastError: "openai_auth"))
 
         return [
-            Shot(name: "settings", size: CGSize(width: 480, height: 1090), view: AnyView(SettingsView(model: settings))),
+            Shot(name: "settings", size: CGSize(width: 480, height: 1180), view: AnyView(SettingsView(model: settings))),
             Shot(name: "onboarding-mic", size: CGSize(width: 420, height: 320), view: AnyView(OnboardingView(model: micAsk))),
             Shot(name: "onboarding-mic-denied", size: CGSize(width: 420, height: 380), view: AnyView(OnboardingView(model: micDenied))),
             Shot(name: "onboarding-key", size: CGSize(width: 420, height: 360), view: AnyView(OnboardingView(model: keyFirst))),

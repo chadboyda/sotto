@@ -44,7 +44,7 @@ Sotto is a Claude Code plugin for full-duplex voice with a running session, buil
   - It also runs `test/e2e/decisions.mjs` (a spoken decision and a casual request must reach Claude, delegated or mirrored; ~40 billed seconds); `npm run e2e:decisions` runs it alone.
   - It also runs `test/e2e/persona.mjs` (a persona switch mid-session re-creates the session in the new persona and voice, the reply shows it, and requests still reach Claude; ~50 billed seconds); `npm run e2e:persona` runs it alone.
   - It also runs `test/e2e/native-daemon.mjs` (the native app path: the daemon owns the Live primary WebSocket and a Node fake app streams `ask-files.wav` over `/api/native`; a delegation must reach the fake inbox and the speaker frames must hold speech; ~8-15 billed seconds); `npm run e2e:native` alone.
-  - It also runs `test/e2e/native-app.mjs` (the real native app in test mode, opened by the chooser: greeting, the question transcribed and delegated, a Stop answer spoken, a barge-in stopping it, a voice switch, no can't-hear after the switch (the user was already heard), idle sleep and a voice wake from the app's mic, voice off quits the app; clips are spoken through `SOTTO_APP_MIC_QUEUE_DIR`, output goes to a WAV; prints mic-to-transcript and model-audio-to-playback latencies; ~45-60 billed seconds); `npm run e2e:app` alone.
+  - It also runs `test/e2e/native-app.mjs` (the real native app in test mode, opened by the chooser: greeting, the question transcribed and delegated, a Stop answer spoken, a barge-in stopping it, a voice switch, a persona switch from the app's Settings picker (`SOTTO_APP_TEST_ACTION_DIR`, voice toggle off), no can't-hear after the switch (the user was already heard), idle sleep and a voice wake from the app's mic, voice off quits the app; clips are spoken through `SOTTO_APP_MIC_QUEUE_DIR`, output goes to a WAV; prints mic-to-transcript and model-audio-to-playback latencies; ~45-60 billed seconds); `npm run e2e:app` alone.
   - It also runs `test/e2e/miccheck.mjs` (a spoken mic check must be answered by the voice and reach Claude neither delegated nor mirrored; ~25 billed seconds); `npm run e2e:miccheck` runs it alone.
 - **Headless toggle probe** (no model call):
   - Command: `SOTTO_NO_BROWSER=1 claude -p --plugin-dir . --model haiku --output-format json "/talk status"`. Expect `num_turns: 0`.
@@ -52,7 +52,7 @@ Sotto is a Claude Code plugin for full-duplex voice with a running session, buil
 - **Never drive an interactive `claude` TUI from automation.** Use `-p` probes.
 - **Clean up** any daemon you start (`daemon.pid` in the data dir) and any headless Chrome.
 - Headless Chrome fake-mic needs `--disable-features=AudioServiceSandbox` (Chrome 153); without it the mic is silent.
-- Tests must be silent: --mute-audio; never play through speakers (a live voice session's mic will hear it). Launch test Chrome only through `test/helpers/silent-chrome.js` (`spawnSilentChrome`), which refuses to start without `--mute-audio` and the fake-mic flags; the app's `--test` mode uses fake audio (output to a WAV). `test/scripts/silent-tests.test.js` enforces both.
+- Tests must be silent: --mute-audio; never play through speakers (a live voice session's mic will hear it). Launch test Chrome only through `test/helpers/silent-chrome.js` (`spawnSilentChrome`), which refuses to start without `--mute-audio` and the fake-mic flags; the app's `--test` mode uses fake audio (output to a WAV). `test/scripts/silent-tests.test.js` enforces both. Stop a test Chrome with `stopChrome(child, userDir)` (awaited in `t.after`): it waits for Chrome to exit before removing its profile; removing it on a timer raced Chrome's own writes and failed CI with ENOTEMPTY.
 
 ## Debugging
 - Data dir: `${CLAUDE_PLUGIN_DATA}`. For `--plugin-dir` runs that is `~/.claude/plugins/data/sotto-inline`; for the symlink install it is `~/.claude/plugins/data/sotto-skills-dir`. The fallback is `~/.sotto`.
@@ -73,4 +73,9 @@ Sotto is a Claude Code plugin for full-duplex voice with a running session, buil
 - Enable the hooks once per clone with `npm run hooks:install` (`git config core.hooksPath .githooks`). The pre-commit hook runs the secret scan, `npm test` and `plugin validate --strict`.
 - **Never commit with `--no-verify`.** Fix what the hook reports.
 - Work on a branch and open a PR to `main`. Don't push, open PRs or merge without an explicit request.
+- **Merge only on green checks.** Branch protection does not require CI on `main`, so the merge step itself is the gate. Before any `gh pr merge`, wait for the PR's checks and merge only when they all pass:
+  ```
+  gh pr checks <pr> --watch --fail-fast && gh pr merge <pr> --squash --delete-branch
+  ```
+  `gh pr checks --watch` exits non-zero on a failed check and also when no checks are reported yet (right after a push, before CI registers the run): wait a few seconds and run it again, never merge past it. On a red check, fix the cause and push; don't rerun until green or merge over red or pending checks. A flaky test gets its root cause fixed, not a rerun.
 - In the PR description, include the `npm test` result, the e2e result with its timings and billed seconds, and any manual checks from SPEC §12 that you ran. CI (`.github/workflows/ci.yml`) runs `npm test` on macOS.

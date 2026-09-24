@@ -12,6 +12,9 @@
 //              transcribed -> delegation reaches the fake inbox -> a Stop hook
 //              answer is spoken -> a barge-in clip stops the voice
 //   voice switch to cedar: session B, in the new voice
+//   persona picker: the app's Settings model turns "Switch to the persona's own
+//              voice" off and picks June (SOTTO_APP_TEST_ACTION_DIR -> cmd
+//              set_persona): session B', June's personality, still cedar
 //   session B: nobody talks -> no "can't hear you" (the user was heard on this
 //              mic in session A; a voice switch keeps that) -> idle sleep
 //   sleeping:  the app listens; a spoken clip wakes session C (voice wake)
@@ -45,6 +48,7 @@ const FIX = (n) => path.join(REPO, "test", "fixtures", n);
 const TMP = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "clv-app-e2e-")));
 const D = path.join(TMP, "data");
 const QDIR = path.join(TMP, "micq");
+const ADIR = path.join(TMP, "actions");
 const APP_LOG = path.join(TMP, "app.jsonl");
 const OUT_WAV = path.join(TMP, "out.wav");
 const SOCK = `/tmp/clv-app-e2e-${process.pid}.sock`;
@@ -143,6 +147,9 @@ async function main() {
   if (missing.length) { log(`SKIP: missing ${missing.join(", ")}`); process.exitCode = 2; return; }
 
   fs.mkdirSync(QDIR, { recursive: true });
+  fs.mkdirSync(ADIR, { recursive: true });
+  // A Settings action for the app (test mode only), written whole then renamed so the app never reads half a file.
+  const act = (name, obj) => { const f = path.join(ADIR, `${name}.json`); fs.writeFileSync(`${f}.tmp`, JSON.stringify(obj)); fs.renameSync(`${f}.tmp`, f); };
   const barge = path.join(TMP, "barge.wav");
   if (!check("barge-in clip (say)", say("Hold on. Stop there for a second.", barge))) return;
 
@@ -166,7 +173,7 @@ async function main() {
     SOTTO_KEYCHAIN_SERVICE: `sotto-e2e-app-${process.pid}`, // never the user's real Keychain item
     SOTTO_VOCAB: "0", SOTTO_UPDATE: "0", SOTTO_APP_DOWNLOAD: "0",
     SOTTO_BROWSER: "app", SOTTO_APP_TEST: "1", SOTTO_APP_DEBUG_LOG: APP_LOG,
-    SOTTO_APP_MIC_QUEUE_DIR: QDIR, SOTTO_APP_OUT_WAV: OUT_WAV,
+    SOTTO_APP_MIC_QUEUE_DIR: QDIR, SOTTO_APP_OUT_WAV: OUT_WAV, SOTTO_APP_TEST_ACTION_DIR: ADIR,
   };
   const d = createDaemon({ dataDir: D, port, pluginRoot: REPO, env, onExit: () => {}, nativeOptions: { hearing: { silentMs: SILENT_MS } } });
   await d.listen();
@@ -278,15 +285,42 @@ async function main() {
     check("voice switch accepted", sw.ok, sw.message);
     const created2 = await until(() => dlog().find((e) => e.ev === "session.create" && e.at >= tSw && e.ok), 20_000);
     check("session B created in cedar", created2?.voice === "cedar", `${created2?.voice} ${created2?.reason}`);
-    const liveB = await until(() => (state() === "live" && d.voice.status().live?.session_id !== liveA ? d.voice.status().live.session_id : null), 20_000);
+    let liveB = await until(() => (state() === "live" && d.voice.status().live?.session_id !== liveA ? d.voice.status().live.session_id : null), 20_000);
     check("live again after the switch", !!liveB);
-    const tLiveB = Date.now();
+    let tLiveB = Date.now();
     timings.voice_switch_to_live_ms = tLiveB - tSw;
     const swFlush = alog().find((e) => e.ev === "audio_flush" && e.at >= tSw);
     check("app flushed session A's audio on the switch", !!swFlush, swFlush?.reason ?? "");
     const swOut = await until(() => alog().find((e) => e.ev === "out_speech" && e.phase === "start" && e.at >= tSw), 15_000);
     check("session B audio rendered by the app", !!swOut);
     if (swOut) timings.voice_switch_to_new_voice_playback_ms = swOut.at - tSw;
+
+    // ---- persona picker in the app's Settings: toggle the persona's voice off, pick June.
+    // Same SettingsModel calls as the window (cmd set_persona); the session is re-created in
+    // June's personality and keeps cedar (June's own voice would be coral).
+    await sleep(1500);
+    act("1-persona-voice", { action: "persona_voice", on: false });
+    const tog = await until(() => alog().find((e) => e.ev === "cmd_result" && e.name === "set_persona"), 10_000);
+    check("persona voice toggle off (cmd set_persona from the app)", tog?.ok === true && d.voice.personas().use_voice === false);
+    const tPs = Date.now();
+    act("2-persona", { action: "persona", persona: "june" });
+    const psRes = await until(() => alog().find((e) => e.ev === "cmd_result" && e.name === "set_persona" && e.at >= tPs), 10_000);
+    check("persona pick answered", psRes?.ok === true);
+    const createdP = await until(() => dlog().find((e) => e.ev === "session.create" && e.at >= tPs && e.ok), 20_000);
+    check("session B' created in June, voice kept", createdP?.persona === "june" && createdP?.voice === "cedar", `${createdP?.persona} ${createdP?.voice} ${createdP?.reason}`);
+    const liveP = await until(() => (state() === "live" && d.voice.status().live?.session_id !== liveB ? d.voice.status().live.session_id : null), 20_000);
+    check("live again in the new persona", !!liveP && d.voice.live?.persona === "june");
+    timings.persona_pick_to_live_ms = Date.now() - tPs;
+    const psOut = await until(() => alog().find((e) => e.ev === "out_speech" && e.phase === "start" && e.at >= tPs), 15_000);
+    check("persona greeting rendered by the app", !!psOut);
+    if (psOut) timings.persona_pick_to_new_persona_playback_ms = psOut.at - tPs;
+    const psSaid = (await until(() => {
+      const t = dlog().filter((e) => e.ev === "session.output_transcript.delta" && e.at >= tPs).map((e) => e.delta).join("");
+      return t.trim().split(/\s+/).length >= 4 ? t : null;
+    }, 10_000)) || "";
+    if (!/june/i.test(psSaid)) warn("persona greeting names June", JSON.stringify(psSaid.trim().slice(0, 100)));
+    else log(`persona greeting: ${JSON.stringify(psSaid.trim().slice(0, 100))}`);
+    if (liveP) { liveB = liveP; tLiveB = Date.now(); }
 
     // ---- can't hear only before the first words (SPEC-DEVIATIONS, header pills 3): the
     // user was heard on this mic in session A and the voice switch is a reconnect, so

@@ -8,60 +8,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
-import os from "node:os";
-import http from "node:http";
-import path from "node:path";
-import { fileURLToPath } from "node:url";
-import { CHROME, spawnSilentChrome } from "../helpers/silent-chrome.js";
-
-const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
-const WEB = path.join(ROOT, "web");
-const WAV = path.join(ROOT, "test", "fixtures", "ask-files.wav");
-const TYPES = { ".html": "text/html", ".css": "text/css", ".js": "text/javascript", ".svg": "image/svg+xml" };
-const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-
-async function until(fn, ms) {
-  const end = Date.now() + ms;
-  for (;;) {
-    try { const v = await fn(); if (v) return v; } catch { /* retry */ }
-    if (Date.now() > end) return null;
-    await sleep(100);
-  }
-}
-
-function serve() {
-  const server = http.createServer((req, res) => {
-    const p = new URL(req.url, "http://x").pathname;
-    if (p === "/app.js") { res.writeHead(200, { "Content-Type": "text/javascript" }); return res.end("export {};"); }
-    const file = path.join(WEB, p === "/" ? "index.html" : p);
-    if (!file.startsWith(WEB) || !fs.existsSync(file)) { res.writeHead(404); return res.end(); }
-    res.writeHead(200, { "Content-Type": TYPES[path.extname(file)] || "application/octet-stream" });
-    res.end(fs.readFileSync(file));
-  });
-  return new Promise((resolve) => server.listen(0, "127.0.0.1", () => resolve(server)));
-}
-
-async function connect(userDir, base) {
-  const devPort = await until(() => fs.readFileSync(path.join(userDir, "DevToolsActivePort"), "utf8").split("\n")[0].trim(), 10000);
-  const target = await until(async () => (await (await fetch(`http://127.0.0.1:${devPort}/json/list`)).json())
-    .find((t) => t.type === "page" && t.url.startsWith(base)), 10000);
-  if (!target) throw new Error("no page target");
-  const ws = new WebSocket(target.webSocketDebuggerUrl);
-  await new Promise((resolve, reject) => { ws.onopen = resolve; ws.onerror = reject; });
-  let id = 0;
-  const pending = new Map();
-  ws.onmessage = (e) => { const m = JSON.parse(e.data); if (m.id && pending.has(m.id)) { pending.get(m.id)(m); pending.delete(m.id); } };
-  const send = (method, params = {}) => new Promise((resolve) => { const i = ++id; pending.set(i, resolve); ws.send(JSON.stringify({ id: i, method, params })); });
-  return {
-    send,
-    async eval(expression) {
-      const r = await send("Runtime.evaluate", { expression, returnByValue: true, awaitPromise: true });
-      if (r.result?.exceptionDetails) throw new Error(JSON.stringify(r.result.exceptionDetails));
-      return r.result?.result?.value;
-    },
-    close() { try { ws.close(); } catch { /* ignore */ } },
-  };
-}
+import { CHROME, openPage } from "../helpers/web-page.js";
 
 // Fill the stage the way app.js renderStage() does, then measure.
 const MEASURE = `(async () => {
@@ -101,25 +48,13 @@ const MEASURE = `(async () => {
 })()`;
 
 test("live view: the Claude card and the captions never move when the status word changes", { skip: fs.existsSync(CHROME) ? false : "Chrome not installed", timeout: 60000 }, async (t) => {
-  const server = await serve();
-  const base = `http://127.0.0.1:${server.address().port}/`;
-  const userDir = fs.mkdtempSync(path.join(os.tmpdir(), "sotto-layout-"));
-  const chrome = spawnSilentChrome({ wav: WAV, extra: ["--remote-debugging-port=0", `--user-data-dir=${userDir}`, "--window-size=420,760", base] });
-  let page;
-  t.after(() => {
-    page?.close();
-    try { chrome.kill("SIGTERM"); } catch { /* gone */ }
-    server.close();
-    setTimeout(() => fs.rmSync(userDir, { recursive: true, force: true }), 500).unref();
-  });
-  page = await connect(userDir, base);
-  await until(() => page.eval(`document.readyState === "complete"`), 10000);
+  // openPage stops Chrome and waits for it to exit before removing its profile
+  // (test/helpers/silent-chrome.js stopChrome; this file used to race that).
+  const page = await openPage(t, { width: 420, height: 760 });
   for (const [w, h] of [[420, 760], [360, 640], [560, 900]]) {
-    await page.send("Emulation.setDeviceMetricsOverride", { width: w, height: h, deviceScaleFactor: 1, mobile: false });
     // The override lands asynchronously; on a slow runner (CI) the first state
-    // was measured at the previous size. Wait for the new viewport and a layout.
-    await until(() => page.eval(`window.innerWidth === ${w} && window.innerHeight === ${h}`), 10000);
-    await page.eval(`new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(() => r(true))))`);
+    // was measured at the previous size. setSize waits for the new viewport and a layout.
+    await page.setSize(w, h);
     const m = await page.eval(MEASURE);
     const rows = Object.values(m);
     assert.equal(rows.length, 6);

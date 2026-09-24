@@ -9,6 +9,7 @@
 // --mute-audio silences the output device only: WebAudio still runs, so the
 // page's voice meter (an AnalyserNode on an unplayed clone of the remote
 // track, web/app.js) still sees the model's voice. smoke.mjs checks that.
+import fs from "node:fs";
 import { spawn } from "node:child_process";
 
 export const CHROME = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
@@ -49,4 +50,37 @@ export function spawnSilentChrome({ wav, extra = [], spawnImpl = spawn, bin = CH
     ...extra,
   ]);
   return spawnImpl(bin, args, { stdio: "ignore" });
+}
+
+/**
+ * Stop a test Chrome and remove its profile directory, deterministically.
+ *
+ * Chrome keeps writing into --user-data-dir (Default/, the crash database)
+ * until its browser process has exited. Removing the directory on a timer
+ * after SIGTERM raced those writes: on a slow CI runner rmSync hit
+ * "ENOTEMPTY: directory not empty, rmdir …/Default" inside the timer, which
+ * node:test reports as an uncaught exception after the test ended and fails
+ * the file. So: wait for the process to exit (SIGKILL after `graceMs`), then
+ * remove the directory with retries for helper processes that are still
+ * shutting down. Never throws: cleanup must not fail a test that passed.
+ */
+export async function stopChrome(child, userDir, { graceMs = 5000, rm = fs.rmSync } = {}) {
+  if (child) {
+    const exited = () => child.exitCode !== null || child.signalCode !== null;
+    const waitExit = (ms) => new Promise((resolve) => {
+      if (exited()) return resolve(true);
+      const timer = setTimeout(() => { child.off?.("exit", onExit); resolve(exited()); }, ms);
+      function onExit() { clearTimeout(timer); resolve(true); }
+      child.once("exit", onExit);
+    });
+    if (!exited()) {
+      try { child.kill("SIGTERM"); } catch { /* already gone */ }
+      if (!(await waitExit(graceMs))) {
+        try { child.kill("SIGKILL"); } catch { /* already gone */ }
+        await waitExit(graceMs);
+      }
+    }
+  }
+  if (!userDir) return;
+  try { rm(userDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }); } catch { /* a temp dir; the OS reaps it */ }
 }

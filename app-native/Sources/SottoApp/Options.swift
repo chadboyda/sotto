@@ -27,6 +27,10 @@ struct Options: Equatable {
     var testMode = false
     /// Test mode only: toggle mute this long after the session first goes live (the mute round trip in test:app).
     var testMuteAfterMs: Int?
+    /// Test mode only: a directory the test drops `*.json` actions into (`{"action":"persona","persona":"moss"}`,
+    /// `{"action":"persona_voice","on":false}`); the app runs each through the Settings model, the same path
+    /// as the persona picker, then deletes it (SOTTO_APP_TEST_ACTION_DIR).
+    var testActionDir: String?
     var selftest: String?
     var selftestArg: String?
     var version = false
@@ -63,6 +67,7 @@ struct Options: Equatable {
         if env["SOTTO_APP_TEST"] == "1" { o.testMode = true }
         if env["SOTTO_APP_SHOW"] == "1" { o.show = true }
         if o.testMode, let v = env["SOTTO_APP_TEST_MUTE_AFTER_MS"].flatMap(Int.init), v >= 0 { o.testMuteAfterMs = v }
+        if o.testMode, let v = env["SOTTO_APP_TEST_ACTION_DIR"], v.hasPrefix("/") { o.testActionDir = v }
         if o.testMode {
             // Automated tests: invisible, no global hotkeys, fake audio (no
             // CoreAudio unit, no microphone prompt), separate defaults.

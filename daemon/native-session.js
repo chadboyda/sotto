@@ -143,6 +143,10 @@ export class NativeController {
     const v = this.voice;
     return {
       voices: v.voices(),
+      // The persona picker (§3.1): summaries only, never a persona's body. The
+      // list is the one pageStatus() scanned in the last 5 s, so a settings
+      // diff on every status costs no directory scan.
+      personas: v.personas({ cached: true }),
       window: v.windowPref(),
       policies: [...POLICIES],
       wake_sensitivities: [...SENSITIVITIES],
@@ -393,6 +397,19 @@ export class NativeController {
         const r = v.setVoice(args.voice, "app");
         if (!r.ok) return { ok: false, code: r.code || "bad_voice", message: r.message };
         return { ok: true, data: { voice: r.voice, switching: r.switching, message: r.message } };
+      }
+      case "set_persona": {
+        // Same shape as POST /api/persona (SPEC §4.6): `use_voice` sets the
+        // "switch to the persona's own voice" toggle, `persona` picks one; both
+        // may come together (the toggle applies first).
+        const hasToggle = typeof args.use_voice === "boolean";
+        const hasPersona = typeof args.persona === "string" && args.persona.length > 0;
+        if (!hasToggle && !hasPersona) return { ok: false, code: "bad_persona", message: "Send persona or use_voice." };
+        if (hasToggle) v.setPersonaVoice(args.use_voice);
+        if (!hasPersona) return { ok: true, data: { use_voice: args.use_voice } };
+        const r = v.setPersona(args.persona, "app");
+        if (!r.ok) return { ok: false, code: r.code || "bad_persona", message: r.message };
+        return { ok: true, data: { persona: r.persona, voice: r.voice, switching: r.switching, message: r.message, use_voice: v.personas({ cached: true }).use_voice } };
       }
       case "set_policy": {
         const r = v.setPolicy(args.policy);
