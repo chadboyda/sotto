@@ -420,3 +420,94 @@ test("page events: mic_error pauses, muted mirrors, rtc failed reconnects, stop 
   await h.clock.advance(20000);
   assert.equal(h.voice.state, "off");
 });
+
+// ---- voice window: /talk window, /talk app, app install notes (SPEC §6.16) ----
+function fakeApp(h, status = { state: "ready" }) {
+  const calls = [];
+  h.chrome.appStatus = () => status;
+  h.chrome.ensureInstalled = (o) => { calls.push(o || {}); return status; };
+  return { calls, set: (s) => { status = s; } };
+}
+
+test("/talk window: shows, validates and persists the window in prefs.json", async (t) => {
+  const h = await makeHarness();
+  t.after(() => h.cleanup());
+  fakeApp(h, { state: "installing" });
+  assert.equal(h.voice.control({ action: "window" }).message, "sotto: window is auto (desktop app: installing). Change it with /talk window <auto|app|chrome>.");
+  assert.equal(h.voice.control({ action: "window", window: "Chrome" }).message, "sotto: window set to chrome. It applies the next time the voice window opens.");
+  assert.deepEqual(JSON.parse(fs.readFileSync(path.join(h.dataDir, "prefs.json"), "utf8")), { window: "chrome" });
+  assert.equal(h.voice.windowPref(), "chrome");
+  assert.equal(h.voice.windowPref({ window: "app" }), "chrome", "prefs beat userConfig");
+  const bad = h.voice.control({ action: "window", window: "lynx" });
+  assert.equal(bad.ok, false);
+  assert.equal(bad.message, 'sotto: unknown window "lynx". Choose auto, app or chrome.');
+  assert.match(h.voice.control({ action: "window", window: "app" }).message, /window set to app\. .* The desktop app is installing\.$/);
+});
+
+test("/talk app: persists window=app, forces the install, turns voice on", async (t) => {
+  const h = await makeHarness();
+  t.after(() => h.cleanup());
+  const app = fakeApp(h);
+  const r = h.voice.control({ action: "app", session: SESSION(), config: { open_browser: true } });
+  assert.equal(r.message, "sotto: voice ON (proj-a). Opening the voice window.");
+  assert.equal(h.chrome.opened, 1);
+  assert.deepEqual(app.calls.at(-1), { force: true });
+  assert.equal(h.voice.windowPref(), "app");
+});
+
+test("/talk app while a Chrome page hosts the voice: switches at the next /talk", async (t) => {
+  const h = await makeHarness();
+  t.after(() => h.cleanup());
+  fakeApp(h);
+  h.on();
+  h.d.sse.clients.add({ write() {}, end() {} });
+  const r = h.voice.control({ action: "app", session: SESSION(), config: { open_browser: true } });
+  assert.match(r.message, /^sotto: window set to app\. The voice moves to the desktop app at the next \/talk/);
+  assert.equal(h.chrome.opened, 1, "no second window");
+});
+
+test("/talk app on Linux: a clear message", async (t) => {
+  const h = await makeHarness();
+  t.after(() => h.cleanup());
+  fakeApp(h, { state: "unsupported" });
+  const r = h.voice.control({ action: "app", session: SESSION(), config: { open_browser: true } });
+  assert.equal(r.ok, false);
+  assert.match(r.message, /needs macOS/);
+});
+
+test("on: the window waits for an app install, or says why the app is missing", async (t) => {
+  const h = await makeHarness();
+  t.after(() => h.cleanup());
+  fakeApp(h, { state: "installing" });
+  h.chrome.open = () => ({ mode: "app", pending: true });
+  assert.equal(h.on().message, "sotto: voice ON (proj-a). Installing the desktop app (signed release, about 350 KB); the window opens when it is ready.");
+  h.voice.control({ action: "off" });
+  h.chrome.open = () => ({ mode: "chrome", installError: { reason: "build_failed", message: "no signed release for this version" } });
+  assert.equal(h.on().message, "sotto: voice ON (proj-a). Desktop app couldn't be installed (no signed release for this version); using Chrome.");
+  assert.equal(h.voice.helloNotice.code, "app_install_failed");
+});
+
+test("status names a missing, installing or failed desktop app; every /talk ensures the install", async (t) => {
+  const h = await makeHarness();
+  t.after(() => h.cleanup());
+  const app = fakeApp(h, { state: "failed", reason: "build_failed", message: "the local build failed: swiftc not found" });
+  assert.equal(h.voice.control({ action: "status" }).message, "sotto: voice is off. 0 min today ($0.00). desktop app couldn't be installed (the local build failed: swiftc not found); using Chrome. Retry with /talk app.");
+  assert.ok(app.calls.length >= 1);
+  app.set({ state: "ready" });
+  assert.equal(h.voice.control({ action: "status" }).message, "sotto: voice is off. 0 min today ($0.00).");
+  h.voice.control({ action: "window", window: "chrome" });
+  app.set({ state: "failed", message: "x" });
+  assert.equal(h.voice.control({ action: "status" }).message, "sotto: voice is off. 0 min today ($0.00).", "not when Chrome is chosen");
+});
+
+test("install results reach the page: failure as a toast (now or at hello), success as a hint", async (t) => {
+  const h = await makeHarness();
+  t.after(() => h.cleanup());
+  fakeApp(h);
+  h.voice.appInstallResult({ ok: false, reason: "build_failed", message: "swiftc not found" });
+  assert.deepEqual(h.voice.helloNotice, { level: "warn", code: "app_install_failed", text: "Desktop app couldn't be installed: swiftc not found. Using Chrome." });
+  const sent = [];
+  h.d.sse.clients.add({ write(d) { sent.push(String(d)); }, end() {} });
+  h.voice.appInstallResult({ ok: true });
+  assert.ok(sent.some((d) => d.includes("app_ready")));
+});

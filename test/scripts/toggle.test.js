@@ -158,7 +158,7 @@ describe("toggle.sh cold start", () => {
   test("bogus argument prints usage and never contacts the daemon", async () => {
     const { D, env } = await setup();
     const out = parseOut(await run(TOGGLE, { env, input: stdinFor("bogus") }));
-    assert.equal(out.stopReason, "sotto: usage: /talk [on|off|status|restart|quiet|milestones|walkthrough|voice [name]|key]");
+    assert.equal(out.stopReason, "sotto: usage: /talk [on|off|status|restart|quiet|milestones|walkthrough|voice [name]|app|window [auto|app|chrome]|key]");
     assert.ok(!existsSync(join(D, "daemon.pid")));
   });
 });
@@ -584,6 +584,49 @@ describe("toggle.sh /talk voice (SPEC §4.5)", () => {
     const bodies = controlBodies(D).slice(1);
     assert.deepEqual(bodies.map((b) => [b.action, b.voice]), [["voice", undefined], ["voice", "echo"]]);
     assert.ok(!existsSync(join(D, "prefs.json")), "the daemon owns the write when it runs");
+  });
+});
+
+describe("toggle.sh /talk window and /talk app (SPEC §6.16)", () => {
+  test("daemon down: window shows and sets prefs.json, keeping the voice", async () => {
+    const { D, env } = await setup({ CLAUDE_PLUGIN_OPTION_WINDOW: "chrome" });
+    let out = parseOut(await run(TOGGLE, { env, input: stdinFor("window") }));
+    assert.equal(out.stopReason, "sotto: window is chrome. Change it with /talk window <auto|app|chrome>.");
+    parseOut(await run(TOGGLE, { env, input: stdinFor("voice cedar") }));
+    out = parseOut(await run(TOGGLE, { env, input: stdinFor("window App") }));
+    assert.equal(out.stopReason, "sotto: window set to app. It applies the next time the voice window opens.");
+    assert.deepEqual(JSON.parse(readFileSync(join(D, "prefs.json"), "utf8")), { voice: "cedar", window: "app" });
+    assert.equal(statSync(join(D, "prefs.json")).mode & 0o777, 0o600);
+    // The voice write keeps the window too.
+    parseOut(await run(TOGGLE, { env, input: stdinFor("voice sage") }));
+    assert.deepEqual(JSON.parse(readFileSync(join(D, "prefs.json"), "utf8")), { voice: "sage", window: "app" });
+    out = parseOut(await run(TOGGLE, { env, input: stdinFor("window") }));
+    assert.equal(out.stopReason, "sotto: window is app. Change it with /talk window <auto|app|chrome>.");
+    assert.ok(!existsSync(join(D, "daemon.pid")), "never spawns a daemon");
+  });
+
+  test("unknown window: nothing written", async () => {
+    const { D, env } = await setup();
+    const out = parseOut(await run(TOGGLE, { env, input: stdinFor("window firefox") }));
+    assert.equal(out.stopReason, 'sotto: unknown window "firefox". Choose auto, app or chrome.');
+    assert.ok(!existsSync(join(D, "prefs.json")));
+  });
+
+  test("daemon up: /control gets action window (+ window) and action app", async () => {
+    const { D, env } = await setup();
+    parseOut(await run(TOGGLE, { env, input: stdinFor("on") })); // cold start
+    parseOut(await run(TOGGLE, { env, input: stdinFor("window chrome") }));
+    parseOut(await run(TOGGLE, { env, input: stdinFor("app") }));
+    const bodies = controlBodies(D).slice(1);
+    assert.deepEqual(bodies.map((b) => [b.action, b.window]), [["window", "chrome"], ["app", undefined]]);
+    assert.ok(bodies[1].session.socket, "app carries the session (it turns voice on)");
+  });
+
+  test("app with no inbox socket: the same error as on", async () => {
+    const { env } = await setup();
+    delete env.CLAUDE_CODE_MESSAGING_SOCKET;
+    const out = parseOut(await run(TOGGLE, { env, input: stdinFor("app") }));
+    assert.match(out.stopReason, /no inbox socket/);
   });
 });
 

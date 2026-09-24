@@ -66,7 +66,7 @@ describe("manifests", () => {
     const s = read("skills/talk/SKILL.md");
     assert.match(s, /^---\nname: talk\n/);
     assert.match(s, /\ndisable-model-invocation: true\n/);
-    assert.match(s, /\nargument-hint: "\[on\|off\|status\|restart\|quiet\|milestones\|walkthrough\|voice \[name\]\|key\]"\n/);
+    assert.match(s, /\nargument-hint: "\[on\|off\|status\|restart\|quiet\|milestones\|walkthrough\|voice \[name\]\|app\|window \[auto\|app\|chrome\]\|key\]"\n/);
     assert.ok(!/allowed-tools/.test(s));
     assert.ok(!/!`/.test(s), "no inline bash");
   });

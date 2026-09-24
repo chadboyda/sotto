@@ -6,6 +6,8 @@
 // GitHub release, verifies it, and installs it into D/app exactly where
 // scripts/build-app.sh would. Any failure falls back to that local build
 // (then Chrome, as before). Nothing here runs inside /control or a hook.
+// Every step is logged (timestamped) to logs/app-build.log, and the outcome
+// goes to D/app/install.json, which the daemon reads to explain a failure.
 //
 // A release is adopted only when all of these hold:
 //   1. sha256 of Sotto.zip equals the published Sotto.zip.sha256;
@@ -45,6 +47,8 @@ export const MAX_ZIP_BYTES = 64 * 1024 * 1024;
 /** A failed download of the same version and sources is retried after this. */
 export const RETRY_MS = 24 * 60 * 60 * 1000;
 export const DOWNLOAD_STAMP = "download.json";
+/** Outcome of the last CLI run (download and/or local build), SPEC §3. */
+export const INSTALL_STAMP = "install.json";
 const VERSION_RE = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/;
 
 export function releaseUrls(version, base = RELEASE_BASE) {
@@ -213,7 +217,7 @@ export async function verifyApp(bundle, { execFile = execFileCb } = {}) {
 export async function installRelease({
   outDir, version, hash, base = RELEASE_BASE, fetchImpl = globalThis.fetch, execFile = execFileCb,
   verify = (b) => verifyApp(b, { execFile }), log = () => {}, now = () => Date.now(), fsImpl = fs,
-  timeoutMs = 180_000,
+  timeoutMs = 180_000, allowSourcesMismatch = false,
 }) {
   const at = () => new Date(now()).toISOString();
   const record = (r) => {
@@ -254,11 +258,14 @@ export async function installRelease({
     if (!fsImpl.lstatSync(bundle).isDirectory()) throw new FetchError("bad_zip", "Sotto.app is not a directory");
     let meta = null;
     try { meta = JSON.parse(fsImpl.readFileSync(path.join(bundle, "Contents", "Resources", "sotto-source.json"), "utf8")); } catch { /* checked below */ }
-    if (!meta || meta.hash !== hash) {
+    const mismatch = !meta || meta.hash !== hash;
+    if (mismatch && !allowSourcesMismatch) {
       throw new FetchError("sources_mismatch", `release built from ${meta?.hash ?? "unknown"} sources, plugin has ${hash}`, true);
     }
+    log("sha256_ok", { bytes: zip.length });
     const v = await verify(bundle);
     if (!v?.ok) throw new FetchError(v?.reason || "verify", v?.detail);
+    log("verify_ok", { detail: String(v.detail || "").split("\n")[0].slice(0, 120) });
     // Swap in, as build-app.sh does. A running app keeps its mapped binary.
     const dest = path.join(outDir, "Sotto.app");
     fsImpl.rmSync(`${dest}.old`, { recursive: true, force: true });
@@ -268,6 +275,7 @@ export async function installRelease({
     fsImpl.writeFileSync(path.join(outDir, "build.json"), `${JSON.stringify({
       hash, ok: true, at: at(), seconds: Math.round((now() - t0) / 1000), source: "release", version,
       identity: `Developer ID Application (${TEAM_ID})`, sha256: got,
+      ...(mismatch ? { release_hash: meta?.hash ?? null } : {}),
     })}\n`);
     log("download_ok", { version, bytes: zip.length, ms: now() - t0 });
     return record({ ok: true });
@@ -285,13 +293,51 @@ const pidAlive = (pid) => {
   try { process.kill(pid, 0); return true; } catch (e) { return e.code === "EPERM"; }
 };
 
+const readJson = (f) => { try { return JSON.parse(fs.readFileSync(f, "utf8")); } catch { return null; } };
+
+/** Loopback release base (tests and local fixtures only). */
+export function isLoopbackBase(base) {
+  try {
+    const u = new URL(base);
+    return (u.protocol === "http:" || u.protocol === "https:") && ["127.0.0.1", "localhost", "[::1]"].includes(u.hostname);
+  } catch {
+    return false;
+  }
+}
+
 /**
- * CLI (spawned detached by daemon/window.js, stdio to logs/app-build.log):
+ * One line for people: why the app is not installed, from the release
+ * attempt and the local build (`build` is the build.json the build left, or
+ * null when it did not run).
+ */
+export function failureMessage({ release, build, buildRan, buildCode }) {
+  const parts = [];
+  if (release && !release.ok) {
+    const r = release.reason;
+    parts.push(r === "not_found" ? "no signed release for this version"
+      : r === "sources_mismatch" ? "the signed release was built from other app sources"
+        : r === "network" ? "the release download failed (network)"
+          : r === "no_version" ? "no plugin version"
+            : `the release was refused (${r})`);
+  }
+  if (buildRan) {
+    const e = build && build.ok === false && build.error ? String(build.error) : `exit ${buildCode}`;
+    parts.push(`the local build failed: ${e}`);
+  }
+  return parts.join("; ") || "unknown error";
+}
+
+/**
+ * CLI (spawned detached by daemon/window.js, stdout/stderr to logs/app-build.log):
  *   node daemon/appfetch.js --out DIR --plugin-root ROOT --hash HEX [--base URL] [--no-build]
  * Holds DIR/build.lock while downloading (the chooser then sees `building`),
  * releases it, and on failure runs scripts/build-app.sh unless --no-build.
+ * When the only signed release was built from other app sources and the
+ * local build cannot run (no Xcode tools), that release is installed anyway:
+ * a working app beats Chrome, and it is still signature-checked.
+ * Writes DIR/install.json with the outcome either way.
  */
-export async function main(argv = process.argv.slice(2), { fetchImpl = globalThis.fetch } = {}) {
+export async function main(argv = process.argv.slice(2), { fetchImpl = globalThis.fetch, env = process.env } = {}) {
   const a = {};
   for (let i = 0; i < argv.length; i++) {
     const k = argv[i];
@@ -303,27 +349,74 @@ export async function main(argv = process.argv.slice(2), { fetchImpl = globalThi
   const outDir = path.resolve(a.out);
   const root = path.resolve(a["plugin-root"]);
   const lock = path.join(outDir, "build.lock");
-  const say = (ev, o = {}) => console.log(`appfetch: ${ev} ${JSON.stringify(o)}`);
+  const say = (ev, o = {}) => console.log(`${new Date().toISOString()} appfetch: ${ev} ${JSON.stringify(o)}`);
+  const version = pluginVersion(root);
+  const base = a.base || RELEASE_BASE;
+  say("start", { pid: process.pid, version, hash: String(a.hash).slice(0, 12), base, out: outDir, build_fallback: !a.noBuild, runtime: process.versions.bun ? `bun ${process.versions.bun}` : `node ${process.version}` });
   fs.mkdirSync(outDir, { recursive: true, mode: 0o700 });
   let other = NaN;
   try { other = Number(fs.readFileSync(lock, "utf8").trim()); } catch { /* none */ }
   if (other !== process.pid && pidAlive(other)) { say("busy", { pid: other }); return 3; }
   fs.writeFileSync(lock, `${process.pid}\n`);
+  const finish = (o) => {
+    const rec = { version, hash: a.hash, at: new Date().toISOString(), ...o };
+    try { fs.writeFileSync(path.join(outDir, INSTALL_STAMP), `${JSON.stringify(rec)}\n`); } catch { /* best effort */ }
+    say(o.ok ? "done" : "failed", o);
+    return o.ok ? 0 : 1;
+  };
+  // Tests only: an unsigned fixture served from this machine skips the
+  // signature checks. Never for a non-loopback base (SPEC §6.16).
+  let verify;
+  if (env.SOTTO_APP_VERIFY === "insecure-test" && isLoopbackBase(base)) {
+    say("verify_skipped", { reason: "SOTTO_APP_VERIFY=insecure-test with a loopback base" });
+    verify = async () => ({ ok: true, detail: "skipped (test)" });
+  }
+  const opts = { outDir, version, hash: a.hash, base, fetchImpl, log: say, ...(verify ? { verify } : {}) };
   let r;
   try {
-    r = await installRelease({ outDir, version: pluginVersion(root), hash: a.hash, base: a.base || RELEASE_BASE, fetchImpl, log: say });
+    r = await installRelease(opts);
   } finally {
     try { if (Number(fs.readFileSync(lock, "utf8").trim()) === process.pid) fs.rmSync(lock); } catch { /* ignore */ }
   }
-  if (r.ok) return 0;
-  if (a.noBuild) return 1;
+  if (r.ok) return finish({ ok: true, source: "release" });
   const script = path.join(root, "scripts", "build-app.sh");
-  if (!fs.existsSync(script)) return 1;
-  say("local_build", {});
-  const b = spawnSync("/bin/bash", [script, "--out", outDir, "--quiet"], { stdio: "inherit" });
-  return b.status ?? 1;
+  let buildRan = false, buildCode = null, build = null;
+  if (!a.noBuild && fs.existsSync(script)) {
+    say("local_build", { script });
+    const t0 = Date.now();
+    const b = spawnSync("/bin/bash", [script, "--out", outDir, "--quiet"], { stdio: ["ignore", "inherit", "inherit"] });
+    buildRan = true;
+    buildCode = b.status ?? (b.signal ? `signal ${b.signal}` : 1);
+    build = readJson(path.join(outDir, "build.json"));
+    say("local_build_done", { code: buildCode, ok: b.status === 0, seconds: Math.round((Date.now() - t0) / 1000), error: build?.ok === false ? build.error : undefined });
+    if (b.status === 0) return finish({ ok: true, source: "build", release_reason: r.reason });
+  } else if (!a.noBuild) {
+    say("local_build_skipped", { reason: "no scripts/build-app.sh" });
+  }
+  if (r.reason === "sources_mismatch" && (buildRan || a.noBuild)) {
+    say("release_despite_sources", {});
+    fs.writeFileSync(lock, `${process.pid}\n`);
+    let r2;
+    try {
+      r2 = await installRelease({ ...opts, allowSourcesMismatch: true });
+    } finally {
+      try { if (Number(fs.readFileSync(lock, "utf8").trim()) === process.pid) fs.rmSync(lock); } catch { /* ignore */ }
+    }
+    if (r2.ok) return finish({ ok: true, source: "release", sources_mismatch: true });
+  }
+  return finish({ ok: false, reason: buildRan ? "build_failed" : r.reason, message: failureMessage({ release: r, build, buildRan, buildCode }) });
 }
 
-if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
-  main().then((code) => process.exit(code), (e) => { console.error(`appfetch: ${e?.stack || e}`); process.exit(1); });
+// Run as a program. Compare real paths: the plugin is often installed through
+// a symlink (~/.claude/skills/sotto -> a checkout), and Node resolves the main
+// module's symlinks for import.meta.url but leaves process.argv[1] as typed.
+// A plain path comparison made the daemon-spawned installer exit 0 without
+// doing anything (the "app never installs" bug).
+export function isMainModule(argv1 = process.argv[1], metaUrl = import.meta.url) {
+  if (!argv1) return false;
+  try { return fs.realpathSync(argv1) === fs.realpathSync(fileURLToPath(metaUrl)); } catch { return false; }
+}
+
+if (isMainModule()) {
+  main().then((code) => process.exit(code), (e) => { console.error(`${new Date().toISOString()} appfetch: crashed ${e?.stack || e}`); process.exit(1); });
 }

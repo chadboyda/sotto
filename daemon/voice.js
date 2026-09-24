@@ -12,7 +12,7 @@ import { Mirror, MIRROR_MODES } from "./mirror.js";
 import { Narrator, milestoneLabel, elicitationSpeech, serverName } from "./policy.js";
 import { SpeechQueue, COMMENTARY_PREROLL_MS } from "./speaker.js";
 import { renderForPolicy, buildSeedInput, greeting, ownerSwitchInstruction, voiceSwitchGreeting, vocabularyUpdateInstruction, updateGreeting } from "./prompt.js";
-import { readPrefs, writePrefs, resolveVoice, normalizeVoice, voiceListMessage, unknownVoiceMessage } from "./prefs.js";
+import { readPrefs, writePrefs, resolveVoice, normalizeVoice, voiceListMessage, unknownVoiceMessage, normalizeWindow, resolveWindowPref } from "./prefs.js";
 import { collectVocabulary, renderVocabulary, vocabularyHint, TIER } from "./vocabulary.js";
 import { buildSessionBody, createLiveSession, Sideband } from "./live.js";
 import { PreviewCache, recordPreview, previewText } from "./preview.js";
@@ -59,7 +59,7 @@ const VOCAB_REUSE_MS = 5 * 60_000;
 
 export const MSG = {
   noSocket: "sotto: ERROR this session has no inbox socket (CLAUDE_CODE_MESSAGING_SOCKET is unset), so voice cannot reach it.",
-  usage: "sotto: usage: /talk [on|off|status|restart|quiet|milestones|walkthrough|voice [name]|key]",
+  usage: "sotto: usage: /talk [on|off|status|restart|quiet|milestones|walkthrough|voice [name]|app|window [auto|app|chrome]|key]",
   noKeyNoWindow: "sotto: ERROR OPENAI_API_KEY was not found. Run /talk key to add it, or export it before starting Claude Code.",
 };
 
@@ -551,6 +551,11 @@ export class Voice {
   control(req = {}) {
     const action = req.action;
     this.log.info("control", { action, state: this.state });
+    // Every /talk (re)starts a missing desktop-app install (SPEC §6.16), so a
+    // failed or interrupted one never waits for a window to open.
+    if (action !== "shutdown" && action !== "app") {
+      try { this.chrome.ensureInstalled?.(); } catch (e) { this.log.warn("app.ensure_error", { message: e.message }); }
+    }
     let r;
     switch (action) {
       case "toggle": {
@@ -565,6 +570,8 @@ export class Voice {
       case "voice": r = req.voice == null || req.voice === "" ? { ok: true, message: voiceListMessage(this.currentVoice(req.config)) } : this.setVoice(req.voice, "control"); break;
       case "restart": r = this.manualRestart(); break;
       case "key": r = this.keyControl(req); break;
+      case "window": r = this.setWindow(req.window); break;
+      case "app": r = this.appControl(req); break;
       case "shutdown": {
         this.gracefulOff("shutdown");
         r = { ok: true, message: "sotto: daemon stopped." };
@@ -579,11 +586,81 @@ export class Voice {
 
   statusMessage() {
     const u = fmtUsage(this.todaySeconds());
-    if (this.state === "off" || !this.owner) return `sotto: voice is off. ${u}.`;
+    const app = this.appNote();
+    if (this.state === "off" || !this.owner) return `sotto: voice is off. ${u}.${app ? ` ${app}.` : ""}`;
     const st = this.state === "live" ? "ON" : this.state;
     let m = `sotto: voice ${st} (${this.owner.project}) | ${u} | voice ${this.config.voice} | ${this.policy}`;
+    if (app) m += ` | ${app}`;
     if (this.lastError) m += ` | last error: ${this.lastError.message}`;
     return m;
+  }
+
+  // ---- voice window: desktop app or Chrome (SPEC §6.16) ------------------------------
+  /** The window preference: prefs.json > userConfig > auto. */
+  windowPref(config) {
+    return resolveWindowPref({ prefs: readPrefs(this.paths), configWindow: config?.window ?? this.config.window });
+  }
+
+  /** The desktop app's state, in words, when it matters (not installed, installing, failed); else "". */
+  appNote() {
+    const a = this.chrome.appStatus?.();
+    if (!a || this.windowPref() === "chrome" || this.windowPref() === "default") return "";
+    if (a.state === "installing") return "desktop app installing";
+    if (a.state === "failed") return `desktop app couldn't be installed (${a.message}); using Chrome. Retry with /talk app`;
+    if (a.state === "missing" || a.state === "stale") return "desktop app not installed yet; /talk app installs it";
+    return "";
+  }
+
+  /** /talk window [mode]: show or persist where the voice window opens. */
+  setWindow(mode) {
+    if (mode == null || mode === "") {
+      const a = this.chrome.appStatus?.();
+      const st = a ? ` (desktop app: ${a.state === "failed" ? `couldn't be installed, ${a.message}` : a.state})` : "";
+      return { ok: true, message: `sotto: window is ${this.windowPref()}${st}. Change it with /talk window <auto|app|chrome>.` };
+    }
+    const w = normalizeWindow(mode);
+    if (!w) return { ok: false, message: `sotto: unknown window "${String(mode).replace(/[^A-Za-z0-9_-]/g, "").slice(0, 20)}". Choose auto, app or chrome.` };
+    try { writePrefs(this.paths, { window: w }); } catch (e) {
+      this.log.error("prefs.write_error", { message: e.message });
+      return { ok: false, message: `sotto: ERROR could not save the window choice to ${this.paths.prefs}.` };
+    }
+    this.log.info("window.pref", { window: w });
+    let extra = "";
+    if (w === "app" || w === "auto") {
+      const a = this.chrome.ensureInstalled?.();
+      if (a?.state === "installing") extra = " The desktop app is installing.";
+    }
+    return { ok: true, message: `sotto: window set to ${w}. It applies the next time the voice window opens.${extra}` };
+  }
+
+  /**
+   * /talk app: persist window=app, (re)try the install, and open the voice in
+   * the app. While a Chrome window hosts the voice, the switch happens at the
+   * next /talk: the Live session lives in that page.
+   */
+  appControl(req) {
+    try { writePrefs(this.paths, { window: "app" }); } catch (e) { this.log.error("prefs.write_error", { message: e.message }); }
+    this.log.info("window.pref", { window: "app", via: "app" });
+    let a;
+    try { a = this.chrome.ensureInstalled?.({ force: true }); } catch (e) { this.log.warn("app.ensure_error", { message: e.message }); }
+    if (a?.state === "unsupported") return { ok: false, message: "sotto: the desktop app needs macOS; the voice window stays in the browser." };
+    if (this.owner && this.state !== "off" && this.sse.count > 0) {
+      if (this.chrome.appLaunched) return { ok: true, message: "sotto: voice is already in the desktop app." };
+      const when = a?.state === "installing" ? " The desktop app is installing;" : "";
+      return { ok: true, message: `sotto: window set to app.${when} The voice moves to the desktop app at the next /talk (turn it off and on).` };
+    }
+    return this.on(req.session, req.config);
+  }
+
+  /** The detached installer finished (window.js): tell the page. */
+  appInstallResult(r) {
+    if (r.ok) {
+      if (this.sse.count > 0 && !this.chrome.appLaunched) this.notice("info", "app_ready", "The Sotto desktop app is installed. The next /talk opens it.");
+      return;
+    }
+    const n = { level: "warn", code: "app_install_failed", text: `Desktop app couldn't be installed: ${r.message}. Using Chrome.` };
+    if (this.sse.count > 0) this.notice(n.level, n.code, n.text);
+    else this.helloNotice = n;
   }
 
   on(session, config) {
@@ -662,6 +739,11 @@ export class Voice {
     } else if (this.config.open_browser) {
       const r = this.chrome.open();
       if (r && r.mode !== "none") msg = `sotto: voice ON (${project}). Opening the voice window.`;
+      if (r?.pending) msg = `sotto: voice ON (${project}). Installing the desktop app (signed release, about 350 KB); the window opens when it is ready.`;
+      else if (r?.installError) {
+        msg = `sotto: voice ON (${project}). Desktop app couldn't be installed (${r.installError.message}); using Chrome.`;
+        this.helloNotice = { level: "warn", code: "app_install_failed", text: `Desktop app couldn't be installed: ${r.installError.message}. Using Chrome.` };
+      }
       if (r && r.warn) this.log.warn("chrome.fallback", { message: "Google Chrome not found; echo cancellation may be worse in the default browser" });
     }
     this.timer("waitingPage", () => this.onPageTimeout(), WAITING_PAGE_MS);
@@ -670,6 +752,9 @@ export class Voice {
 
   onPageTimeout() {
     if (this.state !== "waiting_page") return;
+    // The window is held for a desktop-app install in flight (window.js): it
+    // opens (app, or Chrome at the wait's deadline) before any page can come.
+    if (this.chrome.pending) { this.timer("waitingPage", () => this.onPageTimeout(), WAITING_PAGE_MS); return; }
     this.setLastError("page_timeout", "The voice window did not connect");
     this.notice("warn", "page_timeout", "The voice window did not connect.");
     this.chrome.notify?.("Voice window did not connect");

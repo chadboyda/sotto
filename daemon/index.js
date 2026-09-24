@@ -93,7 +93,9 @@ export function createDaemon({
   // Desktop app, Chrome --app window, or default browser (SPEC §6.16).
   const chromeApi = chrome || createWindow({
     dataDir, port, pluginRoot, env, log: logger, launchCode: issueLaunchCode, clock,
-    getPreference: () => voice?.config?.window,
+    // prefs.json (/talk window, /talk app) > userConfig `window` > auto.
+    getPreference: () => (voice ? voice.windowPref() : undefined),
+    onInstallResult: (r) => voice?.appInstallResult(r),
     pageConnected: () => sse.count > 0,
     wantsWindow: () => !!voice && voice.config.open_browser !== false && sse.count === 0
       && (voice.state === "waiting_page" || voice.state === "reconnecting" || voice.keySetup),
@@ -105,6 +107,11 @@ export function createDaemon({
     getApiKey: () => keyStore.key(), keys: keyStore, sse, onExit: (r) => onExit?.(r), owner, execFile,
     requestRestart: onRestart ? () => (updater && updater.enabled ? updater.requestManual() : "disabled") : null,
   });
+  // Install the desktop app as soon as the plugin is used (the daemon starts
+  // at the first /talk), not only when a window opens (SPEC §6.16).
+  if (!chrome) {
+    try { chromeApi.ensureInstalled(); } catch (e) { logger.warn("app.ensure_error", { message: e.message }); }
+  }
   if (onRestart) {
     updater = new Updater({
       root: pluginRoot, clock, log: logger, env,
