@@ -519,3 +519,34 @@ test("reloadUrl drops autostart and keeps the rest", () => {
   assert.equal(lib.reloadUrl("/index.html", ""), "/index.html");
   assert.equal(lib.reloadUrl("", "?y=1"), "/?y=1");
 });
+
+test("createDigitalSilenceDetector: fires once after 4 s of EXACT zeros, never on a quiet mic", () => {
+  assert.equal(lib.createDigitalSilenceDetector().sample({ rms: 0, now: 0 }), null);
+  const d = lib.createDigitalSilenceDetector({ thresholdMs: 4000 });
+  assert.equal(d.sample({ rms: 0, now: 0 }), null, "not armed before start()");
+  d.start();
+  let fired = null;
+  for (let t = 0; t <= 3950; t += 50) fired = fired || d.sample({ rms: 0, now: t });
+  assert.equal(fired, null);
+  // A quiet room (noise floor) resets the run.
+  assert.equal(d.sample({ rms: 0.00002, now: 4000 }), null);
+  for (let t = 4050; t < 8050; t += 50) fired = fired || d.sample({ rms: 0, now: t });
+  assert.equal(fired, null, "the run restarted at 4050");
+  assert.deepEqual(d.sample({ rms: 0, now: 8050 }), { ms: 4000 });
+  assert.equal(d.sample({ rms: 0, now: 20000 }), null, "once per start()");
+  // A suspended audio context (frozen analyser) does not count.
+  d.start();
+  for (let t = 0; t < 10000; t += 50) fired = d.sample({ rms: 0, now: t, running: false }) || null;
+  assert.equal(fired, null);
+  const d6 = lib.createDigitalSilenceDetector();
+  d6.start();
+  assert.equal(d6.sample({ rms: 0, now: 0 }), null);
+  assert.equal(d6.sample({ rms: 0, now: 5999 }), null);
+  assert.deepEqual(d6.sample({ rms: 0, now: 6000 }), { ms: 6000 }, "the page default is 6 s");
+  const d2 = lib.createDigitalSilenceDetector({ thresholdMs: 1000 });
+  d2.start();
+  d2.sample({ rms: 0, now: 0 });
+  d2.stop();
+  assert.equal(d2.sample({ rms: 0, now: 5000 }), null, "stopped");
+});
+

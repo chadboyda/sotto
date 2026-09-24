@@ -376,6 +376,18 @@ test("mic failures inside the Sotto app name macOS and Sotto, never Chrome", () 
   assert.equal(lib.micFailureKind("NotAllowedError", "Permission dismissed", "prompt"), "dismissed");
 });
 
+test("the app's mic-blocked card: exact wording and a button that opens the Microphone privacy pane", () => {
+  const v = lib.micFailureView("macos", "app");
+  assert.equal(v.title, "Sotto can't use the microphone");
+  assert.match(v.body, /^Allow it in System Settings > Privacy & Security > Microphone\./);
+  assert.deepEqual(v.link, { href: "x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone", label: "Open System Settings" });
+  assert.equal(lib.MIC_SETTINGS_URL, v.link.href);
+  const page = lib.pageView({ phase: "error", state: "live", micFailure: "macos", host: "app" });
+  assert.deepEqual(page.card.link, v.link);
+  // Failures macOS has nothing to do with get no link.
+  assert.equal(lib.pageView({ phase: "error", state: "live", micFailure: "busy", host: "app" }).card.link, undefined);
+});
+
 test("cardAnnouncement: title plus the first sentence; errors are assertive", () => {
   const paused = lib.pageView({ phase: "idle", state: "paused", pausedReason: "user" }).card;
   const a = lib.cardAnnouncement(paused);

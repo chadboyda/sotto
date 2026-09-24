@@ -30,6 +30,11 @@ final class MicController: NSObject, WKScriptMessageHandlerWithReply {
     var evaluate: ((String) -> Void)?
     /// Origin check for the message sender (set by the panel controller).
     var isOurs: ((WKSecurityOrigin) -> Bool)?
+    /// Called before macOS shows its microphone prompt (first use): bring the
+    /// panel and the app forward so the prompt is not hidden behind the terminal.
+    var onPermissionPrompt: (() -> Void)?
+    /// The executable this process was launched from (see bundleReplaced).
+    private let launchIdentity = MicController.executableIdentity()
     private var captures: [Int: MicSource] = [:]
     private var chunks: [Int: Int] = [:]
     private var routeTimer: Timer?
@@ -91,6 +96,15 @@ final class MicController: NSObject, WKScriptMessageHandlerWithReply {
         case "stop":
             stop(id: (body["id"] as? NSNumber)?.intValue ?? 0)
             replyHandler(true, nil)
+        case "silent":
+            // mic.js saw only digital silence (or no audio) from a native capture
+            // and falls back to WebKit's capture (SPEC §6.16 "Silent mic").
+            let id = (body["id"] as? NSNumber)?.intValue ?? 0
+            let info: [String: Any] = ["permission": permission(), "bundleReplaced": bundleReplaced]
+            log.log("native_mic_silent", ["id": id, "device": captures[id]?.label ?? "", "reason": body["reason"] as? String ?? "",
+                                          "ms": (body["ms"] as? NSNumber)?.intValue ?? 0, "chunks": (body["chunks"] as? NSNumber)?.intValue ?? 0,
+                                          "permission": info["permission"]!, "bundle_replaced": bundleReplaced])
+            replyHandler(info, nil)
         case "stats":
             var f = body.filter { ["id", "transportMs", "transportP95Ms", "queueMs", "underruns", "drops", "trims", "chunks", "echoSim", "echoDb"].contains($0.key) }
             f["source"] = captures[(body["id"] as? NSNumber)?.intValue ?? 0]?.label == nil ? "stopped" : "native"
@@ -125,6 +139,23 @@ final class MicController: NSObject, WKScriptMessageHandlerWithReply {
         var d = p.dictionary
         if testMode { d["device"] = ["id": "sotto-test", "label": "Test fixture", "bluetooth": false] }
         return d
+    }
+
+    /// (device, inode) of an executable file, or nil.
+    static func executableIdentity(_ path: String? = Bundle.main.executablePath) -> [UInt64]? {
+        guard let p = path else { return nil }
+        var st = stat()
+        guard stat(p, &st) == 0 else { return nil }
+        return [UInt64(bitPattern: Int64(st.st_dev)), UInt64(st.st_ino)]
+    }
+
+    /// The bundle on disk is no longer the one this process runs (an install
+    /// swapped it). macOS then treats the process as unidentified code: its
+    /// microphone delivers only zeros although AVCaptureDevice still says
+    /// "authorized" (SPEC §6.16 "Stale app"). The daemon quits such a process.
+    var bundleReplaced: Bool {
+        guard let launched = launchIdentity else { return false }
+        return MicController.executableIdentity() != launched
     }
 
     private func permission() -> String {
@@ -167,10 +198,16 @@ final class MicController: NSObject, WKScriptMessageHandlerWithReply {
         switch AVCaptureDevice.authorizationStatus(for: .audio) {
         case .authorized: go()
         case .notDetermined:
+            // The app runs in the background (open -g, a non-activating panel):
+            // bring it forward, or the system prompt can stay out of sight.
+            log.log("mic_permission_prompt")
+            onPermissionPrompt?()
             AVCaptureDevice.requestAccess(for: .audio) { ok in
                 DispatchQueue.main.async { ok ? go() : reply(["error": "NotAllowedError", "message": "Permission denied by system"], nil) }
             }
-        default: reply(["error": "NotAllowedError", "message": "Permission denied by system"], nil)
+        default:
+            log.log("mic_permission_denied", ["status": AVCaptureDevice.authorizationStatus(for: .audio).rawValue])
+            reply(["error": "NotAllowedError", "message": "Permission denied by system"], nil)
         }
     }
 

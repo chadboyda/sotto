@@ -810,7 +810,9 @@ body[data-view="card"][data-dial="small"] .pending { text-align: left; align-sel
 .pending-title { display: flex; align-items: center; gap: var(--space-2); font-size: var(--text-small); font-weight: 600; color: var(--live); }
 .pending-title svg { width: 16px; height: 16px; stroke-width: 2.2; }
 .pending-text { color: var(--fg); text-wrap: pretty; display: -webkit-box; -webkit-line-clamp: 5; -webkit-box-orient: vertical; overflow: hidden; }
-.card-actions { align-self: stretch; margin-top: var(--space-2); }
+.card-actions { align-self: stretch; margin-top: var(--space-2); display: grid; gap: var(--space-2); }
+/* "Open System Settings" on a macOS mic block: a link styled as the secondary action. */
+.card-link { text-decoration: none; box-sizing: border-box; }
 .kbd-hint { color: var(--fg-3); font-size: var(--text-small); }
 
 .key-field { display: grid; gap: var(--space-2); align-self: stretch; }

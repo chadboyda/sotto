@@ -25,6 +25,10 @@ import { normalizeKeyInput, validateKey, keyWhere } from "./apikey.js";
 
 /** The voice says "I can't hear you well" at most this often (§7.5). */
 const CANT_HEAR_SAY_MS = 10 * 60 * 1000;
+// A silent-mic window swap (SPEC §6.16 "Silent mic") at most this often.
+const MIC_SILENT_SWAP_MS = 60 * 1000;
+// What /talk status and the page say when macOS blocks the app's microphone.
+export const APP_MIC_BLOCKED = "Sotto can't use the microphone: allow it in System Settings > Privacy & Security > Microphone";
 // Idle/sleep is checked this often while live. Short, because the idle
 // timeout is now tens of seconds, not minutes (§6.15).
 const IDLE_TICK_MS = 2000;
@@ -138,6 +142,9 @@ export class Voice {
     this.liveStartedAt = 0;
     this.lastClaudeEventAt = 0;
     this.pageHello = false;
+    this.swapping = false; // a window swap (stale or silent app) is quitting the app
+    this.micSilentAt = undefined;
+    this.staleRestarted = false;
     this.reconnects = [];
     this.offGen = 0;
     this.timers = {};
@@ -670,6 +677,8 @@ export class Voice {
   /** The detached installer finished (window.js): tell the page. */
   appInstallResult(r) {
     if (r.ok) {
+      // The swap replaced the bundle under a running app, whose mic is now silent.
+      this.checkStaleApp("install").catch((e) => this.log.error("app.stale_error", { message: String(e && e.message) }));
       if (this.sse.count > 0 && !this.chrome.appLaunched) this.notice("info", "app_ready", "The Sotto desktop app is installed. The next /talk opens it.");
       return;
     }
@@ -1195,7 +1204,10 @@ export class Voice {
       case "mic_ok": this.log.info("page.mic_ok", { input: truncate(msg.input_label, 120), output: truncate(msg.output_label, 120), aec: msg.aec === undefined ? undefined : truncate(String(msg.aec), 16) }); break;
       case "mic_error": {
         const denied = /NotAllowed|Permission|Security/i.test(String(msg.name || ""));
-        this.setLastError(denied ? "mic_denied" : "mic_error", truncate(String(msg.message || msg.name || "microphone error"), 200));
+        const app = msg.host === "app";
+        this.log.warn("page.mic_error", { name: truncate(String(msg.name || ""), 40), message: truncate(String(msg.message || ""), 200), host: app ? "app" : "browser" });
+        // In the app every refusal is macOS privacy for "Sotto" (lib.micFailureKind).
+        this.setLastError(denied ? "mic_denied" : "mic_error", denied && app ? APP_MIC_BLOCKED : truncate(String(msg.message || msg.name || "microphone error"), 200));
         this.clear("waitingPage");
         if (this.state !== "off" && this.state !== "closing") this.setState("paused");
         break;
@@ -1205,6 +1217,16 @@ export class Voice {
       case "muted": if (this.live) { this.live.muted = !!msg.muted; this.changed(); } break;
       case "activity": this.lastPageActivityAt = this.clock.now(); break;
       case "cant_hear": this.onCantHear(msg); break;
+      case "mic_silent": this.onMicSilent(msg).catch((e) => this.log.error("mic_silent.error", { message: String(e && e.message) })); break;
+      case "mic_fallback":
+        this.log.warn("page.mic_fallback", {
+          from: truncate(String(msg.from || ""), 16), to: truncate(String(msg.to || ""), 16), reason: truncate(String(msg.reason || ""), 32),
+          input: truncate(String(msg.input_label || ""), 120), ok: msg.ok === undefined ? undefined : !!msg.ok,
+          ms: Number.isFinite(Number(msg.ms)) ? Number(msg.ms) : undefined,
+          permission: msg.permission === undefined ? undefined : truncate(String(msg.permission), 16),
+          bundle_replaced: msg.bundle_replaced === undefined ? undefined : !!msg.bundle_replaced,
+        });
+        break;
       case "pause": this.pause("pause"); break;
       case "stop": this.off("user"); break;
       case "set_policy": this.setPolicy(msg.policy); break;
@@ -1219,7 +1241,8 @@ export class Voice {
         break;
       }
       case "unload":
-        if (this.sideband) this.pause("unload", { command: false });
+        // A window swap quits the app on purpose: the session moves, it does not pause.
+        if (this.sideband && !this.swapping) this.pause("unload", { command: false });
         break;
       default: break;
     }
@@ -1241,6 +1264,70 @@ export class Voice {
     this.live.cantHearSaid = true;
     this.cantHearSaidAt = now;
     this.deliver({ kind: "instructions", content: cantHearInstruction(), delegationId: null });
+  }
+
+  /**
+   * Quit app processes that run a replaced bundle (SPEC §6.16 "Stale app"):
+   * at daemon start and after every install. One that hosts our page moves
+   * the voice to a fresh app window; others just quit.
+   */
+  async checkStaleApp(reason) {
+    const w = this.chrome;
+    if (typeof w?.staleApps !== "function") return false;
+    // appLaunched: this daemon (or its predecessor, §6.17) opened the app, whose page may be connected or reconnecting.
+    if (w.appLaunched) {
+      const stale = await w.staleApps();
+      if (!stale.length) return false;
+      this.staleRestarted = true;
+      return this.swapWindow(`stale_app_${reason}`, { chrome: false });
+    }
+    return (await w.quitStaleApps(reason)) > 0;
+  }
+
+  /**
+   * The page hears only digital silence (all-zero samples) from its mic
+   * (SPEC §6.16 "Silent mic"). In the app: a stale app (replaced bundle)
+   * restarts once; otherwise the voice moves to Chrome. Never sit silent.
+   */
+  async onMicSilent(msg = {}) {
+    const input = truncate(String(msg.input_label || ""), 120);
+    const app = msg.host === "app";
+    this.log.warn("page.mic_silent", { input, source: truncate(String(msg.source || ""), 24), ms: Number.isFinite(Number(msg.ms)) ? Number(msg.ms) : undefined, host: app ? "app" : "browser" });
+    this.setLastError("mic_silent", `The microphone (${input || "unknown"}) delivered only silence`);
+    const w = this.chrome;
+    if (!app || !w?.appLaunched || typeof w.replaceApp !== "function") return false;
+    const now = this.clock.now();
+    if (this.micSilentAt !== undefined && now - this.micSilentAt < MIC_SILENT_SWAP_MS) return false;
+    this.micSilentAt = now;
+    const stale = this.staleRestarted ? [] : await w.staleApps();
+    if (stale.length) {
+      this.staleRestarted = true;
+      return this.swapWindow("mic_silent_stale_app", { chrome: false });
+    }
+    return this.swapWindow("mic_silent", { chrome: true });
+  }
+
+  /**
+   * Quit the app and reopen the voice window (a fresh app, or Chrome), keeping
+   * the voice on: a live session reconnects in the new window.
+   */
+  async swapWindow(reason, { chrome = false } = {}) {
+    if (this.swapping || typeof this.chrome?.replaceApp !== "function") return false;
+    this.swapping = true;
+    this.log.warn("window.swap", { reason, to: chrome ? "chrome" : "app", state: this.state });
+    try {
+      await this.chrome.replaceApp({ reason, chrome });
+    } catch (e) {
+      this.log.error("window.swap_error", { message: String(e && e.message) });
+    } finally {
+      this.swapping = false;
+    }
+    if (!this.owner || this.state === "off" || this.state === "closing") return true;
+    if (LIVE_STATES.has(this.state)) this.reconnect(reason);
+    // Open the new window now instead of after RECONNECT_OPEN_MS.
+    this.clear("reconnectOpen");
+    if (this.config.open_browser !== false) this.chrome.open({ force: true });
+    return true;
   }
 
   onRtcState(state) {

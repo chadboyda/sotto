@@ -57,6 +57,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, PanelControllerDelegat
         let mic = MicController(log: log, testMode: options.testMode)
         log.log("mic_pref", ["pref": mic.pref, "echo_sim_db": mic.echoSimDb ?? NSNull()])
         panel = PanelController(bridgeSource: bridge, micSource: micJS, mic: mic, log: log, mockCapture: options.mockCapture)
+        mic.onPermissionPrompt = { [weak self] in
+            guard let self = self, !self.options.testMode else { return }
+            self.panel.show()
+            NSApp.activate(ignoringOtherApps: true)
+        }
         mic.startRouteWatch()
         panel.delegate = self
         log.log("audio_route", AudioRoute.current().dictionary)
@@ -384,8 +389,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, PanelControllerDelegat
           ctx.createMediaStreamSource(s).connect(an);
           const buf = new Float32Array(an.fftSize);
           let peak = 0;
-          for (let i = 0; i < 10; i++) { await new Promise((r) => setTimeout(r, 100)); an.getFloatTimeDomainData(buf); let sum = 0; for (const v of buf) sum += v * v; peak = Math.max(peak, Math.sqrt(sum / buf.length)); }
+          let lastPeak = 0;
+          const reads = \(Int((options.probeSeconds * 10).rounded()));
+          for (let i = 0; i < reads; i++) {
+            await new Promise((r) => setTimeout(r, 100)); an.getFloatTimeDomainData(buf); let sum = 0; for (const v of buf) sum += v * v;
+            const rms = Math.sqrt(sum / buf.length);
+            peak = Math.max(peak, rms);
+            if (i >= reads - 5) lastPeak = Math.max(lastPeak, rms);
+          }
           out.peakRms = peak;
+          out.lastPeakRms = lastPeak; // the last 0.5 s: sound still arrives at the end
+          out.source = s.getAudioTracks()[0].getSettings().sottoSource || "";
           out.label = s.getAudioTracks()[0].label;
           out.trackState = s.getAudioTracks()[0].readyState;
           out.trackMuted = s.getAudioTracks()[0].muted;

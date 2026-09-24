@@ -491,6 +491,44 @@ export function levelFromRms(value) {
  */
 export const HEARING_DEFAULTS = Object.freeze({ silentMs: 20_000, silentRms: 0.003, speechRms: 0.01, speechMs: 6_000, gapMs: 40_000, voiceLevel: 0.08 });
 
+/**
+ * Digital silence (SPEC §6.16 "Silent mic"): every mic reading is EXACTLY
+ * zero for `thresholdMs` (6 s: longer than the app's own 2 s native -> WebKit
+ * fallback plus a Bluetooth profile switch). A working microphone never does that (even a quiet
+ * room has a noise floor); a mic that macOS refuses does (the app's capture
+ * after its bundle was replaced delivered only zero samples while macOS still
+ * said "authorized"). Readings while the audio context is not running do not
+ * count (the analyser is frozen then). Fires once per start().
+ * @returns {{start(now:number):void, sample(r:{rms:number, now:number, running?:boolean}): null|{ms:number}}}
+ */
+export function createDigitalSilenceDetector({ thresholdMs = 6000 } = {}) {
+  let since = null; // first exactly-zero reading of the current run
+  let fired = false;
+  let armed = false;
+  return {
+    start() {
+      since = null;
+      fired = false;
+      armed = true;
+    },
+    stop() {
+      armed = false;
+      since = null;
+    },
+    sample({ rms, now, running = true }) {
+      if (!armed || fired) return null;
+      if (!running || !Number.isFinite(rms) || rms !== 0) {
+        since = null;
+        return null;
+      }
+      if (since === null) since = now;
+      if (now - since < thresholdMs) return null;
+      fired = true;
+      return { ms: Math.round(now - since) };
+    },
+  };
+}
+
 export function createHearingMonitor(opts = {}) {
   const o = { ...HEARING_DEFAULTS, ...opts };
   let armedAt = null; // start of the current "silent" window (null: not live)
@@ -796,6 +834,9 @@ export function micFailureKind(name, message, permState, host = "browser") {
   }
 }
 
+/** System Settings > Privacy & Security > Microphone (the app opens it; Chrome asks first). */
+export const MIC_SETTINGS_URL = "x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone";
+
 const MIC_FAILURES = {
   dismissed: {
     title: "The microphone prompt closed",
@@ -824,6 +865,7 @@ const MIC_FAILURES = {
       "Quit and reopen Chrome, then run /talk on.",
     ],
     button: "Try again",
+    link: { href: MIC_SETTINGS_URL, label: "Open System Settings" },
     header: "Mic blocked",
   },
   notfound: {
@@ -860,14 +902,15 @@ const MIC_FAILURES = {
 // no Chrome, no site settings; macOS asks for and blocks "Sotto".
 const MIC_FAILURES_APP = {
   macos: {
-    title: "macOS is blocking the microphone",
-    body: "Your Mac isn't letting Sotto use the microphone. Voice is paused and not billing.",
+    title: "Sotto can't use the microphone",
+    body: "Allow it in System Settings > Privacy & Security > Microphone. Voice is paused and not billing.",
     steps: [
-      "Open System Settings, then Privacy & Security, then Microphone.",
+      "Click Open System Settings (or open System Settings, then Privacy & Security, then Microphone).",
       "Turn on Sotto.",
       "Quit Sotto from its menu-bar icon, then run /talk on.",
     ],
     button: "Try again",
+    link: { href: MIC_SETTINGS_URL, label: "Open System Settings" },
     header: "Mic blocked",
   },
   unsupported: {
@@ -879,7 +922,7 @@ const MIC_FAILURES_APP = {
   },
 };
 
-/** Card copy for a mic failure kind: {title, body, steps|null, button|null, header}. */
+/** Card copy for a mic failure kind: {title, body, steps|null, button|null, link?, header}. */
 export function micFailureView(kind, host = "browser") {
   if (host === "app" && MIC_FAILURES_APP[kind]) return MIC_FAILURES_APP[kind];
   return MIC_FAILURES[kind] || MIC_FAILURES.other;
@@ -1207,7 +1250,7 @@ export function pageView(s) {
     if (s?.micFailure) {
       const v = micFailureView(s.micFailure, host);
       return card(
-        { kind: `mic-${s.micFailure}`, title: v.title, body: v.body, steps: v.steps, button: st === "off" ? null : v.button, action: "resume", kbd: st !== "off" && !!v.button, tone: "err" },
+        { kind: `mic-${s.micFailure}`, title: v.title, body: v.body, steps: v.steps, button: st === "off" ? null : v.button, action: "resume", kbd: st !== "off" && !!v.button, tone: "err", ...(v.link ? { link: v.link } : {}) },
         "error",
         { key: "error", label: v.header },
       );

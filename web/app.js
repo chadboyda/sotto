@@ -54,6 +54,7 @@ const el = {
   overlayPending: $("overlay-pending"),
   overlayPendingText: $("overlay-pending-text"),
   overlayNote: $("overlay-note"),
+  overlayLink: $("overlay-link"),
   overlayScroll: $("overlay-scroll"),
   overlayBtn: $("overlay-btn"),
   overlayKbd: $("overlay-kbd"),
@@ -804,6 +805,7 @@ const meter = {
       if (this.ctx.state === "suspended") this.ctx.resume().catch(() => {});
       this.source = this.ctx.createMediaStreamSource(stream);
       this.analyser = this.analyserFor(this.source);
+      silence.start();
       this.buf = new Float32Array(this.analyser.fftSize);
       this.freq = new Uint8Array(this.analyser.frequencyBinCount);
       this.raf = requestAnimationFrame(this.tick);
@@ -856,6 +858,7 @@ const meter = {
     this.source = null;
     this.analyser = null;
     this.level = 0;
+    silence.stop();
     this.detector.reset();
     this.floor.reset();
     wordHold.reset(null);
@@ -894,6 +897,9 @@ const meter = {
       const heard = hearing.sample({ rms: value, muted: S.muted || !!S.mutePending, voice, now: performance.now() });
       if (heard) cantHear(heard);
     }
+    // Page mute goes through the session, not the track, so the raw mic is measured either way.
+    const zero = silence.sample({ rms: value, now: performance.now(), running: this.ctx?.state === "running" });
+    if (zero) micSilent(zero);
     // Quiet: poll at 20 Hz (enough for the floor word and the activity detector);
     // sound: every frame, so the dial follows the voice.
     const quiet = lib.gateLevel(mic) === 0 && lib.gateLevel(voice, 0.08) === 0;
@@ -924,6 +930,36 @@ function cantHear(f) {
   post("cant_hear", { kind: f.kind, input_label: name, peak_rms: Number(f.peak_rms.toFixed(4)), speech_ms: Math.round(f.speech_ms), since_ms: Math.round(f.since_ms) });
   showBanner("warn", `I can't hear you \u2014 using ${name}.`, "cant_hear", { sticky: true, action: { label: "Switch mic", run: openMicSwitcher, keep: true } });
 }
+
+// ---------------------------------------------------------------------------
+// Silent mic (SPEC §6.16 "Silent mic"): the mic delivers exact digital silence,
+// which no working microphone does. In the app the daemon restarts a stale app
+// or moves the voice to Chrome; in Chrome it is logged and shown.
+// ---------------------------------------------------------------------------
+const silence = lib.createDigitalSilenceDetector();
+
+function micSilent(f) {
+  const track = S.mic?.getAudioTracks()[0];
+  const name = S.inputLabel || track?.label || "the current microphone";
+  let source = "";
+  try {
+    source = String(track?.getSettings?.().sottoSource || "");
+  } catch {
+    /* ignore */
+  }
+  logRemote("warn", `mic sends only digital silence: ${name} (${source || "browser"} capture, ${(f.ms / 1000).toFixed(1)} s of exact zeros)`);
+  post("mic_silent", { input_label: name, source, ms: f.ms, host: HOST });
+  const text = HOST === "app"
+    ? `The microphone (${name}) sends only silence. Reopening the voice window.`
+    : `The microphone (${name}) sends only silence. Check System Settings > Privacy & Security > Microphone.`;
+  showBanner("warn", text, "mic_silent", HOST === "app" ? {} : { sticky: true, action: { label: "Switch mic", run: openMicSwitcher, keep: true } });
+}
+
+// The app's mic layer (app/Resources/mic.js) switched capture paths under the same track.
+window.addEventListener("sotto-mic-fallback", (e) => {
+  const d = e?.detail || {};
+  post("mic_fallback", { from: d.from, to: d.to, reason: d.reason, input_label: d.label, ok: d.ok, ms: d.ms, permission: d.permission, bundle_replaced: d.bundleReplaced });
+});
 
 function openMicSwitcher() {
   if (!el.settings.open) el.settings.showModal();
@@ -1688,7 +1724,7 @@ async function connect(reason, { wakeMeta = null } = {}) {
   } catch (err) {
     if (gen !== S.gen) return;
     const name = err?.name || "Error";
-    post("mic_error", { name, message: String(err?.message || err) });
+    post("mic_error", { name, message: String(err?.message || err), host: HOST });
     S.micFailure = lib.micFailureKind(name, err?.message, await micPermission(), HOST);
     if (gen !== S.gen) return;
     fail(lib.micErrorMessage(name));
@@ -2285,6 +2321,11 @@ function renderStage(v = computeView()) {
     // The key card just appeared: the input is the only thing to do here.
     requestAnimationFrame(() => el.keyInput.focus());
   }
+  el.overlayLink.hidden = !c.link;
+  if (c.link) {
+    el.overlayLink.href = c.link.href;
+    el.overlayLink.textContent = c.link.label;
+  } else el.overlayLink.removeAttribute("href");
   el.overlayBtn.hidden = !c.button;
   el.overlayBtn.textContent = c.button || "";
   el.overlayBtn.dataset.action = c.action || "";

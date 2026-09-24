@@ -98,6 +98,8 @@ struct Options {
     var hotkeys = true
     var exitAfter: Double?
     var testMode = false
+    /// --probe-media: how long the hidden-panel probe listens (default 1 s).
+    var probeSeconds: Double = 1
 
     static func parse(_ argv: [String]) -> Options {
         var o = Options()
@@ -113,6 +115,7 @@ struct Options {
             case "--data-dir": data = next()
             case "--debug-log": o.debugLog = next()
             case "--probe-media": o.probeMedia = true
+            case "--probe-seconds": o.probeSeconds = next().flatMap(Double.init).map { max(0.5, min(30, $0)) } ?? 1
             case "--mock-capture": o.mockCapture = true
             case "--hidden": o.hidden = true
             case "--no-hotkeys": o.hotkeys = false

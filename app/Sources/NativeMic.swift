@@ -347,7 +347,10 @@ func micError(_ s: String) -> NSError { NSError(domain: "SottoMic", code: 1, use
 
 /// Test source: a 16-bit mono WAV (the TTS fixture) played in real time after
 /// `leadMs` of silence, then silence; or a quiet 440 Hz tone without a file.
-/// Test mode never opens a real microphone natively.
+/// Its "silence" carries a 1 LSB noise floor (-90 dBFS) like a real
+/// microphone, because exact zeros mean a dead capture (SPEC §6.16 "Silent
+/// mic"). `SOTTO_APP_MIC_FIXTURE=silence` sends exact zeros instead: what an
+/// app with a replaced bundle gets. Test mode never opens a real microphone natively.
 final class FixtureMicSource: MicSource {
     let label: String
     private var samples: [Int16] = []
@@ -358,10 +361,15 @@ final class FixtureMicSource: MicSource {
     private var sent = 0
     private let leadFrames: Int
     private let tone: Bool
+    private let digitalSilence: Bool
 
     init(path: String?, leadMs: Int) {
         leadFrames = Int(micRate) * leadMs / 1000
-        if let p = path, let s = FixtureMicSource.load(p) {
+        digitalSilence = path == "silence"
+        if digitalSilence {
+            tone = false
+            label = "Test fixture"
+        } else if let p = path, let s = FixtureMicSource.load(p) {
             samples = s
             tone = false
             label = "Test fixture"
@@ -410,8 +418,10 @@ final class FixtureMicSource: MicSource {
             var out = [Int16](repeating: 0, count: n)
             for i in 0..<n {
                 let k = self.sent + i
+                if self.digitalSilence { continue }
                 if self.tone { out[i] = Int16(3000 * sin(2 * Double.pi * 440 * Double(k) / micRate)) }
                 else if k >= self.leadFrames, k - self.leadFrames < self.samples.count { out[i] = self.samples[k - self.leadFrames] }
+                if out[i] == 0 { out[i] = k & 1 == 0 ? 1 : -1 } // noise floor, not digital silence
             }
             self.sent = due
             onChunk(out.withUnsafeBufferPointer { Data(buffer: $0) }, now)

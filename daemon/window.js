@@ -31,6 +31,8 @@ export const INSTALL_WAIT_MS = Object.freeze({ auto: 15_000, app: 120_000 });
 export const INSTALL_POLL_MS = 1_000;
 /** After an install ended without an app, this daemon does not start another by itself for this long (/talk app does). */
 export const INSTALL_RETRY_MS = 10 * 60_000;
+/** How long a quit app process gets after SIGTERM before SIGKILL. */
+export const APP_QUIT_WAIT_MS = 3_000;
 
 export function appPaths(dataDir, pluginRoot) {
   const dir = path.join(dataDir, "app");
@@ -188,6 +190,37 @@ export function installFailure({ dataDir, pluginRoot, hash, exitCode = null, fsI
   return null;
 }
 
+/**
+ * Our app's processes in `ps -axo pid=,lstart=,args=` output (LC_ALL=C):
+ * [{pid, startMs}]. `lstart` is local time with 1 s resolution. Pure.
+ */
+export function parseAppProcesses(stdout, exe) {
+  const out = [];
+  for (const line of String(stdout || "").split("\n")) {
+    const m = /^\s*(\d+)\s+([A-Z][a-z]{2}\s+[A-Z][a-z]{2}\s+\d{1,2}\s+\d{1,2}:\d{2}:\d{2}\s+\d{4})\s+(.*)$/.exec(line);
+    if (!m) continue;
+    const args = m[3];
+    if (args !== exe && !args.startsWith(`${exe} `)) continue;
+    const startMs = Date.parse(m[2].replace(/\s+/g, " "));
+    out.push({ pid: Number(m[1]), startMs: Number.isFinite(startMs) ? startMs : null });
+  }
+  return out;
+}
+
+/**
+ * App processes that run a REPLACED bundle (SPEC §6.16 "Stale app"): started
+ * before the installed executable was written (its ctime: the install, since a
+ * release unzip keeps the build's mtime). macOS then attributes the process to
+ * code that is no longer on disk, and its microphone delivers only zeros while
+ * AVCaptureDevice still says "authorized" (measured, macOS 26.6: a Developer ID
+ * app whose bundle was swapped while it ran got 71 168 samples, all zero). The
+ * 1 s margin covers lstart's resolution. Pure.
+ */
+export function staleAppProcesses(procs, exeChangedMs) {
+  if (!Number.isFinite(exeChangedMs)) return [];
+  return (procs || []).filter((x) => Number.isFinite(x.startMs) && x.startMs + 1000 <= exeChangedMs);
+}
+
 /** Wait for an install in flight instead of opening Chrome? Pure. */
 export function shouldWaitForInstall({ want, platform, appBroken, installing, waitMs }) {
   return (want === "app" || want === "auto") && platform === "darwin" && !appBroken && !!installing && waitMs > 0;
@@ -215,6 +248,7 @@ export function createWindow({
   let install = null; // {pid, at}: the installer this daemon spawned, while it runs
   let installError = null; // {reason, message, at}: the last install that ended without an app
   let pending = null; // {want, deadline, poll}: open() waiting for that install
+  let quitting = null; // Promise while stale app processes are being quit: a launch waits for it
   const nowMs = () => (timers.now ? timers.now() : Date.now());
   const waitFor = (want) => {
     const envMs = Number(env.SOTTO_APP_INSTALL_WAIT_MS);
@@ -244,6 +278,34 @@ export function createWindow({
       return null;
     }
   };
+
+  const sleep = (ms) => new Promise((r) => timers.setTimeout(r, ms));
+
+  /** Our app's running processes: [{pid, startMs}] ([] when ps fails). */
+  function appProcesses() {
+    if (platform !== "darwin") return Promise.resolve([]);
+    return new Promise((resolve) => {
+      execFile("ps", ["-axo", "pid=,lstart=,args="], { timeout: 2000, maxBuffer: 8 * 1024 * 1024, env: { ...process.env, LC_ALL: "C" } }, (err, stdout) => {
+        resolve(err ? [] : parseAppProcesses(String(stdout), p.exe));
+      });
+    });
+  }
+
+  /** Running app processes older than the installed bundle (see staleAppProcesses). */
+  async function staleApps() {
+    let changed;
+    try { changed = fsImpl.statSync(p.exe).ctimeMs; } catch { return []; }
+    return staleAppProcesses(await appProcesses(), changed);
+  }
+
+  /** SIGTERM, then SIGKILL whatever is left after APP_QUIT_WAIT_MS. */
+  async function terminate(pids) {
+    const alive = (pid) => pidAlive(pid, kill);
+    for (const pid of pids) { try { kill(pid, "SIGTERM"); } catch { /* gone */ } }
+    const deadline = nowMs() + APP_QUIT_WAIT_MS;
+    while (pids.some(alive) && nowMs() < deadline) await sleep(100);
+    for (const pid of pids.filter(alive)) { try { kill(pid, "SIGKILL"); } catch { /* gone */ } }
+  }
 
   /** Open logs/app-build.log for a child's stdout/stderr, or "ignore". */
   function logFd() {
@@ -379,6 +441,9 @@ export function createWindow({
   }
 
   function launchApp() {
+    // A stale app still running would receive this launch (one instance per
+    // bundle id) and host the page with a silent microphone: wait until it is gone.
+    if (quitting) { quitting.then(() => launchApp()); return; }
     const code = launchCode?.();
     const q = new URLSearchParams({ port: String(port), data: dataDir });
     if (code) q.set("k", code);
@@ -413,7 +478,7 @@ export function createWindow({
     });
   }
 
-  function openNow({ noWait = false, wantOverride } = {}) {
+  function openNow({ noWait = false, wantOverride, force = false } = {}) {
     const want = wantOverride || resolveWant({ env, preference: getPreference() });
     const appWanted = want === "app" || want === "auto";
     const app = appWanted && platform === "darwin" ? buildState() : null;
@@ -437,7 +502,7 @@ export function createWindow({
     routePending = true;
     measureRoute((value) => {
       routePending = false;
-      if (!wantsWindow()) return;
+      if (!force && !wantsWindow()) return;
       const again = chooseWindow({ want, platform, app, chromeExists, route: value || { input: { bluetooth: false } }, appBroken });
       log?.info("window.choose", { want, mode: again.mode, reason: again.reason, route: value ? { input_bt: !!value.input?.bluetooth, output_bt: !!value.output?.bluetooth, headphones: !!value.output?.headphones, native_mic: !!value.native_mic } : null });
       if (again.mode === "app") launchApp();
@@ -457,7 +522,7 @@ export function createWindow({
      * one), plus {pending: true} while it waits for an app install, and
      * {installError} when the app could not be installed.
      */
-    open() { return openNow(); },
+    open({ force = false } = {}) { return openNow({ force }); },
 
     /** Start installing the app if it is missing (daemon start, every /talk); see ensure(). */
     ensureInstalled(opts = {}) {
@@ -511,6 +576,47 @@ export function createWindow({
     },
 
     notify(text) { browser.notify(text); },
+
+    /** Running app processes that predate the installed bundle: Promise<[{pid, startMs}]>. */
+    staleApps() { return staleApps(); },
+
+    /**
+     * Quit app processes that run a replaced bundle (SPEC §6.16 "Stale app"):
+     * their microphone is silent. A launch meanwhile waits. Resolves to the
+     * number quit.
+     */
+    quitStaleApps(reason = "stale") {
+      if (quitting) return quitting.then(() => 0);
+      const run = (async () => {
+        const stale = await staleApps();
+        if (!stale.length) return 0;
+        log?.warn("app.stale_quit", { reason, pids: stale.map((x) => x.pid), started: stale.map((x) => new Date(x.startMs).toISOString()) });
+        await terminate(stale.map((x) => x.pid));
+        return stale.length;
+      })();
+      quitting = run.catch(() => 0).finally(() => { quitting = null; });
+      return quitting;
+    },
+
+    /**
+     * Quit every process of our app (stale or not), for a window swap (SPEC
+     * §6.16 "Silent mic"). `chrome`: the app is not used again by this daemon.
+     * The caller reopens the window. Resolves to the number quit.
+     */
+    async replaceApp({ reason = "replace", chrome: toChrome = false } = {}) {
+      if (watchdog) { timers.clearTimeout(watchdog); watchdog = null; }
+      if (toChrome) {
+        appBroken = true;
+        log?.warn("app.fallback", { reason });
+      }
+      appLaunched = false;
+      const pids = (await appProcesses()).map((x) => x.pid);
+      log?.info("app.quit", { reason, pids });
+      const run = terminate(pids);
+      quitting = run.catch(() => {}).finally(() => { quitting = null; });
+      await quitting;
+      return pids.length;
+    },
 
     /** Self-update (§6.17): the successor learns that the app hosts the page, so kill() still closes it. */
     get appLaunched() { return appLaunched; },
