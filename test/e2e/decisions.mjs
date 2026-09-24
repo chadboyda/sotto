@@ -19,14 +19,14 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { spawn, spawnSync } from "node:child_process";
+import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { startFakeInbox } from "../helpers/fake-inbox.js";
+import { CHROME, spawnSilentChrome } from "../helpers/silent-chrome.js";
 import { resolveApiKey } from "../../daemon/config.js";
 
 const REPO = fileURLToPath(new URL("../..", import.meta.url)).replace(/\/$/, "");
 const PORT = Number(process.env.SOTTO_E2E_DECISIONS_PORT || 47895);
-const CHROME = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
 const BASE = `http://127.0.0.1:${PORT}`;
 const U1 = path.join(REPO, "test", "fixtures", "decide-name.wav"); // "Sotto is a clever name. I think we should go with that one."
 const U2 = path.join(REPO, "test", "fixtures", "ask-later.wav"); // "Oh, and let me know when the auto restart is ready."
@@ -147,12 +147,7 @@ async function main() {
   const s0 = await status();
   check("mirror mode defaults to all", s0.config?.mirror === "all", s0.config?.mirror);
 
-  chrome = spawn(CHROME, [
-    "--headless=new", "--use-fake-ui-for-media-stream", "--use-fake-device-for-media-stream",
-    `--use-file-for-fake-audio-capture=${wav}%noloop`, "--disable-features=AudioServiceSandbox",
-    "--autoplay-policy=no-user-gesture-required", `--user-data-dir=${path.join(TMP, "chrome-e2e")}`,
-    "--no-first-run", "--no-default-browser-check", `${BASE}/?autostart=1#k=${PAGE_SECRET}`,
-  ], { stdio: "ignore" });
+  chrome = spawnSilentChrome({ wav, extra: [`--user-data-dir=${path.join(TMP, "chrome-e2e")}`, `${BASE}/?autostart=1#k=${PAGE_SECRET}`] });
 
   const live = await until(async () => { const s = await status(); return s.state === "live" ? s : null; }, 25000);
   if (!check("state live", !!live)) return;

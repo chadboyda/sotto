@@ -19,14 +19,14 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { spawn, spawnSync } from "node:child_process";
+import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { startFakeInbox } from "../helpers/fake-inbox.js";
+import { CHROME, spawnSilentChrome } from "../helpers/silent-chrome.js";
 import { resolveApiKey } from "../../daemon/config.js";
 
 const REPO = fileURLToPath(new URL("../..", import.meta.url)).replace(/\/$/, "");
 const PORT = Number(process.env.SOTTO_E2E_KEY_PORT || 47897);
-const CHROME = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
 const SECURITY = "/usr/bin/security";
 const BASE = `http://127.0.0.1:${PORT}`;
 const FIXTURE = path.join(REPO, "test", "fixtures", "ask-files.wav");
@@ -139,6 +139,7 @@ function preflight() {
   const missing = [];
   if (process.platform !== "darwin" || !fs.existsSync(SECURITY)) missing.push("macOS Keychain");
   if (!fs.existsSync(CHROME)) missing.push("Google Chrome");
+  if (spawnSync("which", ["ffmpeg"]).status !== 0) missing.push("ffmpeg");
   if (!resolveApiKey({ env: process.env, pluginRoot: REPO })) missing.push("OPENAI_API_KEY");
   // A key in ~/.sotto/.env would outrank the Keychain: this test needs none there.
   if (resolveApiKey({ env: {}, home: os.homedir() })) missing.push("an empty ~/.sotto/.env (it holds a key)");
@@ -175,13 +176,11 @@ async function main() {
   const userDir = path.join(TMP, "chrome-key");
   const wav = path.join(TMP, "mic.wav");
   const ff = spawnSync("ffmpeg", ["-loglevel", "error", "-y", "-i", FIXTURE, "-af", "adelay=30000:all=1,apad=pad_dur=30", "-ar", "48000", "-ac", "1", "-c:a", "pcm_s16le", wav]);
-  const mic = ff.status === 0 ? [`--use-file-for-fake-audio-capture=${wav}%noloop`] : [];
-  chrome = spawn(CHROME, [
-    "--headless=new", "--use-fake-ui-for-media-stream", "--use-fake-device-for-media-stream", ...mic,
-    "--disable-features=AudioServiceSandbox", "--autoplay-policy=no-user-gesture-required",
-    "--remote-debugging-port=0", `--user-data-dir=${userDir}`, "--no-first-run", "--no-default-browser-check",
-    `${BASE}/#k=${PAGE_SECRET}`,
-  ], { stdio: "ignore" });
+  // Tests never use the real mic: no fake-mic file, no Chrome.
+  if (!check("fake-mic wav", ff.status === 0 && fs.existsSync(wav))) return;
+  chrome = spawnSilentChrome({ wav, extra: [
+    "--remote-debugging-port=0", `--user-data-dir=${userDir}`, `${BASE}/#k=${PAGE_SECRET}`,
+  ] });
   page = await connectPage(userDir);
   const card = await until(() => page.eval(`(() => { const f = document.getElementById("key-field"); return f && !f.hidden && !document.getElementById("overlay").hidden ? document.getElementById("overlay-title").textContent : null; })()`), 10000);
   check("page shows the key card", card === "Add your OpenAI API key to start", card);

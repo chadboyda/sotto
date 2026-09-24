@@ -87,6 +87,7 @@ async function runLive(name, env, during) {
     await waitFor(() => d.voice.state === "live", 45_000, "live session");
     out.liveMs = Date.now() - t0;
     assert.ok(readJsonl(appLog).some((e) => e.ev === "bridge" && e.kind === "live" && e.live === true), "session.started seen by the app");
+    assert.ok(readJsonl(appLog).some((e) => e.ev === "bridge" && e.kind === "silenced" && e.ok === true), "test mode mutes the model's voice (never the speakers)");
     assert.match(fs.readFileSync(path.join(D, "logs", "daemon.log"), "utf8"), /"ev":"window.choose"[^\n]*"mode":"app"/);
     if (during) await during({ d, inbox, hook, daemonLog, appLog: () => readJsonl(appLog), out });
     const icons = readJsonl(appLog).filter((e) => e.ev === "icon").map((e) => e.state);

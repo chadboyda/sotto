@@ -184,6 +184,7 @@ describe("desktop app", { skip: SKIP }, () => {
     assert.ok(find("bridge", (e) => e.kind === "sse" && e.open === true), "event stream open (bootstrap accepted the launch code)");
     assert.ok(find("bridge", (e) => e.kind === "status" && e.state === "off"), "status from SSE");
     assert.ok(find("media_permission", (e) => e.granted === true), "mic permission granted for our origin");
+    assert.ok(find("bridge", (e) => e.kind === "silenced" && e.ok === true), "test mode mutes the page's audio (never the speakers)");
     const probe = find("probe")?.result;
     assert.ok(probe, "probe ran");
     assert.equal(probe.error, undefined, probe.error);

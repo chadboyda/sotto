@@ -21,14 +21,14 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { spawn, spawnSync } from "node:child_process";
+import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { startFakeInbox } from "../helpers/fake-inbox.js";
+import { CHROME, spawnSilentChrome } from "../helpers/silent-chrome.js";
 import { resolveApiKey } from "../../daemon/config.js";
 
 const REPO = fileURLToPath(new URL("../..", import.meta.url)).replace(/\/$/, "");
 const PORT = Number(process.env.SOTTO_E2E_PORT || 47899);
-const CHROME = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
 const BASE = `http://127.0.0.1:${PORT}`;
 const FIXTURE = path.join(REPO, "test", "fixtures", "ask-files.wav");
 const SOCK = `/tmp/clv-e2e-${process.pid}.sock`;
@@ -162,19 +162,13 @@ async function main() {
   const NONCE = activeFields[3] || "";
   check("active file carries the per-bind marker nonce", /^[0-9a-f]{12}$/.test(NONCE));
 
-  // 4. Headless Chrome with the fake mic, dedicated throwaway profile.
-  chrome = spawn(CHROME, [
-    "--headless=new", "--use-fake-ui-for-media-stream", "--use-fake-device-for-media-stream",
-    `--use-file-for-fake-audio-capture=${wav}%noloop`,
-    // Chrome 153's sandboxed audio service cannot read the file and the mic is
-    // silent; disabling just that sandbox is narrower than --no-sandbox.
-    "--disable-features=AudioServiceSandbox",
-    "--autoplay-policy=no-user-gesture-required",
-    `--user-data-dir=${path.join(TMP, "chrome-e2e")}`, "--no-first-run", "--no-default-browser-check",
+  // 4. Headless Chrome with the fake mic, muted output, dedicated throwaway profile.
+  chrome = spawnSilentChrome({ wav, extra: [
+    `--user-data-dir=${path.join(TMP, "chrome-e2e")}`,
     // The daemon's own windows carry a one-time launch code; the persistent
     // page secret is accepted in the same place.
     `${BASE}/?autostart=1#k=${PAGE_SECRET}`,
-  ], { stdio: "ignore" });
+  ] });
   const tChrome = Date.now();
 
   // 5. WebRTC session created with gpt-live-1, sideband attached, live.

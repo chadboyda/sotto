@@ -101,6 +101,7 @@ final class PanelController: NSObject, NSWindowDelegate, WKNavigationDelegate, W
             ucc.addScriptMessageHandler(WeakReplyHandler(m), contentWorld: .page, name: "sottoMic")
         }
         ucc.addUserScript(WKUserScript(source: bridgeSource, injectionTime: .atDocumentStart, forMainFrameOnly: true))
+        if Prefs.testMode { ucc.addUserScript(WKUserScript(source: PanelController.testSilenceSource, injectionTime: .atDocumentEnd, forMainFrameOnly: true)) }
         ucc.add(WeakScriptHandler(self), name: "sottoHost")
         cfg.userContentController = ucc
         PanelController.setSPI(cfg.preferences, "_setGetUserMediaRequiresFocus:", false)
@@ -175,6 +176,24 @@ final class PanelController: NSObject, NSWindowDelegate, WKNavigationDelegate, W
     ///  - _setWindowOcclusionDetectionEnabled: NO (on the web view);
     ///  - _setMockCaptureDevicesEnabled: YES, only for the automated launch
     ///    test (--mock-capture), which then needs no microphone permission.
+    /// Test mode only: the page's media elements never reach the speakers. A
+    /// live voice session on the same Mac would hear the test's model voice
+    /// through its microphone and take it as the user speaking. The remote
+    /// voice track still flows (the dial meters an unplayed clone of it), and
+    /// production is unchanged: this script is only added when `--test` or
+    /// SOTTO_APP_TEST=1 is set. Reports {kind:"silenced"} so tests can assert it.
+    static let testSilenceSource = """
+    (() => {
+      const hush = (el) => { el.muted = true; el.volume = 0; };
+      const all = () => Array.from(document.querySelectorAll("audio, video"));
+      all().forEach(hush);
+      document.addEventListener("volumechange", (e) => { if (e.target instanceof HTMLMediaElement && !(e.target.muted && e.target.volume === 0)) hush(e.target); }, true);
+      document.addEventListener("play", (e) => { if (e.target instanceof HTMLMediaElement) hush(e.target); }, true);
+      const els = all();
+      try { window.webkit.messageHandlers.sottoHost.postMessage({ kind: "silenced", ok: els.length > 0 && els.every((el) => el.muted && el.volume === 0) }); } catch {}
+    })();
+    """
+
     static func setSPI(_ obj: NSObject, _ selector: String, _ value: Bool) {
         let sel = NSSelectorFromString(selector)
         guard obj.responds(to: sel), let m = class_getInstanceMethod(type(of: obj), sel) else { return }

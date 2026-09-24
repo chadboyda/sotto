@@ -18,14 +18,14 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { spawn, spawnSync } from "node:child_process";
+import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { startFakeInbox } from "../helpers/fake-inbox.js";
+import { CHROME, spawnSilentChrome } from "../helpers/silent-chrome.js";
 import { resolveApiKey } from "../../daemon/config.js";
 
 const REPO = fileURLToPath(new URL("../..", import.meta.url)).replace(/\/$/, "");
 const PORT = Number(process.env.SOTTO_E2E_WAKE_PORT || 47898);
-const CHROME = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
 const BASE = `http://127.0.0.1:${PORT}`;
 const FIXTURE = path.join(REPO, "test", "fixtures", "ask-files.wav");
 const SOCK = `/tmp/clv-e2e-wake-${process.pid}.sock`;
@@ -136,13 +136,10 @@ async function main() {
   check("config: idle_seconds 3, wake medium", s0.config.idle_seconds === 3 && s0.config.wake_sensitivity === "medium", JSON.stringify(s0.config));
   const PAGE_SECRET = fs.readFileSync(path.join(D, "page.secret"), "utf8").trim();
 
-  chrome = spawn(CHROME, [
-    "--headless=new", "--use-fake-ui-for-media-stream", "--use-fake-device-for-media-stream",
-    `--use-file-for-fake-audio-capture=${wav}%noloop`, "--disable-features=AudioServiceSandbox",
-    "--autoplay-policy=no-user-gesture-required",
-    `--user-data-dir=${path.join(TMP, "chrome-e2e")}`, "--no-first-run", "--no-default-browser-check",
+  chrome = spawnSilentChrome({ wav, extra: [
+    `--user-data-dir=${path.join(TMP, "chrome-e2e")}`,
     `${BASE}/?autostart=1#k=${PAGE_SECRET}`,
-  ], { stdio: "ignore" });
+  ] });
   const tMic = Date.now(); // ~ when the fake file starts playing (the page opens the mic at once)
 
   // 2. Session 1 goes live, then sleeps (nobody talks).
