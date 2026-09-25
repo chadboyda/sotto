@@ -45,7 +45,7 @@ const server = createServer((req, res) => {
     const url = new URL(req.url, "http://x");
     if (req.method === "GET" && url.pathname === "/healthz") {
       res.writeHead(200, { "Content-Type": "application/json" });
-      res.end(JSON.stringify({ ok: true, name: "sotto", version: "0.4.3", pid: process.pid, port, data_dir: dataDir, plugin_root: pluginRoot, state: "off", api_key: !!userConfigKey || existsSync(join(dataDir, "stub-has-key")) }));
+      res.end(JSON.stringify({ ok: true, name: "sotto", version: "0.4.4", pid: process.pid, port, data_dir: dataDir, plugin_root: pluginRoot, state: "off", api_key: !!userConfigKey || existsSync(join(dataDir, "stub-has-key")) }));
       return;
     }
     if (req.method === "POST" && url.pathname === "/control") {

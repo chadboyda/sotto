@@ -32,7 +32,7 @@ test("instructions: 'done' only on a Claude result for that request; otherwise w
   for (const policy of ["quiet", "milestones", "walkthrough"]) {
     const t = renderForPolicy("sotto", policy);
     assert.ok(t.includes("Say that something is done, fixed, finished or ready only when a result from Claude Code for that request says so."));
-    assert.ok(t.includes(`Until then say "Claude's working on it", or "I'll pass that on" and delegate it.`));
+    assert.ok(t.includes(`Until then say, in your own words, that Claude's working on it or that you'll pass it on, and delegate it.`));
     assert.ok(t.includes("If the user asks whether something is done and no result says so, do not guess: delegate the question."));
   }
   // SPEC §8.1 carries the same template text.

@@ -78,14 +78,14 @@ test("an explicit voice after a persona turns the persona's voice off, and that 
   t.after(() => h.cleanup());
   const ws = await h.goLive();
   h.voice.setPersona("pip", "app");
-  assert.equal(h.voice.currentVoice(), "echo");
+  assert.equal(h.voice.currentVoice(), "verse");
   h.voice.setVoice("marin", "app");
   assert.deepEqual(prefsOf(h), { persona: "pip", voice: "marin", persona_voice: false });
   const set = h.log.entries.filter((e) => e.ev === "voice.set").at(-1);
   assert.equal(set.persona_voice, false, "logged");
   // Turning the toggle back on brings the persona's voice back.
   h.voice.setPersonaVoice(true);
-  assert.equal(h.voice.currentVoice(), "echo");
+  assert.equal(h.voice.currentVoice(), "verse");
   assert.ok(ws);
 });
 

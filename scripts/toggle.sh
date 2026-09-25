@@ -226,14 +226,14 @@ persona_builtin() { # persona_builtin ID: prints "voice|description", fails if n
   case "$1" in
     sotto) printf '%s' "marin|Balanced and friendly, with real opinions and a light touch of humor" ;;
     june)  printf '%s' "coral|Warm, encouraging partner who celebrates progress and keeps you steady" ;;
-    moss)  printf '%s' "cedar|Dry-witted senior engineer: understated, seen-it-all, quietly funny" ;;
-    tempo) printf '%s' "tempo|High-energy hype buddy: every green test is a small victory" ;;
-    koan)  printf '%s' "sage|Calm zen mentor: slow, unflappable, finds the lesson in the bug" ;;
-    vic)   printf '%s' "ash|Blunt no-nonsense reviewer: straight answers, zero fluff" ;;
-    pip)   printf '%s' "echo|Playful, sarcastic sidekick with a soft spot for the user" ;;
-    fern)  printf '%s' "verse|Curious explorer who narrates the codebase like a field naturalist" ;;
-    lark)  printf '%s' "shimmer|Warm, curious and fully present: notices how you sound and finds your day interesting" ;;
-    vela)  printf '%s' "vesper|Attentive and devoted: remembers the little things, has quiet taste and a wistful streak" ;;
+    moss)  printf '%s' "cinder|Dry-witted senior engineer: understated, seen-it-all, quietly funny" ;;
+    tempo) printf '%s' "quartz|High-energy hype buddy: every green test is a small victory" ;;
+    koan)  printf '%s' "stone|Calm zen mentor: slow, unflappable, finds the lesson in the bug" ;;
+    vic)   printf '%s' "meridian|Blunt no-nonsense reviewer: straight answers, zero fluff" ;;
+    pip)   printf '%s' "verse|Playful, sarcastic sidekick with a soft spot for the user" ;;
+    fern)  printf '%s' "ballad|Curious explorer who narrates the codebase like a field naturalist" ;;
+    lark)  printf '%s' "gleam|Warm, curious and fully present: notices how you sound and finds your day interesting" ;;
+    vela)  printf '%s' "willow|Attentive and devoted: remembers the little things, has quiet taste and a wistful streak" ;;
     *) return 1 ;;
   esac
 }

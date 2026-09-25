@@ -23,19 +23,32 @@ const write = (file, text) => { fs.mkdirSync(path.dirname(file), { recursive: tr
 
 // ---- built-ins -------------------------------------------------------------------------
 
-test("built-ins: 10 distinct personas, valid ids and voices, bodies within ~250 tokens, default first", () => {
+test("built-ins: 10 distinct personas, valid ids and voices, bodies within ~750 tokens, default first", () => {
   assert.equal(BUILTIN_PERSONAS.length, 10);
   assert.equal(BUILTIN_PERSONAS[0].id, DEFAULT_PERSONA);
   const ids = BUILTIN_PERSONAS.map((p) => p.id);
   assert.equal(new Set(ids).size, ids.length);
-  assert.equal(new Set(BUILTIN_PERSONAS.map((p) => p.voice)).size, ids.length, "each suggests its own voice");
+  // Voices may be shared (each is picked for fit: doc presentation, pitch, then texture; SPEC §4.6).
   for (const p of BUILTIN_PERSONAS) {
     assert.equal(normalizePersonaId(p.id), p.id);
     assert.ok(VOICES.includes(p.voice), `${p.id} voice`);
     assert.ok(p.name && p.description && p.description.length <= 160, `${p.id} description`);
-    assert.ok(estTokens(p.body) <= 300 && p.body.length <= 1200, `${p.id}: ${p.body.length} chars`);
+    // ~750 real tokens (estTokens is a conservative chars/3); within MAX_PERSONA_CHARS like a custom one.
+    assert.ok(estTokens(p.body) <= 1000 && p.body.length <= 3000 && p.body.length <= MAX_PERSONA_CHARS, `${p.id}: ${p.body.length} chars`);
     assert.ok(!/[\u{1F300}-\u{1FAFF}]/u.test(p.body + p.description), "no emoji");
     assert.ok(!/\{\{|\}\}/.test(p.body));
+    // Rich enough to be heard (SPEC §4.6): a voice line, delivery directions,
+    // habits, and sample lines for every kind of moment.
+    assert.match(p.body, /^Voice: /, `${p.id}: opens with its voice direction`);
+    for (const part of ["Who you are:", "Delivery:", "- Pace:", "- Sounds:", "Signature habits:", "- Greeting:", "- Handing work to Claude (said as you delegate it):", "- Good result:", "- A failure:", "- Approval needed:", "- Quick acks:"]) {
+      assert.ok(p.body.includes(part), `${p.id}: ${part}`);
+    }
+    // Sounds are delivery directions, never bracketed tags the voice would read aloud.
+    assert.ok(!/\[[a-z ]+\]|\*[a-z ]+\*/i.test(p.body), `${p.id}: no bracketed stage directions`);
+    // An approval line still says approval and terminal.
+    const approval = p.body.split("\n").find((l) => l.startsWith("- Approval needed:"));
+    assert.match(approval, /approval/i);
+    assert.match(approval, /terminal/i);
   }
 });
 
@@ -121,10 +134,20 @@ test("prompt: the persona block sits after the identity line and before every ru
   const moss = BUILTIN_PERSONAS.find((p) => p.id === "moss");
   const text = renderForPolicy("proj", "milestones", "", moss);
   const at = (s) => { const i = text.indexOf(s); assert.ok(i >= 0, s); return i; };
-  const persona = at("Your persona is Moss. Personality:");
-  assert.ok(at("You are Sotto, the voice of Claude Code") < persona);
+  const persona = at("Personality and Tone: you are Moss.");
+  assert.ok(at("You are Moss, the voice of Claude Code") < persona);
   assert.ok(text.includes(moss.body));
-  assert.ok(text.includes("Every rule below takes precedence over the persona."));
+  assert.ok(text.includes("Every rule below takes precedence over the persona on content"));
+  // The frame keeps the voice in character everywhere, sounds voiced (never
+  // read as words), samples a spirit not a script, and a handoff a real delegation.
+  assert.ok(text.includes("Be Moss in EVERY utterance"));
+  assert.ok(text.includes("never spoken as words"));
+  assert.ok(text.includes("never reuse a sample word for word"));
+  assert.ok(text.includes("only ever state details that came from the conversation or from Claude"));
+  assert.ok(text.includes("delegate the request to the backend first"));
+  assert.ok(text.indexOf("Be Moss in EVERY utterance") < at("Rules for what you say."));
+  // Without a persona the voice is Sotto.
+  assert.ok(render({ project: "proj" }).startsWith("You are Sotto, the voice of Claude Code"));
   // Every relay and safety rule follows the persona.
   for (const rule of [
     "Keep most replies to one to three short sentences.",
@@ -146,9 +169,9 @@ test("prompt: the persona block sits after the identity line and before every ru
 test("prompt: persona text is literal (no placeholder or $& expansion) and the name is sanitised", () => {
   const text = render({ project: "proj", vocabulary: "", persona: { name: "Zed\"\n{{x}}", body: "Say $& and {{project}} and $1." } });
   assert.ok(text.includes("Say $& and {{project}} and $1."), "persona body is inserted verbatim");
-  assert.ok(text.includes("Your persona is Zedx."));
+  assert.ok(text.includes("Personality and Tone: you are Zedx."));
   assert.equal(personaBlock({ name: "x", body: "  " }), "");
-  assert.equal(personaSwitchGreeting("Moss"), "In one short sentence, in your new personality, tell the user you're now Moss. Then stop and listen; the conversation continues from where it left off.");
+  assert.equal(personaSwitchGreeting("Moss"), "In one short sentence, fully in your new personality and delivery, tell the user you're now Moss. Then stop and listen; the conversation continues from where it left off.");
 });
 
 test("prompt: every built-in, and a maximal custom one, keeps the instructions far below 16k tokens", () => {
@@ -166,7 +189,7 @@ test("session create: instructions carry the chosen persona; default without pre
   t.after(() => h.cleanup());
   await h.goLive();
   let ins = h.fetchCalls[0].body.session.instructions;
-  assert.ok(ins.includes("Your persona is Sotto."));
+  assert.ok(ins.includes("Personality and Tone: you are Sotto."));
   assert.equal(h.voice.live.persona, "sotto");
   assert.equal(h.voice.pageStatus().persona, "sotto");
   assert.equal(h.voice.status().config.persona, "sotto");
@@ -176,7 +199,7 @@ test("session create: instructions carry the chosen persona; default without pre
   fs.writeFileSync(path.join(h2.dataDir, "prefs.json"), '{"persona":"vic"}');
   await h2.goLive();
   ins = h2.fetchCalls[0].body.session.instructions;
-  assert.ok(ins.includes("Your persona is Vic."));
+  assert.ok(ins.includes("Personality and Tone: you are Vic."));
   assert.ok(ins.includes(BUILTIN_PERSONAS.find((p) => p.id === "vic").body));
   // One source of truth (prefs.json): the chosen persona's own voice applies while the toggle is on.
   const vicVoice = BUILTIN_PERSONAS.find((p) => p.id === "vic").voice;
@@ -195,9 +218,9 @@ test("control persona: list, set with the persona's voice, already, unknown — 
   let r = h.voice.control({ action: "persona" });
   assert.equal(r.message, personaListMessage("sotto", h.voice.personaList()));
   r = h.voice.control({ action: "persona", persona: "Moss" });
-  assert.equal(r.message, "sotto: persona set to moss with the cedar voice. It applies to the next voice session.");
+  assert.equal(r.message, "sotto: persona set to moss with the cinder voice. It applies to the next voice session.");
   assert.deepEqual(JSON.parse(fs.readFileSync(path.join(h.dataDir, "prefs.json"), "utf8")), { persona: "moss" }, "only the persona is stored; its voice follows");
-  assert.equal(h.voice.currentVoice(), "cedar");
+  assert.equal(h.voice.currentVoice(), "cinder");
   r = h.voice.control({ action: "persona", persona: "moss" });
   assert.equal(r.message, "sotto: persona is already moss.");
   r = h.voice.control({ action: "persona", persona: "robot" });
@@ -222,7 +245,7 @@ test("control persona: finds the unbound caller's project personas through its s
   assert.equal(r.message, "sotto: persona set to captain with the stone voice. It applies to the next voice session.");
   // Bound to that project: its session uses the project persona.
   await h.goLive({ session });
-  assert.ok(h.fetchCalls.at(-1).body.session.instructions.includes("Your persona is Captain. Personality:\nYou are the captain."));
+  assert.ok(h.fetchCalls.at(-1).body.session.instructions.includes("Personality and Tone: you are Captain.\nYou are the captain."));
   assert.deepEqual(h.fetchCalls.at(-1).body.session.audio, { output: { voice: "stone" } });
 });
 
@@ -234,7 +257,7 @@ test("live switch: closes the old session, reconnects, seeds context without rep
   ws.receive({ type: "session.output_transcript.delta", delta: " the parser tests pass", start_ms: 1, end_ms: 2 });
 
   const r = h.voice.control({ action: "persona", persona: "tempo" });
-  assert.equal(r.message, "sotto: persona set to tempo with the tempo voice. Switching the live session now.");
+  assert.equal(r.message, "sotto: persona set to tempo with the quartz voice. Switching the live session now.");
   assert.equal(h.voice.state, "reconnecting");
   assert.equal(ws.sentOfType("session.close").length, 1, "old session closed");
   assert.ok(h.sse.some((m) => m.type === "notice" && m.code === "persona_change" && m.text === "Switching to Tempo."));
@@ -247,9 +270,9 @@ test("live switch: closes the old session, reconnects, seeds context without rep
   const c = await h.voice.createSession({ sdp: "v=0 offer 2", reason: "reconnect" });
   assert.equal(c.status, 201);
   const body = h.fetchCalls[1].body.session;
-  assert.deepEqual(body.audio, { output: { voice: "tempo" } });
-  assert.ok(body.instructions.includes("Your persona is Tempo."));
-  assert.ok(!body.instructions.includes("Your persona is Sotto."));
+  assert.deepEqual(body.audio, { output: { voice: "quartz" } });
+  assert.ok(body.instructions.includes("Personality and Tone: you are Tempo."));
+  assert.ok(!body.instructions.includes("Personality and Tone: you are Sotto."));
   assert.deepEqual(body.input.slice(1).map((m) => [m.role, m.content[0].text]), [
     ["user", "how's the parser"], ["assistant", "the parser tests pass"], ["developer", VOICE_HISTORY_END],
   ]);
@@ -364,7 +387,7 @@ test("GET /api/personas and POST /api/persona: page auth, shapes, toggle, live s
   assert.equal(r.json.current, "sotto");
   assert.equal(r.json.use_voice, true);
   assert.equal(r.json.personas.length, BUILTIN_PERSONAS.length);
-  assert.deepEqual(r.json.personas[2], { id: "moss", name: "Moss", description: BUILTIN_PERSONAS[2].description, voice: "cedar", source: "builtin" });
+  assert.deepEqual(r.json.personas[2], { id: "moss", name: "Moss", description: BUILTIN_PERSONAS[2].description, voice: "cinder", source: "builtin" });
   assert.ok(!JSON.stringify(r.json).includes("Personality"), "no bodies");
 
   assert.equal((await request(h.port, { method: "POST", path: "/api/persona", body: { persona: "moss" } })).status, 403);

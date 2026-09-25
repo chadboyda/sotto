@@ -682,7 +682,7 @@ test("cmd set_persona (docs/NATIVE.md §3.3): the app's picker switches the live
   await h.clock.advance(0);
   const ws2 = await h.startPrimary();
   const start = ws2.sent.find((m) => m.type === "session.start");
-  assert.match(start.session.instructions, /Your persona is Moss/);
+  assert.match(start.session.instructions, /Personality and Tone: you are Moss/);
   assert.equal(start.session.audio.output.voice, "marin");
   assert.equal(h.voice.live.persona, "moss");
   const st = link.of("settings").at(-1);

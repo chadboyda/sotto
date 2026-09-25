@@ -615,7 +615,7 @@ describe("toggle.sh /talk persona (SPEC §4.6)", () => {
     const prefs = () => JSON.parse(readFileSync(join(D, "prefs.json"), "utf8"));
     parseOut(await run(TOGGLE, { env, input: stdinFor("window chrome") }));
     let out = parseOut(await run(TOGGLE, { env, input: stdinFor("persona Moss") }));
-    assert.equal(out.stopReason, "sotto: persona set to moss with the cedar voice. It applies to the next voice session.");
+    assert.equal(out.stopReason, "sotto: persona set to moss with the cinder voice. It applies to the next voice session.");
     assert.deepEqual(prefs(), { window: "chrome", persona: "moss" }, "only the persona is stored; its voice follows from it");
     assert.equal(statSync(join(D, "prefs.json")).mode & 0o777, 0o600);
     out = parseOut(await run(TOGGLE, { env, input: stdinFor("persona moss") }));
@@ -623,8 +623,8 @@ describe("toggle.sh /talk persona (SPEC §4.6)", () => {
     out = parseOut(await run(TOGGLE, { env, input: stdinFor("persona") }));
     assert.equal(out.stopReason, personaListMessage("moss", builtins));
     // A voice or window change keeps the persona; an explicit voice beats the persona's own.
-    out = parseOut(await run(TOGGLE, { env, input: stdinFor("voice cedar") }));
-    assert.equal(out.stopReason, "sotto: voice is already cedar.", "moss's voice is in effect");
+    out = parseOut(await run(TOGGLE, { env, input: stdinFor("voice cinder") }));
+    assert.equal(out.stopReason, "sotto: voice is already cinder.", "moss's voice is in effect");
     parseOut(await run(TOGGLE, { env, input: stdinFor("voice ballad") }));
     assert.deepEqual(prefs(), { voice: "ballad", window: "chrome", persona: "moss", persona_voice: false });
     // The "use the persona's voice" toggle off: only the persona changes.

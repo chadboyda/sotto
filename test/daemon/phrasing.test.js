@@ -47,7 +47,7 @@ test("prompt: the conversational speech rules are in every rendered prompt, befo
     // The persona block says the rules below win; the speech rules are below it.
     assert.ok(t.indexOf("Every rule below takes precedence") < t.indexOf("How you talk:"));
   }
-  assert.ok(personaBlock({ name: "x", body: "y" }).includes("Every rule below takes precedence over the persona."));
+  assert.ok(personaBlock({ name: "x", body: "y" }).includes("Every rule below takes precedence over the persona on content"));
   // SPEC §8.1 carries the template verbatim.
   assert.ok(fs.readFileSync(new URL("../../docs/SPEC.md", import.meta.url), "utf8").includes("```text\n" + TEMPLATE + "\n```"));
 });
@@ -57,7 +57,7 @@ test("results are material to relay, never a quote prefixed \"Claude Code's answ
     const acts = route("voice_result", policy, { text: REPORT, delegationId: "d1" });
     const c = acts.find((a) => a.kind === "commentary");
     assert.doesNotMatch(c.content, /Claude Code's answer/);
-    assert.match(c.content, /^Claude's reply to what the user asked\. Tell the user the gist in your own words, speaking to them as "you", conversationally, in one to three short sentences, in your persona\./);
+    assert.match(c.content, /^Claude's reply to what the user asked\. Tell the user the gist in your own words, speaking to them as "you", conversationally, in one to three short sentences, in your persona's own voice and style\./);
     assert.match(c.content, /Don't read lists, labels, file paths or formatting aloud/);
     const m = materialOf(c.content);
     assert.equal(m, "Fixed the wake bug. Normal speech wakes the voice now. lowered in wake.js from 0.08 to 0.05. 3 new cases in wake.test.js.");
