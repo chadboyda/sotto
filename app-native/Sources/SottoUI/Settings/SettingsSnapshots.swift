@@ -10,6 +10,18 @@ import SottoClient
 public enum SettingsSnapshots {
     public struct Shot { public var name: String; public var size: CGSize; public var view: AnyView }
 
+    /// A sample of the daemon's VOICE_INFO (daemon/config.js) for the canned voice list.
+    static let fixtureVoiceInfo: [String: VoiceInfo] = {
+        func i(_ tone: String, _ p: String, _ a: String) -> VoiceInfo { VoiceInfo(description: "\(tone) · \(p) · \(a)", tone: tone, presentation: p, accent: a) }
+        return [
+            "alloy": i("Smooth, clear, even", "androgynous", "American"), "ash": i("Clear, crisp, steady", "masculine", "American"),
+            "ballad": i("Warm, easygoing, lightly breathy", "masculine", "American"), "cedar": i("Relaxed, textured, casual", "masculine", "American"),
+            "coral": i("Bright, lively, upbeat", "feminine", "American"), "echo": i("Smooth, warm, low", "masculine", "American"),
+            "marin": i("Bright, clear, polished", "feminine", "American"), "sage": i("Bright, clear, measured", "feminine", "American"),
+            "shimmer": i("Crisp, smooth, calm", "androgynous", "American"), "verse": i("Clear, relaxed, a little gravel", "masculine", "American"),
+        ]
+    }()
+
     /// Canned models. Commands answer instantly and never leave the process.
     public static func fixtureModel(status: PageStatus, mic: MicPermission = .granted) -> SettingsModel {
         let state = StateModel()
@@ -18,7 +30,8 @@ public enum SettingsSnapshots {
         state.sendCommand = { _, _ in .success(.object([:])) }
         let m = SettingsModel(state: state)
         m.settings = NativeSettings(
-            voices: .init(voices: ["alloy", "ash", "ballad", "cedar", "coral", "echo", "marin", "sage", "shimmer", "verse"], current: status.voice, live: true),
+            voices: .init(voices: ["alloy", "ash", "ballad", "cedar", "coral", "echo", "marin", "sage", "shimmer", "verse"], current: status.voice, live: true,
+                          info: fixtureVoiceInfo),
             personas: .init(personas: [
                 .init(id: "sotto", name: "Sotto", description: "Balanced and friendly, with real opinions and a light touch of humor.", voice: "marin", source: "builtin"),
                 .init(id: "june", name: "June", description: "Warm, encouraging partner who celebrates progress and keeps you steady.", voice: "coral", source: "builtin"),
@@ -84,6 +97,14 @@ public enum SettingsSnapshots {
 
         return [
             Shot(name: "settings", size: CGSize(width: 480, height: 1260), view: AnyView(SettingsView(model: settings))),
+            // "Hear the voices" opened: the chips with what each voice sounds like, grouped.
+            Shot(name: "settings-voices", size: CGSize(width: 480, height: 470), view: AnyView(
+                Form { Section { VoiceGrid(model: settings) } header: { Text("Hear the voices") } }.formStyle(.grouped))),
+            // The open pickers: every row with its description (DescribedPickerList, as the popover shows it).
+            Shot(name: "voice-picker-open", size: CGSize(width: 330, height: 520), view: AnyView(
+                DescribedPickerList(groups: SettingsText.voicePickerGroups(settings.voices, info: settings.voiceInfo), selection: settings.voice, height: 520) { _ in })),
+            Shot(name: "persona-picker-open", size: CGSize(width: 330, height: 330), view: AnyView(
+                DescribedPickerList(groups: SettingsText.personaPickerGroups(settings.personas), selection: settings.persona, height: 330) { _ in })),
             Shot(name: "onboarding-mic", size: CGSize(width: 420, height: 320), view: AnyView(OnboardingView(model: micAsk))),
             Shot(name: "onboarding-mic-denied", size: CGSize(width: 420, height: 380), view: AnyView(OnboardingView(model: micDenied))),
             Shot(name: "onboarding-key", size: CGSize(width: 420, height: 360), view: AnyView(OnboardingView(model: keyFirst))),

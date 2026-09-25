@@ -133,12 +133,23 @@ public struct PageStatus: Codable, Equatable, Sendable {
     public init(state: String) { self.state = state }
 }
 
+/// One voice's description (docs/NATIVE.md §3.1 `voices.info`): `tone` ("Bright, lively, upbeat"),
+/// `presentation` (feminine | masculine | androgynous), `accent`, and the one-line `description`.
+public struct VoiceInfo: Codable, Equatable, Sendable {
+    public var description: String?; public var tone: String?; public var presentation: String?; public var accent: String?
+    public init(description: String? = nil, tone: String? = nil, presentation: String? = nil, accent: String? = nil) {
+        self.description = description; self.tone = tone; self.presentation = presentation; self.accent = accent
+    }
+}
+
 /// `settings` (docs/NATIVE.md §3.1): voice list, window pref, pickers, data dir.
 public struct Settings: Codable, Equatable, Sendable {
     public struct Voices: Codable, Equatable, Sendable {
         public var voices: [String]?; public var current: String?; public var live: Bool?; public var live_voice: String?
-        public init(voices: [String]? = nil, current: String? = nil, live: Bool? = nil, live_voice: String? = nil) {
-            self.voices = voices; self.current = current; self.live = live; self.live_voice = live_voice
+        /// What each voice sounds like (daemon/config.js VOICE_INFO); absent from older daemons.
+        public var info: [String: VoiceInfo]?
+        public init(voices: [String]? = nil, current: String? = nil, live: Bool? = nil, live_voice: String? = nil, info: [String: VoiceInfo]? = nil) {
+            self.voices = voices; self.current = current; self.live = live; self.live_voice = live_voice; self.info = info
         }
     }
     /// The persona picker (SPEC §4.6, `voice.personas()`): summaries only, never a persona's text.

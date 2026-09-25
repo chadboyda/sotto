@@ -4,7 +4,7 @@
   "today":{"seconds":12.5,"cap_minutes":60},"claude":{"busy":false},"last_error":null,
   "key":{"present":true,"source":"keychain","file":null,"hint":"ab12","label":"macOS Keychain","can_change":true,"can_remove":true,"keychain":true,"setup":false},
   "audio_client":"app"},
- "settings":{"voices":{"voices":["alloy","marin","cedar"],"current":"marin","live":false,"live_voice":null},
+ "settings":{"voices":{"voices":["alloy","marin","cedar"],"current":"marin","live":false,"live_voice":null,"info":{"alloy":{"tone":"Smooth, clear, even","presentation":"androgynous","accent":"American","description":"Smooth, clear, even · androgynous · American"},"marin":{"tone":"Bright, clear, polished","presentation":"feminine","accent":"American","description":"Bright, clear, polished · feminine · American"},"cedar":{"tone":"Relaxed, textured, casual","presentation":"masculine","accent":"American","description":"Relaxed, textured, casual · masculine · American"}}},
   "personas":{"personas":[{"id":"sotto","name":"Sotto","description":"Balanced and friendly, with real opinions and a light touch of humor.","voice":"marin","source":"builtin"},
    {"id":"moss","name":"Moss","description":"Dry-witted senior engineer: understated, seen-it-all, quietly funny.","voice":"cedar","source":"builtin"},
    {"id":"pirate","name":"Pirate","description":"Talks like a ship's captain.","voice":null,"source":"user"}],

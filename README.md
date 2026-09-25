@@ -126,6 +126,34 @@ On macOS the voice window is a small native app, **Sotto** (SwiftUI, native Core
 
 The choice is saved in `prefs.json` in the data directory. It beats the `voice` option in `/config`, which beats the default (`marin`).
 
+**The voices.** The picker groups them by presentation and shows what each sounds like under its name; `sotto voice` lists the same descriptions, so you can ask for "something warmer" or "a British voice" and Claude can pick one. Presentation and accent follow OpenAI's voice table for the twelve voices it lists; the others were judged by ear and pitch, and the two that sit in between are marked androgynous.
+
+| Voice | Sounds | Presentation | Accent |
+| --- | --- | --- | --- |
+| `alloy` | Smooth, clear, even | androgynous | American |
+| `ash` | Clear, crisp, steady | masculine | American |
+| `ballad` | Warm, easygoing, lightly breathy | masculine | American |
+| `beacon` | Clean, crisp, articulate | masculine | Filipino |
+| `bossa` | Soft, breathy, gentle | feminine | Brazilian |
+| `cedar` | Relaxed, textured, casual | masculine | American |
+| `cinder` | Deep, calm, grounded | masculine | Southern US |
+| `coral` | Bright, lively, upbeat | feminine | American |
+| `delta` | Bright, crisp, friendly | feminine | Southern US |
+| `echo` | Smooth, warm, low | masculine | American |
+| `gleam` | Cheerful, smooth, warm | feminine | North American |
+| `marin` | Bright, clear, polished | feminine | American |
+| `meridian` | Deep, clear, easygoing | masculine | North American |
+| `quartz` | Bright, airy, buoyant | feminine | Australian |
+| `ripple` | Smooth, dry, relaxed | masculine | Australian |
+| `sage` | Bright, clear, measured | feminine | American |
+| `shimmer` | Crisp, smooth, calm | lower, androgynous | American |
+| `stone` | Deep, relaxed, grounded | masculine | Irish |
+| `tempo` | Easygoing, smooth, low | masculine | Brazilian |
+| `verse` | Clear, relaxed, a little gravel | masculine | American |
+| `vesper` | Dry, low-key, grounded | masculine | British |
+| `willow` | Bright, crisp, warm | feminine | Irish |
+
+
 **Updates.** When the plugin's code changes on disk (a `git pull` in the plugin directory, or your own edits), the daemon notices within about 30 s and restarts itself at the next quiet moment: while voice sleeps, or after 45 s with nobody talking and nothing pending for Claude. It never restarts mid-sentence or while Claude works on a voice request. The new daemon takes over the same session, the window reconnects (and reloads if the page changed), and if you were mid-conversation the voice says "I just updated myself" and carries on with what you were talking about. Code that does not load is never switched to. `/talk restart` does the same right away (at the next short pause).
 
 To hear a voice before switching, open **Hear the voices** under the picker and click a name. The live session keeps its voice. The first sample of a voice takes about 4 seconds: a tiny separate Live session says "Hi, I'm Cedar. This is how I sound." (a few billed seconds, well under a cent, counted in today's usage). After that the sample is saved in `voice-previews/` in the data directory and plays at once.

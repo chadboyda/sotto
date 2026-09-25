@@ -227,14 +227,18 @@
       <p class="field-help" id="policy-help">Mentions finished work, approvals and errors.</p>
     </div>
     <div class="field" id="persona-field">
-      <label class="field-label" for="persona-select">Persona</label>
-      <select id="persona-select" aria-describedby="persona-help"></select>
+      <label class="field-label" id="persona-label" for="persona-picker-button">Persona</label>
+      <!-- The picker lists each persona's description under its name (panel.paintListPicker);
+           the hidden <select> keeps the value app.js reads and its change event. -->
+      <select id="persona-select" aria-describedby="persona-help" hidden tabindex="-1"></select>
+      <div id="persona-picker"></div>
       <p class="field-help" id="persona-help">How the voice talks: its tone, humor and opinions. What Claude does stays the same.</p>
       <label class="check-row"><input type="checkbox" id="persona-voice" checked> Switch to the persona's own voice</label>
     </div>
     <div class="field">
-      <label class="field-label" for="voice-select">Voice</label>
-      <select id="voice-select"></select>
+      <label class="field-label" id="voice-label" for="voice-picker-button">Voice</label>
+      <select id="voice-select" hidden tabindex="-1"></select>
+      <div id="voice-picker"></div>
       <p class="field-help" id="voice-help">Changing it restarts the voice session; the conversation carries over.</p>
       <details class="voice-samples" id="voice-samples">
         <summary>Hear the voices</summary>

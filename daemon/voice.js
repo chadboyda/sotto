@@ -3,7 +3,7 @@
 // page (SSE) and Chrome window together. All time goes through `clock`.
 import { randomBytes } from "node:crypto";
 import { execFile as execFileCb } from "node:child_process";
-import { normalizeConfig, POLICIES, VOICES, ECHO_GUARD_MODES, openaiBase, wssBase, VERSION, MAX_APPEND_TOKENS, voiceMarker, BG } from "./config.js";
+import { normalizeConfig, POLICIES, VOICES, VOICE_INFO, ECHO_GUARD_MODES, openaiBase, wssBase, VERSION, MAX_APPEND_TOKENS, voiceMarker, BG } from "./config.js";
 import { estTokens, fitTokens, tokenChunks, speakable, summary, clip, awaitingQuestion } from "./speech.js";
 import { makeOwner, ownerStatus, isOwnerAlive } from "./owner.js";
 import { writeActive, removeActive, createPendingContext, removePendingContext, setApprovalPending, readUsage, writeUsage, localDate, StatusFileWriter } from "./statefiles.js";
@@ -1080,13 +1080,18 @@ export class Voice {
     return p ? normalizeVoice(p.voice) : null;
   }
 
-  /** {voices, current, live, switching} for GET /api/voices. */
+  /**
+   * {voices, current, live, live_voice, info} for GET /api/voices, the app's
+   * settings and get_voices. `info` (added in 0.4.x) maps each voice to
+   * {description, tone, presentation, accent} for the pickers.
+   */
   voices() {
     return {
       voices: [...VOICES],
       current: this.currentVoice(),
       live: !!(this.live && this.sideband),
       live_voice: this.live?.voice || null,
+      info: VOICE_INFO,
     };
   }
 

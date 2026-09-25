@@ -312,6 +312,32 @@ export function pickOutputDevice(devices, savedId) {
   return "";
 }
 
+/**
+ * The voice picker's groups (GET /api/voices `info`, daemon/config.js VOICE_INFO):
+ * Feminine, Masculine, Androgynous, in the daemon's order within each; voices with
+ * no info (an older daemon) go last under "Other". Each item:
+ * {id, name, tone, description, label} where `label` is the <option> text
+ * ("Coral · Bright, lively, upbeat · American"; the group names the presentation).
+ */
+export const VOICE_GROUPS = Object.freeze([["feminine", "Feminine"], ["masculine", "Masculine"], ["androgynous", "Androgynous"]]);
+export function voiceGroups(voices) {
+  const list = Array.isArray(voices?.voices) ? voices.voices : [];
+  const info = voices?.info && typeof voices.info === "object" ? voices.info : {};
+  const cap = (s) => s.charAt(0).toUpperCase() + s.slice(1);
+  const item = (id) => {
+    const i = info[id];
+    const name = cap(id);
+    if (!i || typeof i.tone !== "string") return { id, name, tone: "", description: "", label: name };
+    const desc = String(i.description || "");
+    // The option text drops the presentation: the group heading says it.
+    return { id, name, tone: i.tone, description: desc, label: i.accent ? `${name} · ${i.tone} · ${i.accent}` : `${name} · ${i.tone}` };
+  };
+  const groups = VOICE_GROUPS.map(([key, title]) => ({ key, title, items: list.filter((id) => info[id]?.presentation === key).map(item) }));
+  const rest = list.filter((id) => !VOICE_GROUPS.some(([key]) => info[id]?.presentation === key));
+  if (rest.length) groups.push({ key: "other", title: groups.some((g) => g.items.length) ? "Other" : "", items: rest.map(item) });
+  return groups.filter((g) => g.items.length);
+}
+
 /** Display name for a device; labels are empty until mic permission is granted. */
 export function deviceLabel(device, index = 0) {
   const label = String(device?.label || "").trim();

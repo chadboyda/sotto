@@ -172,6 +172,11 @@ final class SettingsModelTests: XCTestCase {
         let (m, _) = make()
         m.ingest(.welcome(protocolVersion: 1, version: "0.3.0", status: nil, raw: raw))
         XCTAssertEqual(m.settings?.voices?.voices, ["alloy", "marin", "cedar"])
+        // What each voice sounds like, grouped as the page groups them (web/lib.js voiceGroups).
+        XCTAssertEqual(m.voiceInfo["marin"]?.description, "Bright, clear, polished · feminine · American")
+        XCTAssertEqual(m.voiceGroups.map(\.title), ["Feminine", "Masculine", "Androgynous"])
+        XCTAssertEqual(m.voiceGroups.map(\.voices), [["marin"], ["cedar"], ["alloy"]])
+        XCTAssertEqual(SettingsText.voicePickerGroups(m.voices, info: m.voiceInfo).flatMap(\.options).first { $0.id == "cedar" }?.desc, "Relaxed, textured, casual · American")
         XCTAssertEqual(m.settings?.window, "auto")
         XCTAssertEqual(m.wakeLevels, ["off", "low", "medium", "high"])
         XCTAssertEqual(m.settings?.data_dir, "/tmp/sotto-data")
@@ -387,6 +392,38 @@ final class SettingsModelTests: XCTestCase {
         let m = SettingsModel(state: state)
         m.setPolicy("quiet")
         XCTAssertEqual(m.error("policy"), "Not connected to sotto.")
+    }
+}
+
+final class VoiceGroupTests: XCTestCase {
+    /// Persona rows: the description (no final period) and the voice; the button line is the voice.
+    func testPersonaPickerGroups() {
+        let g = SettingsText.personaPickerGroups([
+            .init(id: "moss", name: "Moss", description: "Dry wit.", voice: "cedar", source: "builtin"),
+            .init(id: "pirate", name: "Pirate", description: "Arr", voice: nil, source: "user"),
+        ])
+        XCTAssertEqual(g.first?.options, [
+            DescribedOption(id: "moss", name: "Moss", desc: "Dry wit · Cedar voice", short: "Cedar voice"),
+            DescribedOption(id: "pirate", name: SettingsText.personaLabel(.init(id: "pirate", name: "Pirate", source: "user")), desc: "Arr", short: ""),
+        ])
+    }
+
+    /// An older daemon sends no `info`: one untitled group, plain names.
+    func testNoInfoIsOneUntitledGroup() {
+        let g = SettingsText.voiceGroups(["ash", "marin"], info: [:])
+        XCTAssertEqual(g.map(\.title), [""])
+        XCTAssertEqual(g.first?.voices, ["ash", "marin"])
+        XCTAssertEqual(SettingsText.voicePickerGroups(["ash"], info: [:]).first?.options.first, DescribedOption(id: "ash", name: "Ash", desc: ""))
+    }
+
+    /// A voice missing from `info` goes last under "Other"; empty groups are dropped.
+    func testPartialInfo() {
+        let g = SettingsText.voiceGroups(["ash", "newvoice", "marin"],
+                                         info: ["ash": VoiceInfo(tone: "Clear", presentation: "masculine"),
+                                                "marin": VoiceInfo(tone: "Bright", presentation: "feminine")])
+        XCTAssertEqual(g.map(\.title), ["Feminine", "Masculine", "Other"])
+        XCTAssertEqual(g.map(\.voices), [["marin"], ["ash"], ["newvoice"]])
+        XCTAssertEqual(SettingsText.voicePickerGroups(["ash"], info: ["ash": VoiceInfo(tone: "Clear")]).first?.options.first?.desc, "Clear")
     }
 }
 

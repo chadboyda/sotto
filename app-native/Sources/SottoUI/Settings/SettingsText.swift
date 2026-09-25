@@ -181,6 +181,20 @@ public enum SettingsText {
 
     public static func voiceLabel(_ v: String) -> String { v.prefix(1).uppercased() + v.dropFirst() }
     public static let voiceHelp = "Changing it restarts the voice session; the conversation carries over."
+
+    /// A picker group (port of web/lib.js voiceGroups); `title` is "" when no voice has info.
+    public struct VoiceGroup: Equatable, Sendable, Identifiable {
+        public var id: String; public var title: String; public var voices: [String]
+    }
+    static let voiceGroupOrder: [(String, String)] = [("feminine", "Feminine"), ("masculine", "Masculine"), ("androgynous", "Androgynous")]
+
+    /// Feminine, Masculine, Androgynous in the daemon's order; voices without info go last ("Other").
+    public static func voiceGroups(_ voices: [String], info: [String: VoiceInfo]) -> [VoiceGroup] {
+        var out = voiceGroupOrder.map { key, title in VoiceGroup(id: key, title: title, voices: voices.filter { info[$0]?.presentation == key }) }
+        let rest = voices.filter { v in !voiceGroupOrder.contains { $0.0 == info[v]?.presentation } }
+        if !rest.isEmpty { out.append(VoiceGroup(id: "other", title: out.contains { !$0.voices.isEmpty } ? "Other" : "", voices: rest)) }
+        return out.filter { !$0.voices.isEmpty }
+    }
     public static let voiceSamplesHelp = "Plays a short sample; the live session keeps its voice. Each sample is recorded once (a few seconds of voice time) and then kept."
 
     // MARK: Persona (the page's persona picker, web/app.js renderPersonas / choosePersona)
