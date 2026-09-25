@@ -513,7 +513,7 @@ The native branch forked at #4, so the page's #5 (UI polish) and #7 (header pill
 | Voice previews | Hear the voices | Yes | Unchanged |
 | Persona picker (#8) | Drawer picker + voice toggle | Yes (0.3.1) | Unchanged; `test:app` and `e2e:app` switch it through the app |
 
-### Hybrid panel: web and native parity (Filament + Orrery, feat/hybrid-web + feat/hybrid-native)
+### Hybrid panel: web and native parity (Filament + Orrery, v0.4.0; feat/hybrid-web + feat/hybrid-native)
 Both sides implement design/concepts-v2/hybrid (IMPLEMENTATION.md is the spec for motion, tokens and zones). The shared words and rules are pure functions in `web/lib.js`, pinned for the Swift port in `test/fixtures/native/viewtext.json` (new fns: `headline`, `statusWord`, `captionNote`, `claudeHead`, `claudeVerb`, `beadPosition`, `starAlpha`, `milestoneStars`; `ViewTextTests` needs a case for each, or it fails with "no Swift port"). Web screenshots: `design/hybrid-impl/web/`.
 
 | Feature | Rule (both sides) | Web (feat/hybrid-web) | Native (feat/hybrid-native) |
