@@ -1,6 +1,7 @@
 // The floating voice panel (docs/NATIVE.md §5.1): a non-activating,
 // always-on-top NSPanel on every Space hosting SottoUI's PanelView, which
-// collapses to a compact pill with a labelled Expand button. The frame rules
+// collapses to the compact strip (SottoUI.MiniPanelView: peg, string, word, caption,
+// and an Expand button). The frame rules
 // (PanelGeometry) and the defaults keys (PanelFrame, PanelCompact) are the
 // WKWebView app's, so a user's saved position carries over.
 //
@@ -24,57 +25,6 @@ protocol PanelControllerDelegate: AnyObject {
     func panelVisibilityChanged()
 }
 
-/// Compact pill: status glyph, label, mute and a labelled Expand button.
-@MainActor
-final class PillModel: ObservableObject {
-    @Published var icon: VoiceIcon = .off
-    @Published var project = ""
-    @Published var muted = false
-    var onExpand: () -> Void = {}
-    var onMute: () -> Void = {}
-}
-
-struct PillView: View {
-    @ObservedObject var model: PillModel
-
-    var body: some View {
-        HStack(spacing: 8) {
-            Image(systemName: model.icon.symbol)
-                .font(.system(size: 15, weight: .medium))
-                .foregroundStyle(model.icon.tint.map { Color(nsColor: $0) } ?? Color.primary)
-                .accessibilityHidden(true)
-            Text(model.project.isEmpty ? model.icon.label : "\(model.icon.label) · \(model.project)")
-                .font(.system(size: 12, weight: .medium))
-                .lineLimit(1)
-                .truncationMode(.tail)
-                .frame(maxWidth: .infinity, alignment: .leading)
-            Button(action: model.onMute) {
-                Image(systemName: model.muted ? "mic.slash.fill" : "mic.fill")
-            }
-            .buttonStyle(.borderless)
-            .disabled(model.icon == .off)
-            .help(model.muted ? "Unmute (⌥⌘M)" : "Mute (⌥⌘M)")
-            .accessibilityLabel(model.muted ? "Unmute" : "Mute")
-            // The way back to the full panel must be obvious: a labelled
-            // button, not just a glyph (double-click and ⌥⌘T also expand).
-            Button(action: model.onExpand) {
-                Label("Expand", systemImage: "arrow.up.left.and.arrow.down.right")
-                    .font(.system(size: 11, weight: .semibold))
-            }
-            .controlSize(.small)
-            .help("Show the full panel (⌥⌘T)")
-        }
-        .padding(.leading, 12)
-        .padding(.trailing, 10)
-        .frame(width: PanelGeometry.pillSize.width, height: PanelGeometry.pillSize.height)
-        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-        .contentShape(Rectangle())
-        .onTapGesture(count: 2, perform: model.onExpand)
-        .accessibilityElement(children: .contain)
-        .accessibilityLabel("Sotto")
-    }
-}
-
 @MainActor
 final class PanelController: NSObject, NSWindowDelegate {
     private static let frameKey = "PanelFrame"
@@ -83,7 +33,7 @@ final class PanelController: NSObject, NSWindowDelegate {
     static let compactStyle: NSWindow.StyleMask = [.borderless, .nonactivatingPanel]
 
     let panel: VoicePanel
-    let pill = PillModel()
+    private let model: StateModel
     private let log: DebugLog
     private let fullView: NSView
     private let pillView: NSView
@@ -94,14 +44,17 @@ final class PanelController: NSObject, NSWindowDelegate {
 
     init(model: StateModel, log: DebugLog) {
         self.log = log
+        self.model = model
         compact = Prefs.store.bool(forKey: PanelController.compactKey)
         panel = VoicePanel(contentRect: NSRect(origin: .zero, size: PanelGeometry.defaultSize),
                            styleMask: PanelController.expandedStyle, backing: .buffered, defer: true)
         let host = NSHostingView(rootView: PanelView(model: model))
         host.autoresizingMask = [.width, .height]
         fullView = host
-        pillView = NSHostingView(rootView: PillView(model: pill))
+        var expand: () -> Void = {}
+        pillView = NSHostingView(rootView: MiniPanelView(model: model, onExpand: { expand() }))
         super.init()
+        expand = { [weak self] in self?.setCompact(false) }
         panel.title = "Sotto"
         panel.titlebarAppearsTransparent = true
         panel.titleVisibility = .hidden
@@ -114,9 +67,12 @@ final class PanelController: NSObject, NSWindowDelegate {
         panel.minSize = PanelGeometry.minSize
         panel.animationBehavior = .utilityWindow
         panel.delegate = self
-        pill.onExpand = { [weak self] in self?.setCompact(false) }
-        pill.onMute = { [weak self] in self?.delegate?.panelToggleMute() }
         restoreFrame()
+        // The hero's timelines pause while the panel is hidden or fully covered (0 fps).
+        NotificationCenter.default.addObserver(forName: NSWindow.didChangeOcclusionStateNotification, object: panel, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.updateVisibility() }
+        }
+        updateVisibility()
     }
 
     var isVisible: Bool { panel.isVisible }
@@ -126,6 +82,7 @@ final class PanelController: NSObject, NSWindowDelegate {
     func show() {
         if compact { applyCompactFrame() }
         panel.orderFrontRegardless() // never activates: the terminal keeps focus
+        updateVisibility()
         log.log("panel_show", ["compact": compact])
         delegate?.panelVisibilityChanged()
     }
@@ -133,6 +90,7 @@ final class PanelController: NSObject, NSWindowDelegate {
     func hide() {
         guard panel.isVisible else { return }
         panel.orderOut(nil)
+        updateVisibility()
         log.log("panel_hide")
         delegate?.panelVisibilityChanged()
     }
@@ -162,10 +120,14 @@ final class PanelController: NSObject, NSWindowDelegate {
         delegate?.panelVisibilityChanged()
     }
 
-    func updatePill(icon: VoiceIcon, project: String, muted: Bool) {
-        if pill.icon != icon { pill.icon = icon }
-        if pill.project != project { pill.project = project }
-        if pill.muted != muted { pill.muted = muted }
+    /// "Sotto — Approve in the terminal" while Claude waits (VoiceOver and Mission Control read it).
+    func setTitle(_ title: String) {
+        if panel.title != title { panel.title = title }
+    }
+
+    private func updateVisibility() {
+        let v = panel.isVisible && panel.occlusionState.contains(.visible)
+        if model.panelVisible != v { model.panelVisible = v }
     }
 
     private func applyMode() {

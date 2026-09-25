@@ -9,7 +9,7 @@ import AppKit
 enum PanelGeometry {
     static let defaultSize = NSSize(width: 420, height: 640)
     static let minSize = NSSize(width: 360, height: 420)
-    static let pillSize = NSSize(width: 290, height: 44)
+    static let pillSize = NSSize(width: 320, height: 96)
     static let margin: CGFloat = 24
 
     static func expandedFrame(saved: String?, screens: [NSRect], main: NSRect?) -> (frame: NSRect, reason: String) {

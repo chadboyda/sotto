@@ -312,6 +312,17 @@ final class SnapshotTests: XCTestCase {
         if env == nil { try? FileManager.default.removeItem(at: dir) }
     }
 
+    /// The Filament + Orrery set: writes design/hybrid-impl/native/ when SOTTO_UI_HYBRID_DIR
+    /// is set, else a temp dir. Panel, large and the compact strip, light and dark.
+    func testRenderHybridStates() throws {
+        let env = ProcessInfo.processInfo.environment["SOTTO_UI_HYBRID_DIR"]
+        let dir = env.map { URL(fileURLWithPath: $0) } ?? FileManager.default.temporaryDirectory.appendingPathComponent("sotto-ui-hybrid-\(UUID().uuidString)")
+        let files = try UISnapshot.renderHybrid(to: dir)
+        XCTAssertEqual(files.count, (UISnapshot.states.count + UISnapshot.largeNames.count + UISnapshot.miniNames.count) * 2)
+        XCTAssertTrue(files.contains { $0.lastPathComponent == "mini-10-claude-needs-approval--dark.png" })
+        if env == nil { try? FileManager.default.removeItem(at: dir) }
+    }
+
     /// The parity set (docs/NATIVE.md "Parity with the page"): writes design/native/parity/
     /// when SOTTO_UI_PARITY_DIR is set, else a temp dir. Includes very long Claude output,
     /// collapsed and expanded, in light and dark.
