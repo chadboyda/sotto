@@ -131,6 +131,8 @@ const el = {
   echoTestBtn: $("echo-test-btn"),
   echoGuard: $("echo-guard"),
   pauseBtn: $("pause-btn"),
+  pauseBtnIcon: document.querySelector("#pause-btn use"),
+  pauseBtnLabel: document.querySelector("#pause-btn .sr-only"),
   stopBtn: $("stop-btn"),
 };
 
@@ -2235,7 +2237,7 @@ function focusable(node) {
  * letting it fall to <body> (AUDIT #11).
  */
 function restoreFocus(v) {
-  const targets = v.card ? [el.overlayBtn, el.overlayTitle] : [el.muteBtn, el.stageWord];
+  const targets = lib.inlineCard(v) ? [el.pauseBtn, el.stageWord] : v.card ? [el.overlayBtn, el.overlayTitle] : [el.muteBtn, el.stageWord];
   for (const t of targets) {
     if (t === el.overlayTitle || t === el.stageWord ? t.offsetParent !== null : focusable(t)) {
       t.focus({ preventScroll: true });
@@ -2343,6 +2345,7 @@ function renderStage(v = computeView()) {
   b.floor = v.floor;
   const layoutKey = `${v.view}|${v.card?.kind || ""}|${v.dial}`;
   b.card = v.card?.kind || "";
+  b.inline = String(lib.inlineCard(v));
   b.listening = String(!!v.card?.listening);
   // A view change can move the peg (the permission card leaves room for its pointer).
   if (layoutKey !== lastLayoutKey) {
@@ -2369,8 +2372,8 @@ function renderStage(v = computeView()) {
   // Claude's news (lib.headline). It fades in its fixed slot; nothing else moves.
   const h = lib.headline(v, { attention: totality(), question: S.claudeKind === "question", busy: !!S.busy, tool: S.claudeTool, finishedAt: S.finishedAt, now: Date.now() });
   panel.paintHeadline(el.stageWord, h, { fade: live });
-  // The line under the string: a note (muted, connecting) or the latest caption.
-  const note = lib.captionNote(v);
+  // The line under the string: a note (muted, connecting, sleeping, paused) or the latest caption.
+  const note = lib.captionNote(v) || lib.inlineNote(v);
   el.stageSub.hidden = !note || !!v.steps;
   el.stageSub.textContent = note || "";
   el.keyHintVerb.textContent = v.floor === "muted" ? "to unmute" : "to mute";
@@ -2387,7 +2390,7 @@ function renderStage(v = computeView()) {
     );
   }
 
-  const c = v.card;
+  const c = lib.inlineCard(v) ? null : v.card;
   el.overlay.hidden = !c;
   if (!c) return;
   el.overlay.dataset.tone = c.tone;
@@ -2569,6 +2572,7 @@ function personaName() {
   return p?.name || (id ? id[0].toUpperCase() + id.slice(1) : "Sotto");
 }
 
+const PAUSE_TITLE = "Pause the paid voice session; resume any time";
 function renderFooter(v = S.view || computeView()) {
   panel.paintChip(el, { name: personaName(), voice: S.voices?.current || S.status?.voice || "", wave: chipWavePath(currentPersona()) });
   const policy = S.status?.speaking_policy || "milestones";
@@ -2586,8 +2590,17 @@ function renderFooter(v = S.view || computeView()) {
   el.personaVoice.disabled = !S.personas || !S.sseUp;
   const pausable = S.phase === "live" || S.phase === "connecting" || st === "live" || st === "connecting";
   // Card views have their own primary action; Pause would be the wrong one there.
-  el.pauseBtn.hidden = v.view !== "live";
-  el.pauseBtn.disabled = !connected || !pausable || !!S.micPrompt;
+  // Asleep or paused (no card: inlineCard), the same button is play: Wake now / Resume.
+  const play = lib.inlineCard(v);
+  el.pauseBtn.hidden = v.view !== "live" && !play;
+  el.pauseBtn.disabled = play ? !connected : !connected || !pausable || !!S.micPrompt;
+  if (el.pauseBtn.dataset.action !== (play ? "resume" : "pause")) {
+    el.pauseBtn.dataset.action = play ? "resume" : "pause";
+    el.pauseBtnIcon.setAttribute("href", play ? "#i-play" : "#i-pause");
+    const label = play ? (v.card.kind === "sleeping" ? "Wake now" : "Resume") : "Pause";
+    el.pauseBtnLabel.textContent = label;
+    el.pauseBtn.title = play ? `${label} (Space)` : PAUSE_TITLE;
+  }
   // Nothing to end when voice is off or the daemon is out of reach.
   el.stopBtn.hidden = !connected;
   el.stopBtn.disabled = !connected || st === "closing";
@@ -2683,44 +2696,17 @@ function renderBanners() {
     }, BANNER_LEAVE_MS);
     return;
   }
-  const div = document.createElement("div");
-  div.className = "banner";
-  div.dataset.level = b.level;
-  div.dataset.enter = String(b.key !== bannerShown);
+  const enter = b.key !== bannerShown;
   bannerShown = b.key;
-  div.setAttribute("role", b.level === "error" ? "alert" : "status");
-  // Static markup only; the banner text itself goes in through textContent.
-  div.innerHTML = '<svg aria-hidden="true"><use href="#i-alert"/></svg>';
-  const text = document.createElement("span");
-  text.className = "banner-text";
-  text.textContent = b.text;
-  div.append(text);
-  if (banners.length > 1) {
-    const more = document.createElement("span");
-    more.className = "banner-more";
-    more.textContent = `+${banners.length - 1}`;
-    more.title = `${banners.length - 1} more`;
-    div.append(more);
-  }
-  if (b.action) {
-    const act = document.createElement("button");
-    act.type = "button";
-    act.className = "btn banner-action";
-    act.textContent = b.action.label;
-    act.onclick = () => {
+  panel.paintBanner(el.banners, b, {
+    more: banners.length - 1,
+    enter,
+    onAction: () => {
       if (!b.action.keep) dismissBanner(b);
       b.action.run();
-    };
-    div.append(act);
-  }
-  const close = document.createElement("button");
-  close.type = "button";
-  close.className = "icon-btn";
-  close.setAttribute("aria-label", "Dismiss");
-  close.innerHTML = '<svg aria-hidden="true"><use href="#i-close"/></svg>';
-  close.onclick = () => dismissBanner(b);
-  div.append(close);
-  el.banners.replaceChildren(div);
+    },
+    onDismiss: () => dismissBanner(b),
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -2930,6 +2916,7 @@ el.overlayBtn.addEventListener("click", () => {
 });
 
 el.pauseBtn.addEventListener("click", () => {
+  if (el.pauseBtn.dataset.action === "resume") return resume();
   S.pausedReason = "user";
   post("pause");
 });
@@ -3218,7 +3205,8 @@ document.addEventListener("keydown", (e) => {
     { key: e.key, code: e.code, targetTag: tag, repeat: e.repeat, meta: e.metaKey, ctrl: e.ctrlKey, alt: e.altKey },
     {
       live: S.phase === "live",
-      paused: !el.overlay.hidden && !el.overlayBtn.hidden && el.overlayBtn.dataset.action === "resume",
+      // A resumable card (a Try again card, or paused on the caption line: inlineCard).
+      paused: S.view?.card?.action === "resume" && (!!S.view.card.button && (lib.inlineCard(S.view) || !el.overlay.hidden)),
       sleeping: daemonState() === "sleeping" && S.phase === "idle",
     },
   );

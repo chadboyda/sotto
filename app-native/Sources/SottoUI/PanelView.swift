@@ -421,6 +421,9 @@ struct CaptionLine: View {
     let model: StateModel
     let layout: HybridLayout
     var stillAt: Double?
+    /// The compact strip: its word already names the terminal ("Approve in iTerm2"), so the
+    /// line shows what is being approved, the command in mono (IMPLEMENTATION.md §1 Mini).
+    var mini = false
     @Environment(\.colorScheme) private var scheme
     @Environment(\.colorSchemeContrast) private var contrast
     @Environment(\.accessibilityReduceMotion) private var reduce
@@ -428,6 +431,7 @@ struct CaptionLine: View {
     enum Line: Equatable {
         case banner(StateModel.Banner, more: Int)
         case approval(terminal: String?, project: String?)
+        case command(String)
         case muted
         case hint(String)
         case said(role: String, who: String, text: String, id: Int)
@@ -437,6 +441,7 @@ struct CaptionLine: View {
             switch self {
             case .banner(let b, _): return "b:\(b.key):\(b.text)"
             case .approval: return "approval"
+            case .command(let c): return "cmd:\(c)"
             case .muted: return "muted"
             case .hint(let s): return "h:\(s)"
             case .said(_, _, _, let id): return "c:\(id)"
@@ -445,10 +450,14 @@ struct CaptionLine: View {
         }
     }
 
-    static func line(_ m: StateModel, at now: Date) -> Line {
+    static func line(_ m: StateModel, at now: Date, mini: Bool = false) -> Line {
         let v = m.pageView(at: now)
         if let b = m.topBanner { return .banner(b, more: max(0, m.banners.count - (m.banners.first?.key == b.key ? 1 : 0))) }
-        if m.attentionShown(at: now) && v.view == "live" { return .approval(terminal: m.terminalName, project: m.project) }
+        if m.attentionShown(at: now) && v.view == "live" {
+            let parts = ApprovalBody.split(m.claudeCard.command)
+            if mini, let c = parts.command ?? parts.sentence { return .command(c) }
+            return .approval(terminal: m.terminalName, project: m.project)
+        }
         if v.view == "live" && v.floor == "muted" { return .muted }
         if v.floor == "connecting" || v.floor == "reconnecting", let note = ViewText.captionNote(v) { return .hint(note) }
         if let name = m.switchingTo(at: now), v.view == "live" {
@@ -475,7 +484,7 @@ struct CaptionLine: View {
     var body: some View {
         let t = HybridTheme.of(scheme, increaseContrast: contrast == .increased)
         let _ = model.redrawTick
-        let line = Self.line(model, at: stillAt.map { Date(timeIntervalSinceReferenceDate: $0) } ?? Date())
+        let line = Self.line(model, at: stillAt.map { Date(timeIntervalSinceReferenceDate: $0) } ?? Date(), mini: mini)
         ZStack(alignment: .leading) {
             row(t, line).id(line.key).transition(.opacity)
         }
@@ -488,8 +497,9 @@ struct CaptionLine: View {
         switch line {
         case .banner(let b, let more):
             HStack(spacing: 8) {
-                let text = b.key == "cant_hear" ? (model.micName.map { "Using \($0)." } ?? b.text) : b.text
-                Text(text).foregroundStyle(b.level == "error" ? t.err : t.ink2).lineLimit(1).truncationMode(.tail)
+                // The notice's own words ("I can't hear you — using …"): the headline stays
+                // "Listening", so this line is the only place that says why (web parity).
+                Text(b.text).foregroundStyle(b.level == "error" ? t.err : t.ink2).lineLimit(1).truncationMode(.tail)
                     .help(b.text).accessibilityLabel(b.text)
                 Spacer(minLength: 4)
                 if more > 0 { Text("+\(more)").foregroundStyle(t.fg3).help("\(more) more") }
@@ -509,6 +519,10 @@ struct CaptionLine: View {
             (Text("In ") + Text(terminal ?? "the terminal").fontWeight(.semibold).foregroundColor(t.ink)
                 + Text(project.map { " \u{00B7} \($0)" } ?? ""))
                 .foregroundStyle(t.ink2).lineLimit(1)
+        case .command(let c):
+            Text(verbatim: c).font(.system(size: layout.capSize, weight: .medium, design: .monospaced))
+                .foregroundStyle(t.ink).lineLimit(1).truncationMode(.tail).help(c)
+                .accessibilityLabel("Command: \(c)")
         case .muted:
             // lib.captionNote's words, the cause in the muted ink.
             (Text("Sotto can't hear you.").foregroundColor(t.mutedInk) + Text(" Still billing. Press M to listen."))

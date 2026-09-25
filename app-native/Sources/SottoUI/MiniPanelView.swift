@@ -40,7 +40,7 @@ public struct MiniPanelView: View {
             PegButton(model: model)
                 .scaleEffect(0.8)
                 .place(CGRect(x: L.pegX - 32, y: L.y - 32, width: 64, height: 64))
-            CaptionLine(model: model, layout: L, stillAt: stillAt)
+            CaptionLine(model: model, layout: L, stillAt: stillAt, mini: true)
                 .place(CGRect(x: L.textX, y: L.capY, width: L.x1 - L.textX, height: L.capH))
             Button(action: onExpand) {
                 Image(systemName: "arrow.up.left.and.arrow.down.right").font(.system(size: 10, weight: .semibold))
