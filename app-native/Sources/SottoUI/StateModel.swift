@@ -20,9 +20,13 @@ public final class StateModel {
     public var settings: [String: JSONValue]?
     public var linkState: LinkState = .idle { didSet { linkChanged(oldValue) } }
 
-    // MARK: Levels (0..1, levelFromRms scale), written by the app at ~20-60 Hz
-    // The app writes these for every audio frame (50 Hz, zeros included). Only a visible
-    // change (> 0.01, or reaching 0) is published, so a silent panel does not re-render.
+    // MARK: Levels: raw linear RMS (0..1) as the audio layer measures it, written by the app
+    // at ~25-50 Hz. Everything that shows them converts with ViewText.levelFromRms first
+    // (v0.4.0 fed raw RMS straight to the floor tracker and the string, which expect the
+    // meter scale: speech at RMS 0.03 never crossed the 0.36 floor threshold, so the string
+    // stayed flat and the headline never said "Hearing you" or "Speaking").
+    // Only a visible change (> 0.01 on the meter scale, or reaching 0) is published, so a
+    // silent panel does not re-render.
     public var micLevel: Float {
         get { access(keyPath: \.micLevel); return shownMic }
         set { if Self.visible(newValue, shownMic) { withMutation(keyPath: \.micLevel) { shownMic = newValue } }; levelsChanged(mic: newValue) }
@@ -41,7 +45,13 @@ public final class StateModel {
     @ObservationIgnored private var shownWake: Float = 0
     @ObservationIgnored private var rawMic: Float = 0
     @ObservationIgnored private var rawSpeaker: Float = 0
-    nonisolated static func visible(_ new: Float, _ old: Float) -> Bool { abs(new - old) > 0.01 || (new == 0 && old != 0) }
+    nonisolated static func visible(_ new: Float, _ old: Float) -> Bool {
+        abs(ViewText.levelFromRms(Double(new)) - ViewText.levelFromRms(Double(old))) > 0.01 || (new == 0 && old != 0)
+    }
+    /// The mic and speaker on the meter scale (lib.levelFromRms), for the views.
+    public var micMeter: Double { ViewText.levelFromRms(Double(micLevel)) }
+    public var speakerMeter: Double { ViewText.levelFromRms(Double(speakerLevel)) }
+    public var wakeMeter: Double { ViewText.levelFromRms(Double(wakeLevel)) }
 
     // MARK: Captions, Claude, banners
     public private(set) var captions: [ViewText.Caption] = []
@@ -581,6 +591,7 @@ public final class StateModel {
 
     private func addCaption(role: String?, text: String?, start: Double?, end: Double?, session: String?) {
         captionSeq += 1
+        if let text, !text.isEmpty { lastCaptionAt = now() }
         captions = ViewText.reduceCaptions(captions, role: role, text: text, startMs: start, endMs: end, session: session, nextId: captionSeq)
     }
 
@@ -610,16 +621,37 @@ public final class StateModel {
         if level == "error" { banners.insert(b, at: 0) } else { banners.append(b) }
         if banners.count > 5 { banners.removeLast(banners.count - 5) }
         if level == "error" { announce(text, assertive: true) }
+        // Nothing else ever expired these in v0.4.0 (the old view's timeline that called
+        // expireBanners was replaced), so one "Switching to Moss." notice covered the
+        // caption line for the rest of the session. Each timed banner schedules its own expiry.
+        if level != "error" && !sticky && bannerTimers {
+            Task { @MainActor [weak self] in
+                try? await Task.sleep(for: .seconds(Self.bannerSeconds + 0.05))
+                guard let self else { return }
+                self.expireBanners(at: self.now())
+            }
+        }
     }
 
     public func dismissBanner(key: String) { banners.removeAll { $0.key == key } }
 
-    /// Drop non-error, non-sticky banners older than 8 s (called from the view's timeline).
+    /// Timed banners expire on their own (off only for still snapshots with a fixed clock).
+    @ObservationIgnored public var bannerTimers = true
+
+    /// Drop non-error, non-sticky banners older than 8 s (scheduled by showBanner).
     public func expireBanners(at t: Date) {
-        let before = banners.count
-        banners.removeAll { $0.level != "error" && !$0.sticky && t.timeIntervalSince($0.shownAt) >= Self.bannerSeconds }
-        _ = before
+        let stale = banners.contains { $0.level != "error" && !$0.sticky && t.timeIntervalSince($0.shownAt) >= Self.bannerSeconds }
+        if stale { banners.removeAll { $0.level != "error" && !$0.sticky && t.timeIntervalSince($0.shownAt) >= Self.bannerSeconds } }
     }
+
+    /// What was said since a timed banner appeared wins the caption line: a notice is a
+    /// passing note, the conversation is the point. Errors and sticky notices (can't hear)
+    /// keep the line until they clear.
+    public func bannerYieldsToCaption(_ b: Banner) -> Bool {
+        guard b.level != "error", !b.sticky, b.key != "cmd_error", let at = lastCaptionAt else { return false }
+        return at > b.shownAt
+    }
+    public private(set) var lastCaptionAt: Date?
 
     /// The top banner (only one shows; the rest count as "+N").
     public var topBanner: Banner? {
@@ -641,7 +673,7 @@ public final class StateModel {
         if let mic { rawMic = mic }
         if let speaker { rawSpeaker = speaker }
         let t = now().timeIntervalSince1970 * 1000
-        let raw = floorTracker.update(mic: effectiveMuted ? 0 : Double(rawMic), voice: Double(rawSpeaker), now: t)
+        let raw = floorTracker.update(mic: effectiveMuted ? 0 : ViewText.levelFromRms(Double(rawMic)), voice: ViewText.levelFromRms(Double(rawSpeaker)), now: t)
         let shown = wordHold.update(raw, now: t)
         if shown != floor { floor = shown }
     }

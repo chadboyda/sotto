@@ -180,6 +180,25 @@ public enum ViewText {
         return next.count > max ? Array(next.suffix(max)) : next
     }
 
+    /// lib.levelFromRms: a linear RMS (0..1) as a meter level, -60 dBFS..-10 dBFS -> 0..1.
+    /// The audio layer reports raw RMS; the floor tracker, the string and the peg's meter all
+    /// work on this scale (speech sits around 0.5-0.8, a quiet room below 0.15).
+    public static func levelFromRms(_ value: Double) -> Double {
+        guard value > 0, value.isFinite else { return 0 }
+        return Swift.min(1, Swift.max(0, (20 * log10(value) + 60) / 50))
+    }
+    /// The inverse of levelFromRms (previews and tests build levels on the meter scale).
+    public static func rmsFromLevel(_ level: Double) -> Double {
+        guard level > 0 else { return 0 }
+        return pow(10, (level * 50 - 60) / 20)
+    }
+    /// lib.gateLevel: below `floor` reads as silence; above it the level is rescaled to 0..1,
+    /// so a quiet, listening panel draws nothing and speech keeps the full range.
+    public static func gateLevel(_ level: Double, floor: Double = 0.12) -> Double {
+        guard level > floor else { return 0 }
+        return Swift.min(1, (level - floor) / (1 - floor))
+    }
+
     public static func speakerLabel(_ role: String) -> String { role == "assistant" ? "Sotto" : "You" }
 
     public struct Delegation: Equatable, Sendable, Identifiable {

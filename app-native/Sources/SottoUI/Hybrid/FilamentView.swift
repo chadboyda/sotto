@@ -108,9 +108,10 @@ extension FilamentInput {
         i.wokeAt = m.wokeAt?.timeIntervalSinceReferenceDate
         i.persona = m.personaId
         if let sw = m.personaSwitch { i.personaFrom = sw.from; i.personaAt = sw.at.timeIntervalSinceReferenceDate }
-        i.mic = Double(m.micLevel)
-        i.voice = Double(m.speakerLevel)
-        i.wake = Double(m.wakeLevel)
+        // The web page's gates (app.js tick): the string hears speech, not the room.
+        i.mic = ViewText.gateLevel(m.micMeter)
+        i.voice = ViewText.gateLevel(m.speakerMeter, floor: 0.08)
+        i.wake = ViewText.gateLevel(m.wakeMeter)
         i.stars = m.milestones.map { .init(s: $0.s, born: $0.born.timeIntervalSinceReferenceDate) }
         i.reduced = reduced
         return i

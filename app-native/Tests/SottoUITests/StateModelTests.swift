@@ -155,6 +155,46 @@ final class StateModelTests: XCTestCase {
         XCTAssertEqual(m.banners.map(\.key), ["x"])
     }
 
+    /// v0.4.0: a persona switch's info notice took the caption line and never left.
+    func testNoticeGivesTheCaptionLineBackAndExpires() {
+        let clock = Clock()
+        let m = model(clock)
+        m.bannerTimers = false
+        m.linkState = .connected
+        m.apply(object: status("live", muted: false))
+        m.apply(object: ["type": .string("caption"), "role": .string("user"), "text": .string("What's failing?"), "start_ms": .number(0), "end_ms": .number(900), "session": .string("s1")])
+        clock.t += 1
+        m.apply(object: ["type": .string("notice"), "level": .string("info"), "code": .string("persona_change"), "text": .string("Switching to Moss.")])
+        guard case .banner(let b, _) = CaptionLine.line(m, at: clock.t) else { return XCTFail("the notice shows first") }
+        XCTAssertEqual(b.text, "Switching to Moss.")
+        clock.t += 1
+        m.apply(object: ["type": .string("caption"), "role": .string("assistant"), "text": .string("I'm Moss now."), "start_ms": .number(0), "end_ms": .number(500), "session": .string("s2")])
+        guard case .said(let role, _, let text, _) = CaptionLine.line(m, at: clock.t) else { return XCTFail("new words take the line back") }
+        XCTAssertEqual(role, "assistant"); XCTAssertEqual(text, "I'm Moss now.")
+        clock.t += StateModel.bannerSeconds
+        m.expireBanners(at: clock.t)
+        XCTAssertTrue(m.banners.isEmpty, "timed notices expire")
+        // Errors and the sticky can't-hear notice keep the line.
+        m.apply(object: ["type": .string("notice"), "level": .string("warn"), "code": .string("cant_hear"), "text": .string("I can't hear you.")])
+        clock.t += 1
+        m.apply(object: ["type": .string("caption"), "role": .string("assistant"), "text": .string(" Hello?"), "start_ms": .number(600), "end_ms": .number(900), "session": .string("s2")])
+        guard case .banner = CaptionLine.line(m, at: clock.t) else { return XCTFail("can't hear stays") }
+    }
+
+    /// The audio layer reports raw RMS; ordinary speech (-30 dBFS, RMS 0.03) must take the floor.
+    func testRawSpeechLevelsTakeTheFloor() {
+        let clock = Clock()
+        let m = model(clock)
+        m.linkState = .connected
+        m.apply(object: status("live", muted: false))
+        for _ in 0..<100 { clock.t += 0.02; m.micLevel = 0.03 }
+        XCTAssertEqual(m.floor, "you")
+        XCTAssertGreaterThan(FilamentInput.from(m, reduced: false).mic, 0.3, "the string sees speech on the meter scale")
+        for _ in 0..<150 { clock.t += 0.02; m.micLevel = 0.0005; m.speakerLevel = 0.05 }
+        XCTAssertEqual(m.floor, "voice")
+        XCTAssertGreaterThan(FilamentInput.from(m, reduced: false).voice, 0.3)
+    }
+
     func testLiveClosedAndErrorBanners() {
         let m = model()
         m.linkState = .connected

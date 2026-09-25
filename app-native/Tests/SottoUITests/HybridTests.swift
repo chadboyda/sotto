@@ -59,13 +59,37 @@ final class FilamentEngineTests: XCTestCase {
     func live(_ f: (inout FilamentInput) -> Void = { _ in }) -> FilamentInput { var i = FilamentInput(); f(&i); return i }
 
     func testIdleIsZeroFPS() {
+        // Anything but live listening is a still image: off, paused, muted.
+        let e = FilamentEngine()
+        for i in [live { $0.mode = .off }, live { $0.mode = .paused }, live { $0.muted = true }, live { $0.cantHear = true }] {
+            e.advance(i, to: 1000, sc: 1)
+            XCTAssertEqual(e.rate(i, now: 1002), .paused, "\(i.mode) muted=\(i.muted) is a still image")
+        }
+        // Stars and a finished Claude long ago change nothing.
+        let j = live { $0.mode = .off; $0.stars = [.init(s: 0.3, born: 100)]; $0.finishedAt = 10 }
+        XCTAssertEqual(e.rate(j, now: 1000), .paused)
+    }
+
+    func testListeningBreathesCalmly() {
+        // v0.4.1: live and listening, the string breathes at 12 fps (alive, not a rule).
         let e = FilamentEngine()
         let i = live()
         e.advance(i, to: 1000, sc: 1)
-        XCTAssertEqual(e.rate(i, now: 1000), .paused, "an idle panel is a still image")
-        // Stars and a finished Claude long ago change nothing.
-        let j = live { $0.stars = [.init(s: 0.3, born: 100)]; $0.finishedAt = 10 }
-        XCTAssertEqual(e.rate(j, now: 1000), .paused)
+        XCTAssertEqual(e.rate(i, now: 1000), .breathe)
+        XCTAssertEqual(FilamentEngine.Rate.breathe.interval!, 1.0 / 12, accuracy: 1e-9)
+        XCTAssertTrue(FilamentEngine.breathing(i, now: 1000))
+        XCTAssertFalse(FilamentEngine.breathing(live { $0.reduced = true }, now: 1000), "Reduce Motion: still")
+        XCTAssertFalse(FilamentEngine.breathing(live { $0.attention = true; $0.attentionAt = 990 }, now: 1000), "the approval holds its own stillness")
+    }
+
+    func testLevelsAreOnTheMeterScale() {
+        // The audio layer reports raw RMS; the string and the floor need lib.levelFromRms.
+        XCTAssertEqual(ViewText.levelFromRms(0.001), 0, accuracy: 1e-9)       // -60 dBFS
+        XCTAssertEqual(ViewText.levelFromRms(0.0316), 0.6, accuracy: 0.001)   // -30 dBFS: ordinary speech
+        XCTAssertEqual(ViewText.levelFromRms(1), 1)
+        XCTAssertEqual(ViewText.levelFromRms(ViewText.rmsFromLevel(0.62)), 0.62, accuracy: 1e-9)
+        XCTAssertEqual(ViewText.gateLevel(0.1), 0)
+        XCTAssertEqual(ViewText.gateLevel(0.56), 0.5, accuracy: 1e-9)
     }
 
     func testWorkingSilentIsTenFPS() {
@@ -85,8 +109,8 @@ final class FilamentEngineTests: XCTestCase {
         XCTAssertFalse(e.waveAtRest, "your voice plucked the string")
         let quiet = live()
         let stop = t
-        while t < stop + 12 && e.rate(quiet, now: t) != .paused { t += 1.0 / 60; e.advance(quiet, to: t, sc: 1) }
-        XCTAssertEqual(e.rate(quiet, now: t), .paused, "the string comes to rest after speech")
+        while t < stop + 12 && e.rate(quiet, now: t) != .breathe { t += 1.0 / 60; e.advance(quiet, to: t, sc: 1) }
+        XCTAssertEqual(e.rate(quiet, now: t), .breathe, "the string comes back to its resting breath after speech")
         XCTAssertLessThan(t - stop, 10, "and quickly: \(t - stop) s")
     }
 

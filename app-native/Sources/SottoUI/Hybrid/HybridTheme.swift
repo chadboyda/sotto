@@ -21,6 +21,8 @@ public struct HybridTheme: Sendable {
     public var muted, mutedInk, err, focus: Color
     /// Bloom strength (1 in dark, 0.35 on a white page).
     public var glow: Double
+    /// The live string's opacity at rest, where it runs teal (you) to periwinkle (voice).
+    public var restAlpha: Double
     public var increaseContrast = false
 
     /// The corona's inner ring and the roots of its streamers.
@@ -41,6 +43,7 @@ public struct HybridTheme: Sendable {
             t.hair = t.ink.opacity(0.24)
             t.hair2 = t.ink.opacity(0.4)
             t.cap = t.ink.opacity(0.12)
+            t.restAlpha = 1
         }
         return t
     }
@@ -52,17 +55,21 @@ public struct HybridTheme: Sendable {
         string: Color(.sRGB, red: 236 / 255, green: 242 / 255, blue: 1, opacity: 0.55), bead: .white, star: .hex(0xE6EDF7), night: .hex(0x03050A),
         you: .hex(0x5EEAD4), youInk: .hex(0x5EEAD4), voice: .hex(0xA5B4FC), voiceInk: .hex(0xA5B4FC),
         need: .hex(0xFFB547), needInk: .hex(0xFFC56E), muted: .hex(0xFF6FAE), mutedInk: .hex(0xFF8FC0), err: .hex(0xFF453A), focus: .hex(0x0A84FF),
-        glow: 1)
+        glow: 1, restAlpha: 0.8)
 
+    // v0.4.1: a crisp white page. #FBFCFD with neutral-grey hairlines and a 5% ink capsule
+    // read as grey-beige ("greige") on a real display; the ground is now pure white and the
+    // quiet tokens lean slightly cool (slate, not grey).
     public static let lightTheme = HybridTheme(
-        dark: false, ground: .hex(0xFBFCFD), lift: .hex(0xFBFCFD),
-        ink: .hex(0x0C0D12), ink2: .hex(0x0C0D12).opacity(0.64), ink3: .hex(0x0C0D12).opacity(0.5), fg3: .hex(0x686B73),
-        hair: .hex(0x0C0D12).opacity(0.08), hair2: .hex(0x0C0D12).opacity(0.16), cap: .hex(0x0C0D12).opacity(0.05),
-        string: .hex(0x0C0D12).opacity(0.72), bead: .hex(0x0C0D12), star: .hex(0x1A2A44), night: .hex(0x070B16),
+        dark: false, ground: .hex(0xFFFFFF), lift: .hex(0xFFFFFF),
+        ink: .hex(0x0B0D14), ink2: .hex(0x0B0D14).opacity(0.66), ink3: .hex(0x0B0D14).opacity(0.5), fg3: .hex(0x5F6778),
+        hair: .hex(0x23345A).opacity(0.09), hair2: .hex(0x23345A).opacity(0.18), cap: .hex(0x2B4170).opacity(0.055),
+        string: .hex(0x0B0D14).opacity(0.62), bead: .hex(0x0B0D14), star: .hex(0x1A2A44), night: .hex(0x070B16),
         // Gold line #C4800E is 3.2:1 on white (a component boundary); gold text #A55200 is 5.4:1.
-        you: .hex(0x12B3A0), youInk: .hex(0x0A7568), voice: .hex(0x5B63E6), voiceInk: .hex(0x4A51D6),
+        // The live string's teal and periwinkle are line colours (3:1 or better with the glow).
+        you: .hex(0x0FA896), youInk: .hex(0x0A7568), voice: .hex(0x5B63E6), voiceInk: .hex(0x4A51D6),
         need: .hex(0xC4800E), needInk: .hex(0xA55200), muted: .hex(0xE0357A), mutedInk: .hex(0xB81A5C), err: .hex(0xD70015), focus: .hex(0x0064E1),
-        glow: 0.35)
+        glow: 0.7, restAlpha: 0.95)
 
     /// The serif for Claude's words (New York).
     public static func serif(_ size: CGFloat, weight: Font.Weight = .regular) -> Font { .system(size: size, weight: weight, design: .serif) }
