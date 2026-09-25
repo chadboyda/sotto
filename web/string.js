@@ -1058,6 +1058,7 @@ export function createString(canvas, opts = {}) {
     if (typeof ResizeObserver === "function") new ResizeObserver(refresh).observe(canvas);
     window.addEventListener("resize", refresh);
     window.matchMedia?.("(prefers-color-scheme: dark)")?.addEventListener?.("change", readColors);
+    window.matchMedia?.("(prefers-contrast: more)")?.addEventListener?.("change", readColors);
     // Settings > Appearance flips <html data-theme> without an OS change.
     if (typeof MutationObserver === "function") new MutationObserver(readColors).observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme"] });
     const motion = window.matchMedia?.("(prefers-reduced-motion: reduce)");

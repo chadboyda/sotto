@@ -3,6 +3,7 @@
 // idle, 10 fps while only the bead moves), the eclipse freeze, the tides cap, and the
 // model's event clocks and milestone stars.
 import XCTest
+import SwiftUI
 @testable import SottoUI
 @testable import SottoClient
 
@@ -244,5 +245,47 @@ final class HybridModelTests: XCTestCase {
         m.apply(object: ["type": .string("notice_clear"), "code": .string("cant_hear")])
         m.apply(object: UISnapshot.status("live", muted: true))
         XCTAssertEqual(CaptionLine.line(m, at: t), .muted)
+    }
+}
+
+/// Text contrast (WCAG 2.x, composited over `ground` in sRGB as the page's CSS is): text
+/// tokens >= 4.5:1 in both themes; `ink3` is for glyphs and lines (>= 3:1); Increase
+/// Contrast raises every quiet token.
+final class HybridContrastTests: XCTestCase {
+    private func srgb(_ c: Color) -> (r: Double, g: Double, b: Double, a: Double) {
+        let r = c.resolve(in: EnvironmentValues())
+        // The tokens are extended-sRGB colours; Resolved reports their encoded components.
+        return (Double(r.red), Double(r.green), Double(r.blue), Double(r.opacity))
+    }
+    private func luminance(_ r: Double, _ g: Double, _ b: Double) -> Double {
+        func lin(_ x: Double) -> Double { x <= 0.04045 ? x / 12.92 : pow((x + 0.055) / 1.055, 2.4) }
+        return 0.2126 * lin(r) + 0.7152 * lin(g) + 0.0722 * lin(b)
+    }
+    private func ratio(_ fg: Color, on bg: Color) -> Double {
+        let f = srgb(fg), b = srgb(bg)
+        let r = f.r * f.a + b.r * (1 - f.a), g = f.g * f.a + b.g * (1 - f.a), bl = f.b * f.a + b.b * (1 - f.a)
+        let l1 = luminance(r, g, bl), l2 = luminance(b.r, b.g, b.b)
+        return (max(l1, l2) + 0.05) / (min(l1, l2) + 0.05)
+    }
+
+    func testTextTokensMeetAA() {
+        for scheme in [ColorScheme.light, .dark] {
+            for more in [false, true] {
+                let t = HybridTheme.of(scheme, increaseContrast: more)
+                for (name, c) in [("ink", t.ink), ("ink2", t.ink2), ("fg3", t.fg3), ("needInk", t.needInk), ("mutedInk", t.mutedInk), ("youInk", t.youInk), ("voiceInk", t.voiceInk)] {
+                    XCTAssertGreaterThanOrEqual(ratio(c, on: t.ground), 4.5, "\(name) in \(scheme) (increase contrast \(more))")
+                }
+                XCTAssertGreaterThanOrEqual(ratio(t.ink3, on: t.ground), 3, "ink3 (glyphs) in \(scheme)")
+            }
+        }
+    }
+
+    func testIncreaseContrastRaisesQuietTokens() {
+        for scheme in [ColorScheme.light, .dark] {
+            let a = HybridTheme.of(scheme), b = HybridTheme.of(scheme, increaseContrast: true)
+            for (name, x, y) in [("ink2", a.ink2, b.ink2), ("ink3", a.ink3, b.ink3), ("fg3", a.fg3, b.fg3), ("hair", a.hair, b.hair), ("hair2", a.hair2, b.hair2), ("string", a.string, b.string)] {
+                XCTAssertGreaterThan(ratio(y, on: b.ground), ratio(x, on: a.ground), "\(name) in \(scheme)")
+            }
+        }
     }
 }

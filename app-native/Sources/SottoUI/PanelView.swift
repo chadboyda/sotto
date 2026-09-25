@@ -33,8 +33,8 @@ public struct PanelView: View {
             }
             .frame(width: geo.size.width, height: geo.size.height, alignment: .topLeading)
         }
-        .background(HybridTheme.of(scheme).ground)
-        .foregroundStyle(HybridTheme.of(scheme).ink)
+        .background(HybridTheme.of(scheme, increaseContrast: contrast == .increased).ground)
+        .foregroundStyle(HybridTheme.of(scheme, increaseContrast: contrast == .increased).ink)
         .coordinateSpace(name: PanelFrames.space)
         // The root is focusable only to receive M / Space, and hides its own ring.
         // focusEffectDisabled propagates through the environment, so re-enable it for
@@ -104,10 +104,11 @@ extension View {
 struct PanelBackground: View {
     let layout: HybridLayout
     @Environment(\.colorScheme) private var scheme
+    @Environment(\.colorSchemeContrast) private var contrast
     @Environment(\.accessibilityReduceTransparency) private var flat
 
     var body: some View {
-        let t = HybridTheme.of(scheme)
+        let t = HybridTheme.of(scheme, increaseContrast: contrast == .increased)
         Canvas { g, size in
             g.fill(Path(CGRect(origin: .zero, size: size)), with: .color(t.ground))
             guard t.dark, !flat else { return }
@@ -191,6 +192,7 @@ struct HeaderContent: View {
     /// Settings moved to the footer (the hybrid header is status + usage only); kept for callers.
     var openSettings: (() -> Void)?
     @Environment(\.colorScheme) private var scheme
+    @Environment(\.colorSchemeContrast) private var contrast
     @Environment(\.sottoCapsuleDim) private var dim
     @Environment(\.accessibilityReduceMotion) private var reduce
 
@@ -209,7 +211,7 @@ struct HeaderContent: View {
     static let statusSlot: CGFloat = 72
 
     var body: some View {
-        let t = HybridTheme.of(scheme)
+        let t = HybridTheme.of(scheme, increaseContrast: contrast == .increased)
         ViewThatFits(in: .horizontal) {
             ForEach(Array(Self.candidates.enumerated()), id: \.offset) { _, c in row(t, c) }
         }
@@ -282,6 +284,7 @@ struct UsagePill: View {
     let kind: Kind
     var help: String = ""
     @Environment(\.colorScheme) private var scheme
+    @Environment(\.colorSchemeContrast) private var contrast
 
     /// Session: timer; Today: calendar; Cost: none ("$" names it).
     var symbol: String? {
@@ -312,7 +315,7 @@ struct UsagePill: View {
     }
 
     var body: some View {
-        let t = HybridTheme.of(scheme)
+        let t = HybridTheme.of(scheme, increaseContrast: contrast == .increased)
         HStack(alignment: .center, spacing: 6) {
             if let symbol {
                 Image(systemName: symbol).font(.system(size: 10.5, weight: .regular)).foregroundStyle(t.ink3)
@@ -343,6 +346,7 @@ struct HeadlineView: View {
     var stillAt: Double?
     var mini = false
     @Environment(\.colorScheme) private var scheme
+    @Environment(\.colorSchemeContrast) private var contrast
     @Environment(\.accessibilityReduceMotion) private var reduce
 
     var body: some View {
@@ -362,7 +366,7 @@ struct HeadlineView: View {
     }
 
     private func word(_ now: Date) -> some View {
-        let t = HybridTheme.of(scheme)
+        let t = HybridTheme.of(scheme, increaseContrast: contrast == .increased)
         let h = model.headline(at: now)
         // The strip has no room for a second line naming the terminal, so the word does.
         let word = mini && h.word == ViewText.approvalWord ? "Approve in \(model.terminalName ?? "the terminal")" : h.word
@@ -421,6 +425,7 @@ struct CaptionLine: View {
     /// line shows what is being approved, the command in mono (IMPLEMENTATION.md §1 Mini).
     var mini = false
     @Environment(\.colorScheme) private var scheme
+    @Environment(\.colorSchemeContrast) private var contrast
     @Environment(\.accessibilityReduceMotion) private var reduce
 
     enum Line: Equatable {
@@ -477,7 +482,7 @@ struct CaptionLine: View {
     }
 
     var body: some View {
-        let t = HybridTheme.of(scheme)
+        let t = HybridTheme.of(scheme, increaseContrast: contrast == .increased)
         let _ = model.redrawTick
         let line = Self.line(model, at: stillAt.map { Date(timeIntervalSinceReferenceDate: $0) } ?? Date(), mini: mini)
         ZStack(alignment: .leading) {
@@ -497,7 +502,7 @@ struct CaptionLine: View {
                 Text(b.text).foregroundStyle(b.level == "error" ? t.err : t.ink2).lineLimit(1).truncationMode(.tail)
                     .help(b.text).accessibilityLabel(b.text)
                 Spacer(minLength: 4)
-                if more > 0 { Text("+\(more)").foregroundStyle(t.ink3).help("\(more) more") }
+                if more > 0 { Text("+\(more)").foregroundStyle(t.fg3).help("\(more) more") }
                 if let a = b.action {
                     Button(Self.label(a)) { model.perform(a, banner: b.key) }.buttonStyle(QuietCapsuleStyle(height: 28))
                 }
@@ -549,9 +554,10 @@ struct QuietCapsuleStyle: ButtonStyle {
     var tone: Color?
     var lineWidth: CGFloat = 1
     @Environment(\.colorScheme) private var scheme
+    @Environment(\.colorSchemeContrast) private var contrast
     @Environment(\.isEnabled) private var enabled
     func makeBody(configuration: Configuration) -> some View {
-        let t = HybridTheme.of(scheme)
+        let t = HybridTheme.of(scheme, increaseContrast: contrast == .increased)
         let c = tone ?? t.ink
         return configuration.label
             .font(.system(size: height >= 40 ? 14 : 12, weight: height >= 40 ? .semibold : .medium))
@@ -573,9 +579,10 @@ struct FooterView: View {
     let view: ViewText.PageView
     var stillAt: Double?
     @Environment(\.colorScheme) private var scheme
+    @Environment(\.colorSchemeContrast) private var contrast
 
     var body: some View {
-        let t = HybridTheme.of(scheme)
+        let t = HybridTheme.of(scheme, increaseContrast: contrast == .increased)
         let st = model.status?.state ?? "off"
         let linked = model.phase != "boot" && model.phase != "lost"
         let dim = model.attention && view.view == "live"
@@ -609,10 +616,11 @@ struct IconButton: View {
     let action: () -> Void
     @State private var hover = false
     @Environment(\.colorScheme) private var scheme
+    @Environment(\.colorSchemeContrast) private var contrast
     @Environment(\.isEnabled) private var enabled
 
     var body: some View {
-        let t = HybridTheme.of(scheme)
+        let t = HybridTheme.of(scheme, increaseContrast: contrast == .increased)
         Button(action: action) {
             Image(systemName: symbol).font(.system(size: 15, weight: .regular))
                 .frame(width: 40, height: 40)
@@ -640,9 +648,10 @@ struct PersonaChip: View {
     let model: StateModel
     @State private var hover = false
     @Environment(\.colorScheme) private var scheme
+    @Environment(\.colorSchemeContrast) private var contrast
 
     var body: some View {
-        let t = HybridTheme.of(scheme)
+        let t = HybridTheme.of(scheme, increaseContrast: contrast == .increased)
         let id = model.personaId
         Button { model.openSettings?() } label: {
             HStack(spacing: 9) {

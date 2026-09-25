@@ -85,3 +85,24 @@ test("no flash: a stored choice is on <html> before <body> exists; System follow
   assert.equal(await bg(), LIGHT);
   assert.equal(await page.eval(`getComputedStyle(document.documentElement).colorScheme`), "light");
 });
+
+test("Increase contrast (prefers-contrast: more) raises the quiet tokens in every theme", { skip: fs.existsSync(CHROME) ? false : "Chrome not installed", timeout: 60000 }, async (t) => {
+  const page = await openPage(t);
+  const tok = (k) => page.eval(`getComputedStyle(document.documentElement).getPropertyValue("--${k}").trim()`);
+  const alpha = (v) => Number((v.match(/rgba\([^)]*,\s*([\d.]+)\)/) || [])[1]);
+  const set = async (os, contrast, attr) => {
+    await page.send("Emulation.setEmulatedMedia", { features: [{ name: "prefers-color-scheme", value: os }, { name: "prefers-contrast", value: contrast }] });
+    await page.eval(attr ? `document.documentElement.setAttribute("data-theme", ${JSON.stringify(attr)}), true` : `document.documentElement.removeAttribute("data-theme"), true`);
+    await page.frames();
+  };
+  for (const [os, attr, darkInk] of [["light", null, false], ["dark", null, true], ["light", "dark", true], ["dark", "light", false]]) {
+    await set(os, "no-preference", attr);
+    const base = { ink3: alpha(await tok("ink3")), hair: alpha(await tok("hair")), ink: await tok("ink") };
+    await until(async () => alpha(await tok("ink3")) === base.ink3, 2000);
+    await set(os, "more", attr);
+    assert.ok(await until(async () => alpha(await tok("ink3")) > base.ink3, 5000), `OS ${os}, data-theme ${attr}: --ink3 rises (${await tok("ink3")})`);
+    assert.ok(alpha(await tok("hair")) > base.hair, `OS ${os}, data-theme ${attr}: --hair rises`);
+    assert.equal(await tok("ink"), base.ink, "the theme itself is unchanged");
+    assert.equal((await tok("ink3")).startsWith(darkInk ? "rgba(242" : "rgba(12"), true, `OS ${os}, data-theme ${attr}: raised in its own theme`);
+  }
+});
