@@ -510,7 +510,7 @@ test("voice wake, native profile: the floor measured while live seeds the detect
   assert.ok("near_misses" in trig && "floor_db" in trig);
 });
 
-test("voice wake, native profile: a near miss is logged at debug level with its reason", async (t) => {
+test("voice wake, native profile: a near miss is logged (info for the first few per sleep) with its reason", async (t) => {
   const h = await setup(t);
   h.on();
   const { link } = await h.attach();
@@ -529,7 +529,7 @@ test("voice wake, native profile: a near miss is logged at debug level with its 
   assert.equal(h.ctl.counters.wake_triggers, 0);
   const near = h.log.entries.filter((e) => e.ev === "wake.near");
   assert.equal(near.length, 1);
-  assert.equal(near[0].lvl, "debug");
+  assert.equal(near[0].lvl, "info", "the first near misses of a sleep are visible without SOTTO_DEBUG");
   assert.equal(near[0].reason, "short");
   assert.equal(h.ctl.counters.wake_near, 1);
 });

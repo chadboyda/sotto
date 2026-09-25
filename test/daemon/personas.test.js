@@ -23,8 +23,8 @@ const write = (file, text) => { fs.mkdirSync(path.dirname(file), { recursive: tr
 
 // ---- built-ins -------------------------------------------------------------------------
 
-test("built-ins: 8 distinct personas, valid ids and voices, bodies within ~250 tokens, default first", () => {
-  assert.equal(BUILTIN_PERSONAS.length, 8);
+test("built-ins: 10 distinct personas, valid ids and voices, bodies within ~250 tokens, default first", () => {
+  assert.equal(BUILTIN_PERSONAS.length, 10);
   assert.equal(BUILTIN_PERSONAS[0].id, DEFAULT_PERSONA);
   const ids = BUILTIN_PERSONAS.map((p) => p.id);
   assert.equal(new Set(ids).size, ids.length);

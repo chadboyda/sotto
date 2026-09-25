@@ -70,6 +70,38 @@ final class CaptureChainTests: XCTestCase {
         XCTAssertEqual(hz, Self.f0, accuracy: 8, "\(label): zero-crossing pitch", file: file, line: line)
     }
 
+    /// A rebuild hands over from the running chain to the new one (RealAudioIO.rebuild): the old
+    /// one keeps emitting while the new stream is digital zeros (a Bluetooth profile switch), and
+    /// stops the moment the new one carries audio. No gap, no frame twice.
+    func testHandOverKeepsTheOldChainUntilTheNewOneIsLive() {
+        let emitter = MicFrameEmitter()
+        var frames: [Int16] = []
+        let lock = NSLock()
+        emitter.onMicFrame = { f in lock.lock(); frames.append(contentsOf: int16Array(f.samples)); lock.unlock() }
+        let queue = DispatchQueue(label: "test.handover")
+        let old = CapturePipeline(rate: 24_000, emitter: emitter, queue: queue)
+        let new = CapturePipeline(rate: 24_000, emitter: emitter, queue: queue)
+        new.onLive = { old.retire() }
+        old.start(); new.start()
+        let oldChunk = [Float](repeating: 0.25, count: 240), zeros = [Float](repeating: 0, count: 240), newChunk = [Float](repeating: -0.5, count: 240)
+        func write(_ pipe: CapturePipeline, _ c: [Float]) { c.withUnsafeBufferPointer { pipe.ring.write($0.baseAddress!, count: c.count, hostNs: 0) } }
+        // 200 ms: old audio, the new stream still zeros (switching).
+        for _ in 0..<20 { write(old, oldChunk); write(new, zeros); usleep(10_000) }
+        // The new stream comes alive; the old one would keep going but is retired.
+        for _ in 0..<20 { write(old, oldChunk); write(new, newChunk); usleep(10_000) }
+        usleep(50_000)
+        old.stop(); new.stop(); queue.sync {}
+        lock.lock(); let got = frames; lock.unlock()
+        let oldValue = Int16(0.25 * 32767), newValue = Int16(-0.5 * 32767)
+        let firstNew = got.firstIndex(where: { abs(Int($0) - Int(newValue)) < 400 })
+        XCTAssertNotNil(firstNew, "the new chain's audio arrives")
+        XCTAssertGreaterThan(got.filter { abs(Int($0) - Int(oldValue)) < 200 }.count, 24_000 / 10, "the old chain covered the switch")
+        if let i = firstNew { XCTAssertFalse(got[..<i].contains(0), "the new chain's zeros were not interleaved with the old audio") }
+        if let i = firstNew {
+            XCTAssertFalse(got[i...].contains { abs(Int($0) - Int(oldValue)) < 200 }, "nothing from the old chain after the hand-over")
+        }
+    }
+
     func testHeadsetRates16kAnd8kBecome24kAtTheRightPitchAndLength() {
         for rate in [16_000.0, 8_000.0, 48_000.0] {
             let frames = capture(harmonic(rate: rate, seconds: 1), builtRate: rate, trueRate: rate, emitter: MicFrameEmitter())

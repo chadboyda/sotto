@@ -220,7 +220,7 @@ write_prefs() {
 # daemon/personas.js: the built-ins below (ids, voices, descriptions) are
 # pinned to it by test/scripts/toggle.test.js; custom personas are
 # <project>/.claude/sotto-personas/<id>.md and $D/personas/<id>.md.
-PERSONAS="sotto june moss tempo koan vic pip fern"
+PERSONAS="sotto june moss tempo koan vic pip fern lark vela"
 PROJECT_DIR="${CLAUDE_PROJECT_DIR:-$IN_CWD}"
 persona_builtin() { # persona_builtin ID: prints "voice|description", fails if not a built-in
   case "$1" in
@@ -232,6 +232,8 @@ persona_builtin() { # persona_builtin ID: prints "voice|description", fails if n
     vic)   printf '%s' "ash|Blunt no-nonsense reviewer: straight answers, zero fluff" ;;
     pip)   printf '%s' "echo|Playful, sarcastic sidekick with a soft spot for the user" ;;
     fern)  printf '%s' "verse|Curious explorer who narrates the codebase like a field naturalist" ;;
+    lark)  printf '%s' "shimmer|Warm, curious and fully present: notices how you sound and finds your day interesting" ;;
+    vela)  printf '%s' "vesper|Attentive and devoted: remembers the little things, has quiet taste and a wistful streak" ;;
     *) return 1 ;;
   esac
 }

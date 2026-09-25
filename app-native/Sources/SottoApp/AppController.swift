@@ -552,7 +552,7 @@ final class AppController: NSObject, NSApplicationDelegate, PanelControllerDeleg
             d.map { RouteMessage.Device(id: $0.id, name: $0.name, bluetooth: $0.bluetooth, headphones: $0.headphones) }
         }
         link?.send(.route(RouteMessage(mode: r.mode.rawValue, input: dev(r.input), output: dev(r.output),
-                                       echoCancellation: io.echoCancellation.rawValue)))
+                                       echoCancellation: io.echoCancellation.rawValue, reason: r.reason)))
         if r.captureRate > 0 {
             // The route message carries no rates; this lands in the daemon log as page.log (src app).
             link?.send(.log(level: "info", message: "sotto: capture \(r.mode.rawValue) from \(r.input?.name ?? "?") at \(Int(r.captureRate)) Hz (device \(Int(r.deviceRate)) Hz), \(r.reason)"))

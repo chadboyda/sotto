@@ -35,7 +35,7 @@ test("wake clip that is a voice sample the page just played is not the user", as
   h.voice.handlePage({ type: "wake_audio", session_id: h.voice.live.id, audio: wavB64(1200), clip_ms: 1200 });
   await h.clock.advance(0);
   const ins = ws.sent.filter((e) => e.type === "session.instructions.append");
-  assert.match(ins[ins.length - 1].content, /Nothing intelligible was captured/);
+  assert.match(ins[ins.length - 1].content, /first words were not captured/);
   assert.equal(h.sse.filter((m) => m.type === "wake_heard").length, 0);
   assert.equal(h.log.find("wake.echo")[0].verdict, "echo");
   assert.equal(h.log.find("page.played")[0].voice, "cedar");

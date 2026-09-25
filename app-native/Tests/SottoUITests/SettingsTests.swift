@@ -134,7 +134,8 @@ final class SettingsTextTests: XCTestCase {
         XCTAssertNil(SettingsText.bluetoothMicWarning(selected: builtIn, active: airpods), "the chosen mic wins")
         XCTAssertNil(SettingsText.bluetoothMicWarning(selected: nil, active: builtIn))
         XCTAssertNil(SettingsText.bluetoothMicWarning(selected: nil, active: nil))
-        XCTAssertTrue(SettingsText.bluetoothMicHelp.contains("MacBook mic works better"))
+        // A gentle note only: the headset's mic is the user's choice (no advice to switch mics).
+        XCTAssertEqual(SettingsText.bluetoothMicHelp, "Bluetooth mics switch your headphones to call quality.")
     }
 
     func testNoEmojiInCopy() {

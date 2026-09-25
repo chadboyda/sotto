@@ -42,6 +42,12 @@ public final class RealAudioIO: AudioIO, @unchecked Sendable {
     private var watcher: DeviceWatcher?
     private var reevaluateWork: DispatchWorkItem?
     private var pendingPermission = false
+    /// Device pairs ("<input uid>|<output uid>") on which voice processing would not start,
+    /// with the time: it is not retried for `vpioRetryAfter`. Measured live (2026-09-25,
+    /// MacBook Pro mic + speakers): every attempt failed after about 4 s, and each voice
+    /// wake paid that 4 s again before the fallback split route captured anything.
+    private var vpioFailed: [String: Date] = [:]
+    private static let vpioRetryAfter: TimeInterval = 600
 
     public init(isTestProcess: Bool = ProcessGuard.isTestProcess) {
         self.isTestProcess = isTestProcess
@@ -105,7 +111,21 @@ public final class RealAudioIO: AudioIO, @unchecked Sendable {
         plan = nil
     }
 
+    /// Old capture chains handed over to a new one, still running until it is live.
+    private var retiring: [(CapturePipeline, HALInput)] = []
+
+    private func stopRetiring() {
+        for (c, h) in retiring { c.stop(); h.stop() }
+        retiring.removeAll()
+    }
+
+    private func finishRetiring(_ olds: [(CapturePipeline, HALInput)]) {
+        for (c, h) in olds where retiring.contains(where: { $0.0 === c }) { c.stop(); h.stop() }
+        retiring.removeAll { r in olds.contains { $0.0 === r.0 } }
+    }
+
     private func teardown() {
+        stopRetiring()
         reevaluateWork?.cancel()
         capture?.stop(); capture = nil
         halIn?.stop(); halIn = nil
@@ -125,14 +145,48 @@ public final class RealAudioIO: AudioIO, @unchecked Sendable {
     }
 
     /// Rebuilds the engines when the plan changed (or `force`), then reports the route.
+    ///
+    /// A running plain input (listen, split) keeps capturing until the new chain delivers
+    /// real audio (`CapturePipeline.onLive`), so a voice wake (listen -> split/vpio) loses
+    /// none of the words said while the new engines start. Measured live before this: the
+    /// rebuild took 1.7 s on AirPods and 4 s on a MacBook (a failing voice-processing
+    /// attempt first), and what the user said in that gap reached neither the wake clip
+    /// nor the session.
     private func rebuild(force: Bool) throws {
         let (next, inID, outID) = currentPlan()
         if !force, next == plan { return }
-        teardown()
-        guard let inputID = inID else { plan = next; throw AudioIOError.noInputDevice }
+        let available = CoreAudioDevices.list(input: true).map(\.device) + CoreAudioDevices.list(input: false).map(\.device)
+        let tag = AudioPlan.changeTag(old: plan, new: next, available: available, preferredInput: preferredInput, preferredOutput: preferredOutput)
+        // Hand over from a running plain input; anything else (vpio) is torn down first.
+        stopRetiring() // an older hand-over still pending: its successor is being replaced too
+        if vpio == nil, let c = capture, let h = halIn, inID != nil {
+            retiring = [(c, h)]
+            capture = nil; halIn = nil
+            reevaluateWork?.cancel()
+            halOut?.stop(); halOut = nil
+        } else {
+            teardown()
+        }
+        guard let inputID = inID else { stopRetiring(); plan = next; throw AudioIOError.noInputDevice }
         emitter.resetDetector()
+        // The new pipeline retires the old one on the capture queue (no frame twice), then
+        // the old units stop on the main queue.
+        let olds = retiring
+        let handOver: (CapturePipeline) -> Void = { c in
+            guard !olds.isEmpty else { return }
+            c.onLive = { [weak self] in
+                olds.forEach { $0.0.retire() }
+                DispatchQueue.main.async { self?.finishRetiring(olds) }
+            }
+        }
         var reason = next.reason
+        if let tag = tag { reason += "," + tag }
         var mode = next.mode
+        let vpioKey = "\(next.input?.id ?? "")|\(next.output?.id ?? "")"
+        if mode == .vpio, let at = vpioFailed[vpioKey], Date().timeIntervalSince(at) < RealAudioIO.vpioRetryAfter {
+            mode = .split
+            reason += ",vpio_failed"
+        }
         if mode != .listen {
             // The jitter playout has one consumer: a preview output must not render
             // alongside the session's output (a preview while sleeping, then wake).
@@ -144,6 +198,7 @@ public final class RealAudioIO: AudioIO, @unchecked Sendable {
                 v.onConfigurationChange = { [weak self] in self?.scheduleReevaluate(force: true, delay: 0.4) }
                 try v.start(inputID: inputID, outputID: outID, pipeline: pipeline) { rate in
                     let c = CapturePipeline(rate: rate, emitter: self.emitter, queue: self.captureQueue, drops: self.captureDrops)
+                    handOver(c)
                     self.capture = c
                     return c.ring
                 }
@@ -155,6 +210,7 @@ public final class RealAudioIO: AudioIO, @unchecked Sendable {
                 capture?.stop(); capture = nil
                 mode = .split
                 reason += ",vpio_failed"
+                vpioFailed[vpioKey] = Date()
             }
         }
         switch mode {
@@ -162,19 +218,27 @@ public final class RealAudioIO: AudioIO, @unchecked Sendable {
             break
         case .split, .listen:
             let hin = HALInput(deviceID: inputID)
-            let rate = try hin.prepare()
-            let c = CapturePipeline(rate: rate, emitter: emitter, queue: captureQueue, drops: captureDrops)
-            try hin.start(ring: c.ring)
-            capture = c
-            halIn = hin
-            if mode == .split {
-                let out = HALOutput(deviceID: outID, pipeline: pipeline)
-                try out.start()
-                halOut = out
+            do {
+                let rate = try hin.prepare()
+                let c = CapturePipeline(rate: rate, emitter: emitter, queue: captureQueue, drops: captureDrops)
+                handOver(c)
+                try hin.start(ring: c.ring)
+                capture = c
+                halIn = hin
+                if mode == .split {
+                    let out = HALOutput(deviceID: outID, pipeline: pipeline)
+                    try out.start()
+                    halOut = out
+                }
+            } catch {
+                stopRetiring()
+                throw error
             }
         case .fake, .off:
+            stopRetiring()
             throw AudioIOError.testMode
         }
+        if capture == nil { stopRetiring() }
         capture?.start()
         plan = next
         var r = next.route

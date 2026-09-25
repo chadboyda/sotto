@@ -63,11 +63,11 @@ const devs = (...list) => list.map(([deviceId, label, kind = "audioinput"]) => (
 test("pickInputDevice prefers a saved id that still exists", () => {
   const d = devs(["default", "Default - AirPods Max"], ["air", "AirPods Max"], ["mbp", "MacBook Pro Microphone"], ["usb", "USB Mic"]);
   assert.deepEqual(lib.pickInputDevice(d, "usb"), { deviceId: "usb", rule: "saved", hint: null, label: "USB Mic", savedMissing: false });
-  // saved id gone -> falls through to the rules
-  assert.equal(lib.pickInputDevice(d, "gone").rule, "builtin");
+  // saved id gone -> the system default
+  assert.equal(lib.pickInputDevice(d, "gone").rule, "default");
 });
 
-test("pickInputDevice avoids a Bluetooth default in favour of the built-in mic", () => {
+test("pickInputDevice uses a Bluetooth headset's mic when it is the system default (no built-in override)", () => {
   const d = devs(
     ["default", "Default - AirPods Max"],
     ["air", "AirPods Max"],
@@ -75,28 +75,21 @@ test("pickInputDevice avoids a Bluetooth default in favour of the built-in mic",
     ["mbp", "MacBook Pro Microphone"],
   );
   const pick = lib.pickInputDevice(d, null);
-  assert.equal(pick.deviceId, "mbp");
-  assert.equal(pick.rule, "builtin");
-  assert.equal(pick.hint, "Using the built-in mic so your headphones keep high-quality audio.");
+  assert.deepEqual(pick, { deviceId: "default", rule: "default", hint: null, label: "AirPods Max", savedMissing: false });
   for (const label of ["Bose QC Bluetooth", "Jabra Headset", "Hands-Free Link", "Galaxy Buds2"]) {
     const p = lib.pickInputDevice(devs(["default", `Default - ${label}`], ["x", label], ["b", "Built-in Microphone"]), null);
-    assert.equal(p.deviceId, "b", label);
+    assert.deepEqual([p.deviceId, p.label], ["default", label], label);
   }
+  // And when the user chose the headset explicitly.
+  assert.equal(lib.pickInputDevice(d, "air").deviceId, "air");
 });
 
 test("pickInputDevice falls back to the default", () => {
-  // default is already built-in
   const a = lib.pickInputDevice(devs(["default", "Default - MacBook Pro Microphone"], ["mbp", "MacBook Pro Microphone"]), null);
   assert.deepEqual(a, { deviceId: "default", rule: "default", hint: null, label: "MacBook Pro Microphone", savedMissing: false });
-  // Bluetooth default but no built-in mic available
-  const b = lib.pickInputDevice(devs(["default", "Default - AirPods"], ["air", "AirPods"]), null);
-  assert.equal(b.deviceId, "default");
-  assert.equal(b.rule, "default");
-  // no "default" pseudo device: the built-in mic, else the first plain input
+  // no "default" pseudo device: the first input listed (the browser's default), whatever it is
   const c = lib.pickInputDevice(devs(["usb", "USB Mic"], ["mbp", "MacBook Pro Microphone"]), undefined);
-  assert.equal(c.deviceId, "mbp");
-  assert.equal(c.rule, "builtin");
-  assert.equal(lib.pickInputDevice(devs(["cam", "OBSBOT Meet 2 Microphone"], ["usb", "USB Mic"]), null).deviceId, "usb");
+  assert.deepEqual([c.deviceId, c.rule], ["usb", "fallback"]);
   // no inputs at all
   assert.deepEqual(lib.pickInputDevice([], null), { deviceId: null, rule: "none", hint: null, label: "", savedMissing: false });
   assert.deepEqual(lib.pickInputDevice(devs(["spk", "Speakers", "audiooutput"]), null).rule, "none");
@@ -126,23 +119,21 @@ test("pickInputDevice follows the macOS default by id, never Chrome's ranking (w
   assert.equal(lib.pickInputDevice(devs(...LIVE_2026_09_24), "cam").deviceId, "cam");
 });
 
-test("pickInputDevice: AirPods as the default go to the built-in mic, not the webcam", () => {
+test("pickInputDevice: AirPods as the macOS default are used (the user's headset mic)", () => {
   const list = LIVE_2026_09_24.map(([id, label]) => (id === "default" ? [id, "Default - AirPods Pro"] : [id, label]));
   const p = lib.pickInputDevice(devs(...list), null);
-  assert.deepEqual([p.deviceId, p.rule, p.label], ["mbp", "builtin", "MacBook Pro Microphone (Built-in)"]);
+  assert.deepEqual([p.deviceId, p.rule, p.label], ["default", "default", "AirPods Pro"]);
 });
 
-test("pickInputDevice: a remembered mic that is gone falls back by the rules and says so", () => {
+test("pickInputDevice: a remembered mic that is gone falls back to the system default and says so", () => {
   const p = lib.pickInputDevice(devs(...LIVE_2026_09_24), "usb-gone");
   assert.equal(p.deviceId, "default");
   assert.equal(p.savedMissing, true);
   assert.match(p.hint, /isn't connected/);
-  // No system default known (no pseudo device): built-in beats webcam, phone and virtual devices.
+  // No system default known (no pseudo device): the first input listed.
   const noDefault = LIVE_2026_09_24.filter(([id]) => id !== "default");
   const q = lib.pickInputDevice(devs(...noDefault), "usb-gone");
-  assert.deepEqual([q.deviceId, q.rule, q.savedMissing], ["mbp", "builtin", true]);
-  const r = lib.pickInputDevice(devs(...noDefault.filter(([id]) => id !== "mbp")), null);
-  assert.equal(r.deviceId, "air", "virtual, phone and webcam mics are avoided; only the headset is left");
+  assert.deepEqual([q.deviceId, q.rule, q.savedMissing], ["cam", "fallback", true]);
 });
 
 test("isAvoidedLabel and inputOptionLabel", () => {

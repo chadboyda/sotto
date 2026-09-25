@@ -166,7 +166,7 @@ Usage and timers are derived by the app: the header's Session / Today / Cost rea
 | type | Payload | Daemon action |
 |---|---|---|
 | `hello` | §1 | handshake |
-| `route` | `mode, input:{id,name,bluetooth}, output:{id,name,bluetooth,headphones}, echo_cancellation` | log `native.route`; kept for `/status` |
+| `route` | `mode, input:{id,name,bluetooth}, output:{id,name,bluetooth,headphones}, echo_cancellation`, optional `reason` (the plan's reason plus `default_changed`/`device_removed`/`choice_changed`, `vpio_failed`) | log `native.route`; kept for `/status`; the daemon re-settles its mic analysis (SPEC §6.19) |
 | `audio_stats` | §2.5 | stats/log |
 | `pong` | `t` | RTT |
 | `played` | `what` (`sample`\|`echo_test`), `voice` | same as page `played` → `onPagePlayed` (the echo filter learns the sample's words) |
@@ -248,7 +248,7 @@ The daemon now sees both streams, so it runs the page's **pure** modules in Node
 - **Echo:** `createLeakEstimator`/`classifyLeak` from `web/echo.js` compare speaker frames (aligned by `audio_stats`) with the mic. The result goes to `onPageEcho` and, above threshold, `notice echo_detected`. There is no echo gate DSP in v0.3.0, because VPIO does the AEC. The transcript echo filter (SPEC §6.8.1) is unchanged.
 
 ### 4.6 window.js (B6)
-- `chooseWindow`: `auto`/`app` pick the app whenever it is `ready` on darwin. The Bluetooth-input → Chrome rule and `needRoute` are removed, because the native app never opens a Bluetooth input for capture (§5.3). Chrome remains for non-macOS, a missing or broken app, or `window: chrome`/`default`.
+- `chooseWindow`: `auto`/`app` pick the app whenever it is `ready` on darwin. The Bluetooth-input → Chrome rule and `needRoute` are removed (no audio-route rule; the mic is the user's choice or the system default, §5.3). Chrome remains for non-macOS, a missing or broken app, or `window: chrome`/`default`.
 - The launch is unchanged (`open -a` + `sotto://open`). The app-opened check (`APP_PAGE_TIMEOUT_MS`, 15 s) now waits for the native `hello` (`controller.connected`) instead of a page hello. On timeout the daemon marks the app broken for the session and opens Chrome (as today).
 - `appSourceHash` and `build-app.sh source_hash` hash **`app-native/**` minus `.build/` and `.swiftpm/`**, plus `scripts/build-app.sh`. The same byte-order sort and line format are used in both.
 - `APP_TEST_ENV` becomes `SOTTO_APP_DEBUG_LOG`, `SOTTO_APP_MIC_FIXTURE`, `SOTTO_APP_MIC_FIXTURE_LEAD_MS`, `SOTTO_APP_OUT_WAV`, `SOTTO_APP_ECHO_SIM_DB`, `SOTTO_APP_TEST` (as built, also `SOTTO_APP_TEST_MUTE_AFTER_MS` and `SOTTO_APP_MIC_QUEUE_DIR`).
@@ -340,7 +340,7 @@ Target graph: `SottoApp` → {`SottoAudio`, `SottoClient`, `SottoUI`}. `SottoUI`
   - `AudioIO` gains `onError: ((AudioIOError) -> Void)?` (async failures such as a denied prompt or a lost device; main queue), `onMicSilence: ((Bool) -> Void)?` (3 s of exact digital zeros on an unmuted mic, e.g. a privacy-blocked input; main queue) and `route: AudioRouteInfo?`.
   - `AudioIOError` (`micDenied`, `micRestricted`, `noInputDevice`, `testMode`, `engine(String)`) with `name`/`message` for `mic_error`. `name` is `NotAllowedError` for denied/restricted so voice.js maps it to `mic_denied`. `start()` throws `micDenied`/`micRestricted` synchronously; when permission is undetermined it prompts and reports a denial through `onError`.
   - `AudioDevice.transport: AudioTransport` and `AudioRouteInfo.echoCancellation`/`reason` (new stored properties with defaults plus extra inits; the stub inits are unchanged). `AudioPlan.decide(output:input:pref:listenOnly:test:)`, `AudioPlan.pickInput`/`pickOutput`, `MicPermission`, `AudioSelfTest.devicesJSON()` (for B6's `--selftest audio-devices`), `ProcessGuard.isTestProcess` (`--test`, `--selftest`, `SOTTO_APP_TEST=1` or XCTest: real engines throw `testMode`, and `makeAudioIO` always returns the fake).
-  - Mic rule detail: an explicitly saved Bluetooth mic is honored. Automatic choice never picks a Bluetooth mic when any other real input exists.
+  - Mic rule: the mic the user chose if present, else the macOS system default input, whatever it is (a Bluetooth headset's mic included; no automatic override, SPEC-DEVIATIONS "Bluetooth mic"). With Automatic the route follows the system default at once in every mode (live, listen): the device watcher re-plans on `kAudioHardwarePropertyDefaultInputDevice`/`DefaultOutputDevice`, device-list and alive changes, and the route's `reason` gets `default_changed`, `device_removed` or `choice_changed` (`AudioPlan.changeTag`). Paused has no capture; the next start uses the current default.
   - Jitter details: running dry counts as an underrun (and raises the target) only when audio resumes within 1 s. A longer gap is the end of a turn. A tail below target starts playing after 60 ms without new frames. A full ring (64 frames) drops new frames, and those count in `overruns`.
 
 ### 5.4 SottoUI (B5)

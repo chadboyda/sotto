@@ -33,10 +33,10 @@ final class HybridTextTests: XCTestCase {
 
 final class TuningTests: XCTestCase {
     func testBuiltinsAreDistinctShapes() {
-        let ids = ["sotto", "june", "moss", "tempo", "koan", "vic", "pip", "fern"]
+        let ids = ["sotto", "june", "moss", "tempo", "koan", "vic", "pip", "fern", "lark", "vela"]
         let envs = ids.map { Tuning.of($0).envelope(points: 24) }
         for i in 0..<envs.count { for j in (i + 1)..<envs.count { XCTAssertNotEqual(envs[i], envs[j], "\(ids[i]) and \(ids[j]) look the same with the sound off") } }
-        XCTAssertEqual(Set(ids.map { Tuning.of($0).detent }).count, 8, "one detent per persona")
+        XCTAssertEqual(Set(ids.map { Tuning.of($0).detent }).count, 10, "one detent per persona")
     }
 
     func testCustomPersonaGetsAStableTuning() {

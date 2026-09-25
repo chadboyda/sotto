@@ -118,9 +118,9 @@ test("string.js: no context gives a string that draws nothing; personas are tuni
   for (const k of ["set", "input", "relayout", "refreshColors", "frame"]) assert.equal(typeof n[k], "function", k);
   assert.equal(n.animating, false);
   // Every built-in persona has its own tuning and detent; a custom one borrows a built-in.
-  const ids = ["sotto", "june", "moss", "tempo", "koan", "vic", "pip", "fern"];
-  assert.equal(new Set(ids.map((id) => s.detentFor(id))).size, 8);
-  assert.equal(new Set(ids.map((id) => s.chipWavePath(id))).size, 8);
+  const ids = ["sotto", "june", "moss", "tempo", "koan", "vic", "pip", "fern", "lark", "vela"];
+  assert.equal(new Set(ids.map((id) => s.detentFor(id))).size, 10);
+  assert.equal(new Set(ids.map((id) => s.chipWavePath(id))).size, 10);
   assert.ok(s.tuningFor("my-custom").w.length > 0);
   assert.equal(s.detentFor("my-custom"), s.detentFor("my-custom"));
   assert.match(s.chipWavePath("sotto"), /^M8\.00 [\d.]+(L[\d.]+ [\d.]+){22}$/);

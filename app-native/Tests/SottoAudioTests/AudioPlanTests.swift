@@ -39,18 +39,34 @@ final class AudioPlanTests: XCTestCase {
         XCTAssertNil(AudioPlan.decide(output: out(.builtIn), input: builtInMic, pref: .automatic, listenOnly: true).output)
     }
 
-    func testBluetoothMicNeverChosenAutomatically() {
+    func testSystemDefaultMicIsUsedWhateverItIs() {
+        // No automatic override: a Bluetooth headset that is the macOS default input is the mic.
         let inputs = [airpodsMic, usbMic, builtInMic]
-        XCTAssertEqual(AudioPlan.pickInput(inputs: inputs, defaultInput: airpodsMic.id, preferred: nil), builtInMic)
-        XCTAssertEqual(AudioPlan.pickInput(inputs: [airpodsMic, usbMic], defaultInput: airpodsMic.id, preferred: nil), usbMic)
-        XCTAssertEqual(AudioPlan.pickInput(inputs: [airpodsMic, loopback, usbMic], defaultInput: airpodsMic.id, preferred: nil), usbMic)
-        // Nothing else: the Bluetooth mic is the only way to hear the user.
+        XCTAssertEqual(AudioPlan.pickInput(inputs: inputs, defaultInput: airpodsMic.id, preferred: nil), airpodsMic)
+        XCTAssertEqual(AudioPlan.pickInput(inputs: [airpodsMic, usbMic], defaultInput: airpodsMic.id, preferred: nil), airpodsMic)
         XCTAssertEqual(AudioPlan.pickInput(inputs: [airpodsMic], defaultInput: airpodsMic.id, preferred: nil), airpodsMic)
+        XCTAssertEqual(AudioPlan.pickInput(inputs: inputs, defaultInput: airpodsMic.id, preferred: builtInMic.id), builtInMic, "an explicit choice wins")
+    }
+
+    func testChangeTagFollowsTheDefault() {
+        let spk = out(.builtIn, name: "MacBook Pro Speakers"), pods = out(.bluetooth, name: "AirPods Pro")
+        let before = AudioPlan.decide(output: pods, input: airpodsMic, pref: .automatic, listenOnly: true)
+        // AirPods taken off while sleeping: macOS moves the default input to the built-in mic.
+        let after = AudioPlan.decide(output: spk, input: builtInMic, pref: .automatic, listenOnly: true)
+        XCTAssertEqual(AudioPlan.changeTag(old: before, new: after, available: [builtInMic, airpodsMic], preferredInput: nil, preferredOutput: nil), "default_changed")
+        XCTAssertEqual(AudioPlan.changeTag(old: before, new: after, available: [builtInMic], preferredInput: nil, preferredOutput: nil), "device_removed")
+        XCTAssertEqual(AudioPlan.changeTag(old: before, new: after, available: [builtInMic, airpodsMic], preferredInput: builtInMic.id, preferredOutput: nil), "choice_changed")
+        XCTAssertNil(AudioPlan.changeTag(old: after, new: after, available: [builtInMic], preferredInput: nil, preferredOutput: nil))
+        XCTAssertNil(AudioPlan.changeTag(old: nil, new: after, available: [builtInMic], preferredInput: nil, preferredOutput: nil))
+        // Live on speakers, the output default moves too.
+        let live1 = AudioPlan.decide(output: pods, input: airpodsMic, pref: .automatic)
+        let live2 = AudioPlan.decide(output: spk, input: builtInMic, pref: .automatic)
+        XCTAssertEqual(AudioPlan.changeTag(old: live1, new: live2, available: [builtInMic, airpodsMic, spk, pods], preferredInput: nil, preferredOutput: nil), "default_changed")
     }
 
     func testMicRule() {
         let inputs = [builtInMic, usbMic, airpodsMic]
-        XCTAssertEqual(AudioPlan.pickInput(inputs: inputs, defaultInput: usbMic.id, preferred: nil), usbMic, "system default when not Bluetooth")
+        XCTAssertEqual(AudioPlan.pickInput(inputs: inputs, defaultInput: usbMic.id, preferred: nil), usbMic, "the system default")
         XCTAssertEqual(AudioPlan.pickInput(inputs: inputs, defaultInput: usbMic.id, preferred: builtInMic.id), builtInMic, "saved device wins")
         XCTAssertEqual(AudioPlan.pickInput(inputs: inputs, defaultInput: usbMic.id, preferred: "gone"), usbMic, "missing saved device falls back")
         XCTAssertEqual(AudioPlan.pickInput(inputs: inputs, defaultInput: nil, preferred: nil), builtInMic, "no default: first real device")

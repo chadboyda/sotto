@@ -11,6 +11,31 @@ final class FakeAudioIOTests: XCTestCase {
 
     func ramp(_ n: Int, from: Int = 1) -> [Int16] { (0..<n).map { Int16(truncatingIfNeeded: from + $0 * 7) } }
 
+    func testRouteFollowsTheSystemDefaultInputInEveryMode() throws {
+        let airpods = AudioDevice(id: "mic-airpods", name: "AirPods Max", bluetooth: true, headphones: false, transport: .bluetooth)
+        let builtIn = AudioDevice(id: "mic-builtin", name: "MacBook Pro Microphone", bluetooth: false, headphones: false, transport: .builtIn)
+        for listen in [true, false] {
+            let fake = FakeAudioIO(options: .init(fixture: []))
+            var routes: [AudioRouteInfo] = []
+            fake.onRoute = { routes.append($0) }
+            try fake.start(listenOnly: listen)
+            fake.simulateDefaultInput(airpods.id, inputs: [FakeAudioIO.fakeInput, airpods, builtIn])
+            XCTAssertEqual(fake.route?.input, airpods, "a Bluetooth default is used as is")
+            XCTAssertEqual(fake.route?.reason, (listen ? "test_listen" : "test") + ",default_changed")
+            // Headphones taken off: macOS moves the default to the built-in mic; the route follows at once.
+            fake.simulateDefaultInput(builtIn.id, inputs: [builtIn])
+            XCTAssertEqual(fake.route?.input, builtIn)
+            XCTAssertEqual(fake.route?.reason, (listen ? "test_listen" : "test") + ",device_removed")
+            XCTAssertEqual(routes.count, 3)
+            // A chosen mic that is still there is kept whatever the default does.
+            fake.setPreferredDevices(input: builtIn.id, output: nil)
+            fake.simulateDefaultInput(airpods.id, inputs: [airpods, builtIn])
+            XCTAssertEqual(fake.route?.input, builtIn)
+            XCTAssertEqual(routes.count, 3)
+            fake.stop()
+        }
+    }
+
     func testRealTimePacing() throws {
         let fake = FakeAudioIO(options: .init(fixture: ramp(24_000 * 3)))
         let sink = Sink()

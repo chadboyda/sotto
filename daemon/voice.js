@@ -1658,7 +1658,7 @@ export class Voice {
       case "rtc_state": this.onRtcState(msg.state); break;
       case "dc_open": case "dc_closed": break;
       case "muted": if (this.live) { this.live.muted = !!msg.muted; this.changed(); } break;
-      case "activity": this.lastPageActivityAt = this.clock.now(); break;
+      case "activity": this.noteLocalSpeech(); break;
       case "cant_hear": this.onCantHear(msg); break;
       case "mic_silent": this.onMicSilent(msg).catch((e) => this.log.error("mic_silent.error", { message: String(e && e.message) })); break;
       case "mic_fallback":
@@ -2339,6 +2339,7 @@ export class Voice {
       now: this.clock.now(), idleMs: idleSecondsOf(this.config) * 1000, liveStartedAt: this.liveStartedAt,
       lastUserAt: this.transcript.lastUserSpeechAt, lastAssistantAt: this.transcript.lastAssistantSpeechAt,
       lastPageActivityAt: Math.max(this.lastPageActivityAt, this.lastDeliverAt || 0), busy, wokeBy: this.governor.wokeBy, heardUser: this.governor.heardUser,
+      lastLocalSpeechAt: this.lastPageActivityAt,
     });
     if (why) this.goToSleep(why);
   }
@@ -2374,6 +2375,13 @@ export class Voice {
     // Delegation ids of earlier sessions are unknown to this one: always null.
     for (const m of q) this.deliver({ kind: m.kind, content: m.content, delegationId: null, source: m.source || undefined });
   }
+
+  /**
+   * The local mic detector heard speech while live (the page's "activity", or
+   * the app's relayed mic in native-session.js): holds off idle sleep and the
+   * false-wake verdict (§6.15) even while no transcript arrives.
+   */
+  noteLocalSpeech() { this.lastPageActivityAt = this.clock.now(); }
 
   /** The page's wake clip (onset until live): transcribe it and hand the words to the model. */
   async onWakeAudio(msg) {

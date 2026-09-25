@@ -238,11 +238,10 @@ export function speakerLabel(role) {
 }
 
 const BLUETOOTH_RE = /airpods|bluetooth|headset|hands-free|buds/i;
-const BUILTIN_RE = /macbook|built-in|internal/i;
-// Webcams, phones (Continuity) and virtual/loopback devices: never chosen over a
-// built-in mic without the user asking. Seen live (2026-09-24): Chrome opened
-// "OBSBOT Meet 2 Microphone" (a webcam across the room) while the Mac's system
-// default was the MacBook Pro mic, and the user was not heard for minutes.
+// Webcams, phones (Continuity) and virtual/loopback devices (labels only; the
+// mic choice never skips them, pickInputDevice). Seen live (2026-09-24): Chrome
+// opened "OBSBOT Meet 2 Microphone" (a webcam across the room) when opened
+// without a deviceId while the Mac's system default was the MacBook Pro mic.
 const AVOID_RE = /virtual|zoomaudio|teams audio|blackhole|loopback|soundflower|prism|krisp|aggregate|obsbot|webcam|camera|brio|facetime|iphone|ipad|continuity/i;
 
 /** True if a device label looks like a Bluetooth/headset mic (hands-free profile). */
@@ -263,12 +262,14 @@ export function stripDefaultPrefix(label) {
 }
 
 /**
- * Choose the microphone (§7.5 "Default mic").
+ * Choose the microphone (§7.5 "Default mic"): exactly the mic the user chose,
+ * else the system default input, whatever it is. No device is second-guessed:
+ * a Bluetooth headset's mic is used when it is the choice or the default (the
+ * reason to wear one), a webcam when the user picked it.
  * 1. the saved id, if present ("default" = follow the system default);
- * 2. the system default input (Chrome's and the app's "default" pseudo device),
- *    unless it looks like Bluetooth: then the built-in mic;
- * 3. no known system default: the built-in mic, else the first input that is
- *    not a webcam, phone or virtual device (a headset last), else the first input.
+ * 2. the system default input (Chrome's "default" pseudo device);
+ * 3. no "default" pseudo device (not Chrome): the first input listed, which is
+ *    the browser's default.
  *
  * The system default is opened BY ID ("default"), never by leaving deviceId
  * out: Chrome then uses its own per-profile device ranking
@@ -277,30 +278,22 @@ export function stripDefaultPrefix(label) {
  *
  * `devices` is the enumerateDevices() output (any kinds).
  *
- * @returns {{deviceId:string|null, rule:"saved"|"builtin"|"default"|"fallback"|"none", hint:string|null, label:string, savedMissing:boolean}}
+ * @returns {{deviceId:string|null, rule:"saved"|"default"|"fallback"|"none", hint:string|null, label:string, savedMissing:boolean}}
  */
 export function pickInputDevice(devices, savedId) {
   const inputs = (Array.isArray(devices) ? devices : []).filter((d) => d && d.kind === "audioinput");
   const real = inputs.filter((d) => !PSEUDO_IDS.has(d.deviceId));
   const def = inputs.find((d) => d.deviceId === "default") || null;
-  const defLabel = def ? stripDefaultPrefix(def.label) : "";
   const out = (deviceId, rule, label, hint = null) => ({ deviceId, rule, hint, label: String(label || ""), savedMissing: !!(savedId && rule !== "saved") });
   if (inputs.length === 0) return out(null, "none", "");
   if (savedId && inputs.some((d) => d.deviceId === savedId)) {
     const d = inputs.find((x) => x.deviceId === savedId);
-    return out(savedId, "saved", savedId === "default" ? defLabel : d.label);
+    return out(savedId, "saved", savedId === "default" ? stripDefaultPrefix(def?.label) : d.label);
   }
   const missingHint = savedId ? "The microphone you chose isn't connected." : null;
-  const builtin = real.find((d) => BUILTIN_RE.test(d.label || "") && !isBluetoothLabel(d.label));
-  if (def) {
-    if (isBluetoothLabel(defLabel) && builtin) {
-      return out(builtin.deviceId, "builtin", builtin.label, "Using the built-in mic so your headphones keep high-quality audio.");
-    }
-    return out("default", "default", defLabel, missingHint);
-  }
-  if (builtin) return out(builtin.deviceId, "builtin", builtin.label, missingHint);
-  const ok = real.find((d) => !isBluetoothLabel(d.label) && !isAvoidedLabel(d.label)) || real.find((d) => !isAvoidedLabel(d.label)) || real[0] || inputs[0];
-  return out(ok.deviceId, "fallback", ok.label, missingHint);
+  if (def) return out("default", "default", stripDefaultPrefix(def.label), missingHint);
+  const first = real[0] || inputs[0];
+  return out(first.deviceId, "fallback", first.label, missingHint);
 }
 
 /** Drawer option text for an input: "System default (MacBook Pro Microphone)" for the pseudo device. */

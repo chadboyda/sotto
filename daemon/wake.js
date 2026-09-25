@@ -18,11 +18,23 @@ export const MIN_AWAKE_MS = 15_000;
 export const SPEAKING_GRACE_MS = 2_500;
 /** Default idle timeout when neither idle_seconds nor idle_minutes is configured. */
 export const DEFAULT_IDLE_SECONDS = 60;
-/** Back-off before the page may wake again, by number of consecutive false wakes. */
-export const COOLDOWNS_MS = Object.freeze([0, 10_000, 30_000, 60_000, 120_000]);
+/**
+ * Back-off before the page may wake again, by number of consecutive false
+ * wakes. Short on purpose: live log 2026-09-25 (AirPods, native 0.4.1), four
+ * wakes whose speech gpt-live-1 could not hear (too soft, see daemon/agc.js)
+ * each counted as false, the fourth set a 120 s cooldown, and the user's next
+ * real attempts were ignored until they clicked play.
+ */
+export const COOLDOWNS_MS = Object.freeze([0, 5_000, 15_000, 30_000]);
 /** Each false wake raises the page's SNR bar by this much, up to MAX_BOOST_DB. */
-export const BOOST_STEP_DB = 4;
-export const MAX_BOOST_DB = 12;
+export const BOOST_STEP_DB = 3;
+export const MAX_BOOST_DB = 6;
+/**
+ * A voice-woken session with no words is a false wake only once the local mic
+ * has also been quiet this long: an empty wake clip or a model that has not
+ * transcribed yet is not proof that nobody is talking.
+ */
+export const FALSE_WAKE_QUIET_MS = 10_000;
 export const WAKE_SENSITIVITIES = Object.freeze(["off", "low", "medium", "high"]);
 /**
  * Sources whose message is worth waking a sleeping session for (voice.js
@@ -43,19 +55,24 @@ export const WAKE_SOURCES = Object.freeze(new Set(["voice_result", "background_v
  * @param {boolean} o.busy            a delegation is collecting or Claude works on a voice request
  * @param {string|null} o.wokeBy      "voice" when this session was woken by local voice detection
  * @param {boolean} o.heardUser       any user words in this session (live transcript or wake clip)
+ * @param {number} [o.lastLocalSpeechAt] latest speech the local mic detector heard (page or app)
  * @param {number} [o.minAwakeMs]
  * @returns {null|"idle"|"false_wake"}
  */
 export function sleepDecision({
   now, idleMs, liveStartedAt = 0, lastUserAt = 0, lastAssistantAt = 0, lastPageActivityAt = 0,
-  busy = false, wokeBy = null, heardUser = false, minAwakeMs = MIN_AWAKE_MS,
+  busy = false, wokeBy = null, heardUser = false, lastLocalSpeechAt = 0, minAwakeMs = MIN_AWAKE_MS,
 }) {
   if (!(idleMs > 0) || busy) return null;
   if (now - liveStartedAt < minAwakeMs) return null;
   if (lastAssistantAt && now - lastAssistantAt < SPEAKING_GRACE_MS) return null;
-  // Woken by "voice" but no words ever arrived: noise, music or a cough. Sleep
-  // as soon as the prepaid 15 s are used instead of waiting a full idle period.
-  if (wokeBy === "voice" && !heardUser) return "false_wake";
+  // Woken by "voice" but no words ever arrived and the mic has been quiet for
+  // FALSE_WAKE_QUIET_MS: noise, music or a cough. Sleep as soon as the prepaid
+  // 15 s are used instead of waiting a full idle period. While the local
+  // detector still hears speech the session stays (the normal idle rule), and
+  // the quiet is counted from the model's last words too: whatever it just said
+  // (a "Yes?", a finished-work announcement) the user gets time to answer.
+  if (wokeBy === "voice" && !heardUser && now - Math.max(liveStartedAt, lastLocalSpeechAt, lastAssistantAt) >= FALSE_WAKE_QUIET_MS) return "false_wake";
   const last = Math.max(lastUserAt, lastAssistantAt, lastPageActivityAt, liveStartedAt);
   return now - last >= idleMs ? "idle" : null;
 }

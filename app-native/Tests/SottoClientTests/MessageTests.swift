@@ -140,6 +140,10 @@ final class MessageTests: XCTestCase {
             output: .init(id: "AirPods", name: "AirPods Pro", bluetooth: true, headphones: true), echoCancellation: "automatic"))),
             ["type": "route", "mode": "split", "input": ["id": "BuiltInMic", "name": "MacBook Pro Microphone", "bluetooth": false],
              "output": ["id": "AirPods", "name": "AirPods Pro", "bluetooth": true, "headphones": true], "echo_cancellation": "automatic"])
+        XCTAssertEqual(try obj(.route(RouteMessage(mode: "listen", input: .init(id: "BuiltInMic", name: "MacBook Pro Microphone", bluetooth: false),
+            output: nil, echoCancellation: "automatic", reason: "sleeping,default_changed"))),
+            ["type": "route", "mode": "listen", "input": ["id": "BuiltInMic", "name": "MacBook Pro Microphone", "bluetooth": false],
+             "output": nil, "echo_cancellation": "automatic", "reason": "sleeping,default_changed"])
         XCTAssertEqual(try obj(.audioStats(AudioStatsMessage(playoutSeq: 12, playoutHostNs: 123_456_789_000, bufferMs: 60,
             underruns: 1, overruns: 0, captureDrops: 2, mode: "fake", micSeq: 99))),
             ["type": "audio_stats", "playout_seq": 12, "playout_host_ns": 123_456_789_000, "buffer_ms": 60, "underruns": 1,
