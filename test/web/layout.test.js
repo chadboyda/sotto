@@ -248,8 +248,10 @@ test("Claude's page at 360 x 420: the approval fits, the page region shrinks fir
   assert.ok(r.long.box[3] >= 40, `the page keeps a few lines: ${JSON.stringify(r.long.box)}`);
   assert.deepEqual(r.long.box, r.empty.box);
   assert.equal(r.long.following, true);
-  const a = await page.eval(`(async () => {
-    window.__t.paint("approval");
+  await page.eval(`window.__t.paint("approval")`);
+  // Measured once the style has settled: two frames were not always enough on a
+  // loaded CI runner (the scroll region read "visible" there, CI 2026-09-25).
+  const measure = () => page.eval(`(async () => {
     await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
     const $ = (id) => document.getElementById(id);
     const zone = $("claude").getBoundingClientRect(), pg = $("claude-page").getBoundingClientRect(), cmd = $("claude-command").getBoundingClientRect();
@@ -257,6 +259,7 @@ test("Claude's page at 360 x 420: the approval fits, the page region shrinks fir
     return { ask: !$("claude-ask").hidden, cmd: [cmd.top, cmd.bottom, cmd.height], page: [pg.top, pg.bottom], zone: [zone.top, zone.bottom], footer: footer.top,
       scroll: getComputedStyle($("claude-scroll")).visibility, jump: getComputedStyle($("claude-jump")).visibility };
   })()`);
+  const a = (await until(async () => { const m = await measure(); return m.scroll === "hidden" && m.jump === "hidden" ? m : null; }, 3000)) || (await measure());
   assert.equal(a.ask, true);
   assert.ok(a.cmd[2] > 10, `the command shows: ${JSON.stringify(a)}`);
   assert.ok(a.cmd[0] >= a.page[0] - 0.5 && a.cmd[1] <= a.page[1] + 0.5, `the command fits the page: ${JSON.stringify(a)}`);
