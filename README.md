@@ -197,6 +197,8 @@ The voice has a personality, and you can pick it. A persona changes *how* the vo
 | `vic` | ash | Blunt no-nonsense reviewer: straight answers, zero fluff. |
 | `pip` | echo | Playful, sarcastic sidekick with a soft spot for the user. |
 | `fern` | verse | Curious explorer who narrates the codebase like a field naturalist. |
+| `lark` | shimmer | Warm, curious and fully present: notices how you sound and finds your day interesting. |
+| `vela` | vesper | Attentive and devoted: remembers the little things, has quiet taste and a wistful streak. |
 
 Switch with `/talk persona <name>`, the **Persona** picker in the voice window's settings, or just ask out loud ("switch to Moss", "can you be more upbeat?"): the voice hands that to Claude, which runs `sotto persona <name>` (add `Bash(sotto persona:*)` to your allow rules to skip the approval prompt). The choice is saved in `prefs.json`. A persona's instructions are fixed for a Live session, so a switch starts a fresh session with the conversation carried over, like a voice change, and the new persona says hello in one line. By default choosing a persona also switches to its suggested voice; turn off **Switch to the persona's own voice** in settings to keep your voice (a voice you pick afterwards always wins).
 

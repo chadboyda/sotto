@@ -63,17 +63,22 @@ export const TUNINGS = Object.freeze({
   vic: { w: [1, 0, 0.22], f: 1.6, width: 1.6, damp: 5, amp: 0.7 },
   pip: { w: [0.8, 0, 0.42], f: 1.75, width: 1.25, damp: 1.6, amp: 1, flutter: 1 },
   fern: { w: [0.9, 0, 0.3, 0, 0.2], f: 1.08, width: 1, damp: 1.6, amp: 1, doubled: 1 },
+  lark: { w: [0.7, 0, 0.5, 0, 0.3], f: 1.9, width: 1.1, damp: 1.5, amp: 1, bloom: 1.2 },
+  vela: { w: [0.8, 0, 0.3, 0, 0, 0, 0.25], f: 0.95, width: 1.15, damp: 1.3, amp: 0.95, bloom: 1.3 },
 });
 const ORDER = ["sotto", "june", "moss", "tempo", "koan", "vic", "pip", "fern"];
+// Later built-ins sit between two of the eight marks (half detents).
+const HALF_DETENTS = Object.freeze({ lark: 3.5, vela: 7.5 });
 
 /** A persona's tuning; a custom persona gets a built-in one picked by its id. */
 export function tuningFor(id) {
   const k = String(id || "sotto");
-  return TUNINGS[k] || TUNINGS[ORDER[detentFor(k)]];
+  return TUNINGS[k] || TUNINGS[ORDER[Math.floor(detentFor(k))]];
 }
-/** The peg's tuning mark: one of 8 detents, 45 degrees apart. */
+/** The peg's tuning mark: one of 8 detents, 45 degrees apart (or a half detent). */
 export function detentFor(id) {
   const k = String(id || "sotto");
+  if (k in HALF_DETENTS) return HALF_DETENTS[k];
   const i = ORDER.indexOf(k);
   if (i >= 0) return i;
   let h = 0;

@@ -32,6 +32,8 @@ public struct Tuning: Equatable, Sendable {
         Tuning(id: "vic", w: [1, 0, 0.22], f: 1.6, width: 1.6, damp: 5, amp: 0.7, detent: 5),
         Tuning(id: "pip", w: [0.8, 0, 0.42], f: 1.75, width: 1.25, damp: 1.6, amp: 1, flutter: 1, detent: 6),
         Tuning(id: "fern", w: [0.9, 0, 0.3, 0, 0.2], f: 1.08, width: 1.0, damp: 1.6, amp: 1, doubled: 1, detent: 7),
+        Tuning(id: "lark", w: [0.7, 0, 0.5, 0, 0.3], f: 1.9, width: 1.1, damp: 1.5, amp: 1, bloom: 1.2, detent: 3.5),
+        Tuning(id: "vela", w: [0.8, 0, 0.3, 0, 0, 0, 0.25], f: 0.95, width: 1.15, damp: 1.3, amp: 0.95, bloom: 1.3, detent: 7.5),
     ]
 
     /// The tuning for a persona id. Custom personas get one derived from a hash of their
