@@ -306,9 +306,30 @@ public final class FakeAudioIO: AudioIO, @unchecked Sendable {
     public func inputDevices() -> [AudioDevice] { [FakeAudioIO.fakeInput] + testDevices.inputs }
     public func outputDevices() -> [AudioDevice] { [FakeAudioIO.fakeOutput] + testDevices.outputs }
     public func defaultDeviceID(input: Bool) -> String? { input ? FakeAudioIO.fakeInput.id : FakeAudioIO.fakeOutput.id }
-    public func setPreferredDevices(input: String?, output: String?) {}
+    public func setPreferredDevices(input: String?, output: String?) { preferredInput = input }
 
     /// Test mode: extra devices that come and go (the footer picker and its hot-swap);
     /// never opened, the fake audio keeps running on the fixture.
     public var testDevices: (inputs: [AudioDevice], outputs: [AudioDevice]) = ([], [])
+
+    private var preferredInput: String?
+
+    /// Tests: the system default input moved (headphones taken off, a mic plugged in). The
+    /// route follows it with the real engine's rule (`AudioPlan.pickInput`) when the choice is
+    /// Automatic, in any mode, and reports why (`AudioPlan.changeTag`: `default_changed`,
+    /// `device_removed`). A chosen mic that is still present stays.
+    public func simulateDefaultInput(_ defaultInput: String?, inputs: [AudioDevice]) {
+        guard let old = route else { return }
+        let pick = AudioPlan.pickInput(inputs: inputs, defaultInput: defaultInput, preferred: preferredInput)
+        guard pick?.id != old.input?.id else { return }
+        let base = old.reason.split(separator: ",").first.map(String.init) ?? old.reason
+        let tag = AudioPlan.changeTag(old: AudioPlan(mode: old.mode, input: old.input, output: old.output, reason: base),
+                                      new: AudioPlan(mode: old.mode, input: pick, output: old.output, reason: base),
+                                      available: inputs, preferredInput: preferredInput, preferredOutput: nil)
+        var r = old
+        r.input = pick
+        r.reason = tag.map { base + "," + $0 } ?? base
+        route = r
+        onRoute?(r)
+    }
 }

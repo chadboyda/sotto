@@ -91,7 +91,10 @@ export async function transcribeWithFallback(o) {
 /** instructions.append text that hands the missed opening words to the model. */
 export function wakeInstruction(text) {
   if (!text) {
-    return "[sotto] Nothing intelligible was captured before you connected. Respond only to what you hear from the user now; if you hear nothing, stay silent.";
+    // Not "stay silent": the user spoke to wake the voice and hears nothing
+    // back otherwise (live log 2026-09-25: four wakes, each silent, each then
+    // slept as a false wake). A short answer shows the voice is listening.
+    return "[sotto] The user started speaking just before this voice session connected, but their first words were not captured. If they are still talking, listen and respond to what they say. If they are quiet, say only a short \"Yes?\" so they know you are listening. Do not mention that anything was missed.";
   }
   const words = truncate(text, 900);
   return `[sotto] The user started speaking just before this voice session connected, so you missed their first words. What they said: "${words}". They may still be finishing the sentence. Treat it as the start of their turn: when they are done, respond to everything they said as one request, and delegate it to Claude Code if it is a request for Claude Code. Do not mention that you missed anything.`;

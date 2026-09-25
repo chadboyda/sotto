@@ -5,7 +5,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { makeHarness, SESSION } from "../helpers/daemon-harness.js";
 import { createFakeClock } from "../helpers/fake-clock.js";
-import { sleepDecision, WakeGovernor, idleSecondsOf, MIN_AWAKE_MS, COOLDOWNS_MS, BOOST_STEP_DB, MAX_BOOST_DB } from "../../daemon/wake.js";
+import { sleepDecision, WakeGovernor, idleSecondsOf, MIN_AWAKE_MS, COOLDOWNS_MS, BOOST_STEP_DB, MAX_BOOST_DB, FALSE_WAKE_QUIET_MS } from "../../daemon/wake.js";
 import { transcribeClip, transcribeWithFallback, cleanTranscript, decodeWavB64, wavDurationMs, wakeInstruction } from "../../daemon/transcribe.js";
 import { greeting, buildSeed } from "../../daemon/prompt.js";
 import { joinUserFragments } from "../../daemon/transcript.js";
@@ -66,6 +66,15 @@ test("sleepDecision: idle, min awake, speaking grace, busy, disabled, false wake
   assert.equal(sleepDecision({ ...fw, heardUser: true }), null, "words heard: a normal idle period");
   assert.equal(sleepDecision({ ...fw, wokeBy: "notify" }), null, "notify wakes are never false");
   assert.equal(sleepDecision({ ...fw, busy: true }), null);
+  // An empty clip is not proof: while the local mic still hears speech the
+  // session stays; it is false only after FALSE_WAKE_QUIET_MS of local quiet.
+  assert.equal(sleepDecision({ ...fw, lastLocalSpeechAt: MIN_AWAKE_MS - 2000 }), null, "the user is still talking");
+  assert.equal(sleepDecision({ ...fw, now: MIN_AWAKE_MS - 2000 + FALSE_WAKE_QUIET_MS, lastLocalSpeechAt: MIN_AWAKE_MS - 2000 }), "false_wake", "then 10 s of quiet");
+});
+
+test("false-wake back-off is short (a missed real wake must not lock the user out)", () => {
+  assert.ok(COOLDOWNS_MS[COOLDOWNS_MS.length - 1] <= 30_000);
+  assert.ok(MAX_BOOST_DB <= 6);
 });
 
 test("WakeGovernor: false wakes raise the bar and back off; a real wake relaxes it", () => {
@@ -232,7 +241,7 @@ test("false wake: nothing heard → sleep at 15 s, boost the page threshold, bac
   let ws = await h.goLive({ reason: "wake" });
   h.voice.handlePage({ type: "wake_audio", session_id: h.voice.live.id, audio: wavB64() });
   await h.clock.advance(0);
-  assert.match(appends(ws, "instructions")[0].content, /Nothing intelligible was captured/);
+  assert.match(appends(ws, "instructions")[0].content, /first words were not captured/);
   assert.equal(h.sse.filter((m) => m.type === "wake_heard").length, 0);
   await h.clock.advance(MIN_AWAKE_MS - 2000);
   assert.equal(ws.sentOfType("session.close").length, 0);
@@ -258,7 +267,7 @@ test("the clip never arrives: a 'nothing captured' note after 12 s", async (t) =
   assert.equal(appends(ws, "instructions").length, 0);
   await h.clock.advance(1_000);
   assert.equal(appends(ws, "instructions").length, 1);
-  assert.match(appends(ws, "instructions")[0].content, /Nothing intelligible/);
+  assert.match(appends(ws, "instructions")[0].content, /first words were not captured/);
   assert.equal(h.log.find("wake.inject")[0].via, "timeout");
 });
 
@@ -268,7 +277,7 @@ test("transcription failure falls back to the second model, then to the note", a
   h.voice.handlePage({ type: "wake_audio", session_id: h.voice.live.id, audio: wavB64() });
   await h.clock.advance(0);
   assert.deepEqual(h.transcribeCalls.map((c) => c.model), ["gpt-transcribe", "gpt-4o-mini-transcribe"]);
-  assert.match(appends(ws, "instructions")[0].content, /Nothing intelligible/);
+  assert.match(appends(ws, "instructions")[0].content, /first words were not captured/);
   h.voice.handlePage({ type: "wake_audio", session_id: "x", audio: "not base64 wav" });
 });
 
@@ -411,7 +420,10 @@ test("cleanTranscript, decodeWavB64, wakeInstruction", () => {
   assert.ok(decodeWavB64(wavB64()));
   assert.match(wakeInstruction("run the tests"), /What they said: "run the tests"/);
   assert.match(wakeInstruction("run the tests"), /delegate it to Claude Code/);
-  assert.match(wakeInstruction(null), /Nothing intelligible/);
+  assert.match(wakeInstruction(null), /first words were not captured/);
+  // An empty clip is still a wake: the voice answers briefly instead of staying silent.
+  assert.match(wakeInstruction(null), /"Yes\?"/);
+  assert.doesNotMatch(wakeInstruction(null), /stay silent/);
 });
 
 test("joinUserFragments drops the words repeated at the clip/live seam", () => {

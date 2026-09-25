@@ -22,6 +22,8 @@ import { truncate } from "./log.js";
 import { createVad, createClipRecorder, createFloorTracker, encodeWav, bytesToBase64, cooldownLeft, ONSET_PAD_MS, SENSITIVITIES } from "../web/wake.js";
 import { createHearingMonitor } from "../web/lib.js";
 import { createLeakEstimator, classifyLeak, echoTestVerdict } from "../web/echo.js";
+import { createUplinkAgc, createMicProfiles } from "./agc.js";
+import { writeAtomic } from "./statefiles.js";
 
 /** Speaker frames at or above this peak count as audible speech (same bar as preview.js). */
 export const LOUD_PEAK = 1200;
@@ -32,6 +34,22 @@ const VAD_FRAME = 512;
 /** Speech onset in the speaker stream (log only): peak and quiet run, as the app's FakeAudioIO measures it. */
 const SPEECH_ONSET_PEAK = 800;
 const SPEECH_ONSET_QUIET_FRAMES = 15;
+/**
+ * After a route (the app rebuilt its capture), frames are not trusted for the
+ * wake detector, its floor or calibration until the stream has carried real
+ * (non-zero) audio this long. A Bluetooth mic switching to its call profile
+ * delivers nothing or zeros for up to about 2.6 s (measured on AirPods) and
+ * may start with a burst; the pre-roll and the floor come from the settled
+ * stream. The uplink itself is never held back.
+ */
+const SETTLE_MS = 200;
+const BT_SETTLE_MS = 800;
+/** A route that never carries audio stops blocking after this long (the silent-mic path takes over). */
+const SETTLE_GIVE_UP_MS = 5000;
+/** wake.near lines at info level per sleep (then debug), so tuning is visible in the normal log. */
+const NEAR_INFO_PER_SLEEP = 5;
+/** Local speech is reported to voice.js at most this often. */
+const LOCAL_SPEECH_EVERY_MS = 250;
 /** The echo report checks the live leak this often while the assistant talks. */
 const ECHO_CHECK_MS = 5000;
 /** A `cmd` the daemon cannot answer sooner is answered with a timeout (the app gives up at 15 s). */
@@ -103,6 +121,16 @@ export class NativeController {
     this.floorAcc = new Float32Array(VAD_FRAME);
     this.floorAccN = 0;
     this.wakeClip = null; // captured clip waiting for the woken session: {samples}
+    // Uplink level control and per-device calibration (daemon/agc.js).
+    const micFile = voice.paths?.micLevels || null;
+    this.profiles = createMicProfiles({
+      clock,
+      load: () => (micFile ? JSON.parse(fs.readFileSync(micFile, "utf8")) : null),
+      save: (o) => { if (micFile) writeAtomic(micFile, `${JSON.stringify(o)}\n`); },
+    });
+    this.agc = createUplinkAgc({ sampleRate: SAMPLE_RATE });
+    this.settle = { done: true, at: 0, audioAt: null, ms: SETTLE_MS, rearm: false };
+    this.localSpeechAt = 0;
     this.echoTest = null;
     voice.setNativeController?.(this);
   }
@@ -180,7 +208,8 @@ export class NativeController {
     const st = status?.state;
     if (st === "sleeping" && status.wake?.enabled) {
       const cfg = status.wake;
-      if (!this.wake || this.wake.sensitivity !== cfg.sensitivity) this.armWake(cfg);
+      if (!this.settle.done && !this.wake?.capturing) this.settle.rearm = true; // armed once the new stream settles
+      else if (!this.wake || this.wake.sensitivity !== cfg.sensitivity) this.armWake(cfg);
       else this.wake.vad.setBoost(cfg.boost_db);
     } else if (this.wake && !this.wake.capturing) {
       this.wake = null;
@@ -292,12 +321,30 @@ export class NativeController {
     const muted = (frame.flags & FLAG.MUTED) !== 0 || v.muteWanted || !!v.live?.muted;
     // Defense (§2.2): a muted frame never carries mic data to OpenAI.
     const pcm = muted ? Buffer.alloc(FRAME_BYTES) : frame.pcm;
-    if (this.session?.ready) this.pacer.push(pcm);
     const now = this.clock.now();
+    const settled = this.checkSettled(pcm, muted, now);
+    let up = pcm;
+    if (!muted) {
+      // Level control (daemon/agc.js): learns only from the user's own speech
+      // on a settled stream (not while the assistant is audible).
+      const live = !!this.session?.ready;
+      const learn = settled && live && now >= this.lastAudibleAt;
+      const a = this.agc.process(pcm, { learn });
+      if (live) up = a.pcm;
+      if (a.speech && learn && now - this.localSpeechAt >= LOCAL_SPEECH_EVERY_MS) {
+        this.localSpeechAt = now;
+        v.noteLocalSpeech?.();
+      }
+      if (a.utterance) this.onUtterance(a.utterance);
+    }
+    if (this.session?.ready) this.pacer.push(up);
     const needLevel = !muted && (this.session?.ready || this.echoTest || v.state === "sleeping" || this.wake?.capturing);
     const m = needLevel ? framePeakRms(pcm) : null;
-    if (this.wake && (v.state === "sleeping" || this.wake.capturing)) this.feedWake(pcm, muted);
-    else if (!muted) this.feedFloor(pcm);
+    if (this.wake && (v.state === "sleeping" || this.wake.capturing)) {
+      // The pre-roll and the detector take only the settled stream; a clip in
+      // progress keeps recording through a rebuild (its words are in it).
+      if (settled || this.wake.capturing) this.feedWake(pcm, muted);
+    } else if (!muted && settled) this.feedFloor(pcm);
     if (this.echoTest) this.echoTest.mic.push(m ? m.pow : 0);
     if (this.session?.ready) {
       const voiceLevel = now < this.lastAudibleAt ? 1 : 0;
@@ -319,15 +366,21 @@ export class NativeController {
         const dev = (d) => (d && typeof d === "object" ? { name: truncate(String(d.name ?? ""), 80), bluetooth: d.bluetooth === true, headphones: d.headphones === true } : null);
         const before = this.micKey();
         this.route = { mode: truncate(String(msg.mode ?? ""), 16), input: dev(msg.input), output: dev(msg.output), echo_cancellation: truncate(String(msg.echo_cancellation ?? ""), 16) };
-        this.log.info("native.route", this.route);
+        // Why the app rebuilt (0.4.3+): e.g. "sleeping,default_changed" when the route followed the system default.
+        const reason = typeof msg.reason === "string" && msg.reason ? truncate(msg.reason, 80) : null;
+        this.log.info("native.route", reason ? { ...this.route, reason } : this.route);
         // A different mic: not heard on it yet; re-arm the checks if live (as the page does).
         // The app rebuilt its capture for the new route: frames queued from before are stale.
         this.pacer.resync();
+        this.agc.resetStream();
         if (this.micKey() !== before) {
           this.floor.reset(); // another device, another floor
           this.hearing.reset();
           if (this.session?.ready) this.hearing.start(this.clock.now(), this.micKey());
+          const p = this.profiles.get(this.micKey());
+          this.agc.setDevice({ speechDb: p?.speech_db ?? null, floorDb: p?.floor_db ?? null });
         }
+        this.beginSettle();
         break;
       }
       case "played":
@@ -363,7 +416,7 @@ export class NativeController {
     const now = this.clock.now();
     if (now - this.statsLoggedAt >= STATS_LOG_MS) {
       this.statsLoggedAt = now;
-      this.log.info("native.audio", { ...this.stats, rtt_ms: this.rttMs, ...this.pacer.stats(), speaker_frames: this.counters.speaker_frames, speaker_dropped: this.counters.speaker_dropped });
+      this.log.info("native.audio", { ...this.stats, rtt_ms: this.rttMs, ...this.pacer.stats(), speaker_frames: this.counters.speaker_frames, speaker_dropped: this.counters.speaker_dropped, ...this.agcStatus() });
     }
   }
 
@@ -459,18 +512,72 @@ export class NativeController {
     }
   }
 
+  // ---- uplink level and calibration (daemon/agc.js) ------------------------------------------
+  /** A route message: the capture was rebuilt; wait for its stream to settle. */
+  beginSettle() {
+    const bt = this.route?.input?.bluetooth === true;
+    // A detector armed on the old stream (sleep starts before the app's
+    // listen-only rebuild) is re-armed on the new one once it settles, so its
+    // floor warm-up and pre-roll never mix the two.
+    const rearm = !!this.wake && !this.wake.capturing;
+    if (rearm) this.wake = null;
+    this.settle = { done: false, at: this.clock.now(), audioAt: null, ms: bt ? BT_SETTLE_MS : SETTLE_MS, rearm: rearm || !!this.settle?.rearm };
+  }
+
+  /** True once the current route's stream carries real audio for the settle time. */
+  checkSettled(pcm, muted, now) {
+    const s = this.settle;
+    if (s.done) return true;
+    if (!muted && s.audioAt === null) {
+      for (let i = 0; i < pcm.length; i += 2) if (pcm[i] !== 0 || pcm[i + 1] !== 0) { s.audioAt = now; break; }
+    }
+    if ((s.audioAt !== null && now - s.audioAt >= s.ms) || now - s.at >= SETTLE_GIVE_UP_MS) {
+      s.done = true;
+      this.log.info("native.settled", { input: this.micKey(), bluetooth: this.route?.input?.bluetooth === true, ms: now - s.at, audio: s.audioAt !== null });
+      const v = this.voice;
+      if (s.rearm && !this.wake && v.state === "sleeping") {
+        const cfg = v.pageStatus?.().wake;
+        if (cfg?.enabled) this.armWake(cfg);
+      }
+      s.rearm = false;
+    }
+    return s.done;
+  }
+
+  /** An utterance of the user's heard on the current mic while live: learn its level. */
+  onUtterance(u) {
+    const name = this.micKey();
+    const p = this.profiles.learn(name, u, this.agc.floorDb);
+    if (!p) return;
+    this.profiles.flush();
+    if (p.utterances <= 5 || p.utterances % 10 === 0) {
+      this.log.info("mic.calibrate", {
+        input: name, utterance_db: u.speechDb, utterance_ms: u.ms, speech_db: p.speech_db, floor_db: p.floor_db,
+        utterances: p.utterances, calibrated: p.calibrated, gain_db: Math.round(this.agc.gainDb * 10) / 10,
+      });
+    }
+  }
+
   // ---- parity monitors (§4.5) ---------------------------------------------------------------
   armWake(cfg) {
     // Profile "native": the app's raw mic is analysed high-passed, with presets
     // calibrated for it, from the floor measured on this device (web/wake.js
     // SENSITIVITY_NATIVE). The uplink audio is never altered.
+    // A calibrated device (5+ utterances learned while live) sets the level
+    // bar from the user's own speech on it (web/wake.js CALIBRATED_BELOW_DB);
+    // until then the fixed native presets apply.
     const floorDb = this.floor.floorDb;
+    const prof = this.profiles.get(this.micKey());
+    const speechDb = prof?.calibrated ? prof.speech_db : null;
     this.wake = {
-      vad: createVad({ sampleRate: SAMPLE_RATE, sensitivity: cfg.sensitivity, boostDb: cfg.boost_db, profile: "native", floorDb }),
+      vad: createVad({ sampleRate: SAMPLE_RATE, sensitivity: cfg.sensitivity, boostDb: cfg.boost_db, profile: "native", floorDb, speechDb }),
       rec: createClipRecorder({ sampleRate: SAMPLE_RATE }),
       acc: new Float32Array(VAD_FRAME), accN: 0, capturing: false, sensitivity: cfg.sensitivity, near: 0,
     };
-    this.log.info("wake.listen", { src: "app", sensitivity: cfg.sensitivity, boost_db: cfg.boost_db, profile: "native", floor_db: floorDb === null ? null : Math.round(floorDb * 10) / 10 });
+    this.log.info("wake.listen", {
+      src: "app", sensitivity: cfg.sensitivity, boost_db: cfg.boost_db, profile: "native", floor_db: floorDb === null ? null : Math.round(floorDb * 10) / 10,
+      calibrated: speechDb !== null, speech_db: prof ? prof.speech_db : null, min_db: Math.round(this.wake.vad.minDb * 10) / 10, utterances: prof ? prof.utterances : 0,
+    });
   }
 
   /** The device floor while not listening for a wake (live, connecting): 512-sample frames. */
@@ -496,10 +603,11 @@ export class NativeController {
       if (w.capturing || muted) continue;
       const r = w.vad.process(frame);
       if (r.near) {
-        // Almost woke: why not, so the thresholds can be tuned from the log (SOTTO_DEBUG=1).
+        // Almost woke: why not, so the thresholds can be tuned from the log
+        // (the first few per sleep at info, the rest with SOTTO_DEBUG=1).
         w.near++;
         this.counters.wake_near++;
-        this.log.debug("wake.near", { src: "app", sensitivity: w.sensitivity, ...r.near });
+        this.log[w.near <= NEAR_INFO_PER_SLEEP ? "info" : "debug"]("wake.near", { src: "app", sensitivity: w.sensitivity, ...r.near });
       }
       if (r.trigger) this.onWakeTrigger(r);
     }
@@ -596,8 +704,13 @@ export class NativeController {
   status() {
     return {
       connected: !!this.link, client: this.link?.clientInfo || null, rtt_ms: this.rttMs, route: this.route, stats: this.stats,
-      pacer: this.pacer.stats(), counters: { ...this.counters },
+      pacer: this.pacer.stats(), counters: { ...this.counters }, agc: this.agcStatus(),
     };
+  }
+
+  agcStatus() {
+    const r = (x) => (Number.isFinite(x) ? Math.round(x * 10) / 10 : null);
+    return { gain_db: r(this.agc.gainDb), speech_db: r(this.agc.speechDb), floor_db: r(this.agc.floorDb) };
   }
 
   dispose() {

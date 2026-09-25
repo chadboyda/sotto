@@ -197,14 +197,19 @@ describe("hook.sh owner path", () => {
       };
       const evs = Object.keys(inputs);
       const times = [];
+      const bare = [];
       for (let i = 0; i < 12; i++) {
         const ev = evs[i % evs.length];
         const r = await run(HOOK, { args: [ev], env, input: inputs[ev] });
         assert.deepEqual([r.code, r.stdout, r.stderr], [0, "", ""], ev);
         times.push(r.ms);
+        // The load allowance is sampled right next to each run: npm test runs
+        // files in parallel, and one baseline taken after the loop missed the
+        // CPU-heavy moments the runs saw (median 269 ms vs a 268 ms bound).
+        bare.push(spawnBaseline().bash);
       }
       // 200 ms plus a load allowance (10 bare bash spawns; ~30 ms unloaded).
-      const bound = 200 + 10 * spawnBaseline().bash;
+      const bound = 200 + 10 * median(bare);
       assert.ok(median(times) < bound, `median ${median(times).toFixed(1)} ms (bound ${bound.toFixed(0)} ms)`);
       assert.ok(existsSync(join(D, "pending-context")), "only a main-thread PreToolUse claims the flag");
     } finally {

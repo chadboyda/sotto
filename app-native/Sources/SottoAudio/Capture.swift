@@ -140,6 +140,11 @@ final class CaptureRing: @unchecked Sendable {
 }
 
 /// Owns one route's capture chain on a serial queue drained every 10 ms.
+///
+/// Hand-over (RealAudioIO.rebuild): a new pipeline can take over from a running one
+/// without a gap. Both drain on the same serial queue; the new one calls `onLive` (on
+/// that queue) once its stream carries real audio, or after `liveAfterSeconds` of any
+/// audio, and the caller `retire()`s the old one there, so no frame is emitted twice.
 final class CapturePipeline: @unchecked Sendable {
     let ring: CaptureRing
     var rate: Double { ring.rate }
@@ -148,6 +153,12 @@ final class CapturePipeline: @unchecked Sendable {
     private let emitter: MicFrameEmitter
     private let queue: DispatchQueue
     private var timer: DispatchSourceTimer?
+    /// Capture queue only.
+    var onLive: (() -> Void)?
+    private var liveSent = false
+    private var seenSamples = 0
+    private var retired = false
+    static let liveAfterSeconds = 1.5
 
     init(rate: Double, emitter: MicFrameEmitter, queue: DispatchQueue, drops: AtomicInt = AtomicInt()) {
         ring = CaptureRing(rate: rate, drops: drops)
@@ -169,8 +180,21 @@ final class CapturePipeline: @unchecked Sendable {
         timer = nil
     }
 
+    /// Capture queue only: stop emitting (a newer pipeline took over).
+    func retire() { retired = true }
+
     private func drain() {
         guard let (floats, host) = ring.read() else { return }
+        if retired { return }
+        if !liveSent {
+            seenSamples += floats.count
+            if floats.contains(where: { $0 != 0 }) || Double(seenSamples) >= rate * CapturePipeline.liveAfterSeconds {
+                liveSent = true
+                onLive?()
+            } else if onLive != nil {
+                return // taking over: the old chain still speaks for the mic until this one is live
+            }
+        }
         let out = floats.withUnsafeBufferPointer { resampler.process($0) }
         guard !out.isEmpty else { return }
         for f in framer.append(out, hostNsOfFirst: host) { emitter.emit(f.samples, hostNs: f.hostNs) }

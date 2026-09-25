@@ -52,6 +52,14 @@ export const SENSITIVITY_NATIVE = Object.freeze({
   medium: Object.freeze({ snrDb: 7, minDb: -62, minSpeechMs: 300 }),
   high: Object.freeze({ snrDb: 5, minDb: -68, minSpeechMs: 240 }),
 });
+/**
+ * Native profile with a calibrated device (daemon/agc.js learned the user's
+ * median speech level on this input while live): a frame counts as loud
+ * enough this many dB below that level, per sensitivity, instead of the fixed
+ * `minDb`. Soft speech on a quiet mic (AirPods in call mode: about -31 dBFS
+ * conversational, -46 to -51 soft) and a loud one are judged alike.
+ */
+export const CALIBRATED_BELOW_DB = Object.freeze({ low: 10, medium: 15, high: 20 });
 /** The native profile's analysis high-pass (4th-order Butterworth). */
 export const NATIVE_HPF_HZ = 150;
 /**
@@ -319,10 +327,14 @@ export function createFloorTracker({ sampleRate = 24000, windowMs = 8000, hz = N
  * `flatness` or `band` (not voice-like), `short` (voiced, but under minSpeechMs),
  * `density` or `modulation` (a long run that failed the speech-shape checks).
  */
-export function createVad({ sampleRate = 48000, sensitivity = "medium", boostDb = 0, floorDb = null, profile = "page" } = {}) {
+export function createVad({ sampleRate = 48000, sensitivity = "medium", boostDb = 0, floorDb = null, profile = "page", speechDb = null } = {}) {
   const native = profile === "native";
   const fallback = native ? SENSITIVITY_NATIVE.medium : SENSITIVITY.medium;
   let preset = sensitivityPreset(sensitivity, profile) || fallback;
+  let sensName = sensitivity;
+  // Calibrated (native only): the level bar follows the user's speech on this device.
+  const cal = native && Number.isFinite(speechDb) ? speechDb : null;
+  const minDb = () => (cal !== null ? cal - (CALIBRATED_BELOW_DB[sensName] ?? CALIBRATED_BELOW_DB.medium) : preset.minDb);
   let boost = Number(boostDb) || 0;
   const clampFloor = (v) => Math.min(FLOOR_MAX_DB, Math.max(FLOOR_MIN_DB, v));
   const seed = Number.isFinite(floorDb) ? clampFloor(floorDb) : null;
@@ -350,7 +362,7 @@ export function createVad({ sampleRate = 48000, sensitivity = "medium", boostDb 
     return {
       ms: Math.round(ms), voiced_ms: Math.round(c.voicedMs), level_db: Math.round(c.maxDb * 10) / 10,
       snr_db: Math.round(c.maxSnr * 10) / 10, floor_db: Math.round(floor * 10) / 10,
-      bar_db: preset.snrDb + boost, reason: reason || "snr",
+      bar_db: preset.snrDb + boost, min_db: Math.round(minDb() * 10) / 10, reason: reason || "snr",
     };
   }
 
@@ -364,8 +376,15 @@ export function createVad({ sampleRate = 48000, sensitivity = "medium", boostDb 
     get profile() {
       return native ? "native" : "page";
     },
+    get minDb() {
+      return minDb();
+    },
+    get calibrated() {
+      return cal !== null;
+    },
     setSensitivity(name) {
       preset = sensitivityPreset(name, profile) || fallback;
+      sensName = name;
     },
     setBoost(v) {
       boost = Math.max(0, Number(v) || 0);
@@ -397,7 +416,7 @@ export function createVad({ sampleRate = 48000, sensitivity = "medium", boostDb 
       } else if (floor === null && !zero) floor = clampFloor(f.db);
       const snr = floor === null ? 0 : f.db - floor;
       const bar = preset.snrDb + boost;
-      const loudEnough = f.db >= preset.minDb;
+      const loudEnough = f.db >= minDb();
       const aboveBar = snr >= bar;
       const voiceLike = f.bandRatio >= MIN_BAND_RATIO && f.periodicity >= MIN_PERIODICITY && f.flatness <= MAX_FLATNESS;
       const voiced = !zero && floor !== null && loudEnough && aboveBar && voiceLike;
@@ -440,7 +459,7 @@ export function createVad({ sampleRate = 48000, sensitivity = "medium", boostDb 
 
       // Near-miss bookkeeping (log only): frames close to the bars form a candidate.
       let near = null;
-      const close = !zero && floor !== null && snr >= bar - NEAR_MARGIN_DB && f.db >= preset.minDb - NEAR_MARGIN_DB;
+      const close = !zero && floor !== null && snr >= bar - NEAR_MARGIN_DB && f.db >= minDb() - NEAR_MARGIN_DB;
       if (close || voiced) {
         if (!cand) cand = { start, last: start, frames: 0, voicedMs: 0, maxDb: f.db, maxSnr: snr, fails: {}, runFail: null, fired: false };
         cand.last = start + frame.length;

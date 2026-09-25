@@ -687,9 +687,9 @@ async function openMic(deviceId) {
 }
 
 /**
- * Open the mic per §7.3 step 1 / §7.5 "Default mic". Device labels (needed for the
- * Bluetooth -> built-in rule) only exist after permission, so on a first run we open
- * the default device, re-enumerate, and switch if the rule picks another device.
+ * Open the mic per §7.3 step 1 / §7.5 "Default mic" (the chosen mic, else the system
+ * default by its id). Device ids only exist after permission, so on a first run we open
+ * without one, re-enumerate, and reopen on the device the rule picks.
  */
 async function acquireMic() {
   if (!navigator.mediaDevices?.getUserMedia) {
@@ -788,6 +788,22 @@ async function refreshDevices() {
   if (devPick.kind) closeDevicePicker();
   fillDeviceSelects(devices);
   await applySink();
+  // Sleeping: the wake listener holds a mic too. When the macOS default input
+  // changes (headphones taken off, a mic plugged in) or the held device is
+  // gone, listen on the new choice at once instead of the old or dead device.
+  const held = wake.stream?.getAudioTracks()[0];
+  if (!S.pc && held && !wake.triggered) {
+    const pick = lib.pickInputDevice(devices, store.get(KEY_INPUT));
+    const want = lib.stripDefaultPrefix(pick.label);
+    const heldId = held.getSettings?.().deviceId;
+    const gone = held.readyState === "ended" || (heldId && heldId !== "default" && !devices.some((d) => d.kind === "audioinput" && d.deviceId === heldId));
+    if (gone || (want && want !== lib.stripDefaultPrefix(held.label))) {
+      logRemote("info", `mic: default_changed while sleeping, listening on ${want || "the new default"} (was ${lib.stripDefaultPrefix(held.label) || "unknown"})`);
+      wake.release();
+      syncWake();
+    }
+    return;
+  }
   // If the device we are using disappeared (unplugged), move to the automatic choice.
   const track = S.mic?.getAudioTracks()[0];
   if (S.pc && track) {

@@ -140,11 +140,10 @@ export function resolveWant({ env = {}, preference } = {}) {
  *   mode   "app" | "chrome" | "default" | "none"
  *   build  start a background app install (missing or stale bundle)
  * `auto` and `app` pick the native app whenever it is ready on macOS. There
- * is no audio-route rule any more: the native app never opens a Bluetooth
- * input for capture (it records from a non-Bluetooth mic on headphones and
- * uses voice processing on speakers, docs/NATIVE.md §5.3), so a headset keeps
- * its high-quality profile. Chrome remains for other platforms, a missing or
- * broken app, and `chrome`/`default`.
+ * is no audio-route rule: the mic is the one the user chose, else the system
+ * default (a Bluetooth headset's included), in the app and on the page alike
+ * (docs/NATIVE.md §5.3, SPEC §7.5). Chrome remains for other platforms, a
+ * missing or broken app, and `chrome`/`default`.
  */
 export function chooseWindow({ want, platform, app, chromeExists, appBroken = false }) {
   const browser = (reason) => ({ mode: chromeExists ? "chrome" : "default", build: false, reason });

@@ -9,6 +9,8 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import * as wake from "../../web/wake.js";
+import { bluetoothMic, bluetoothSilence, pcmToFloat } from "../helpers/bt-audio.js";
+import { readWavPcm24k } from "../helpers/fake-native-app.js";
 
 const SR = 24000; // the native link's rate (daemon/native-proto.js)
 const F = 512; // daemon/native-session.js VAD_FRAME
@@ -225,7 +227,41 @@ test("typing, fans, hum and an abrupt steady tone never wake the native detector
   };
   for (const s of ["low", "medium", "high"]) {
     for (const [what, sig] of Object.entries(cases)) assert.equal(detect(sig, { sensitivity: s }).hit, null, `${what} woke on ${s}`);
+    // A calibrated quiet device (a headset at -50 dBFS) lowers the level bar, not the other gates.
+    for (const [what, sig] of Object.entries(cases)) assert.equal(detect(sig, { sensitivity: s, speechDb: -50 }).hit, null, `${what} woke on ${s}, calibrated`);
   }
+});
+
+/** A fixture as AirPods deliver it in call mode (8 kHz band, gated -80 dBFS floor), after 2 s of that idle signal. */
+const headset = (name, speechDb) => Float32Array.from(pcmToFloat(Buffer.concat([
+  bluetoothSilence(2000), bluetoothMic(readWavPcm24k(new URL(`../fixtures/${name}.wav`, import.meta.url).pathname), { speechDb }), bluetoothSilence(500),
+])));
+
+test("Bluetooth headset speech (8 kHz band, gated floor) at -55 to -45 dBFS wakes on medium, uncalibrated and calibrated", () => {
+  for (const name of FIXTURES) {
+    for (const lvl of [-55, -50, -45]) {
+      const sig = headset(name, lvl);
+      assert.ok(detect(sig, { sensitivity: "medium" }).hit !== null, `${name} at ${lvl} dBFS (fixed preset)`);
+      assert.ok(detect(sig, { sensitivity: "medium", speechDb: lvl }).hit !== null, `${name} at ${lvl} dBFS (calibrated at that level)`);
+    }
+  }
+});
+
+test("calibration follows the user's speech on the device: the level bar sits CALIBRATED_BELOW_DB under it", () => {
+  const vad = wake.createVad({ sampleRate: SR, profile: "native", sensitivity: "medium", speechDb: -31 });
+  assert.equal(vad.calibrated, true);
+  assert.equal(vad.minDb, -31 - wake.CALIBRATED_BELOW_DB.medium);
+  vad.setSensitivity("high");
+  assert.equal(vad.minDb, -31 - wake.CALIBRATED_BELOW_DB.high);
+  assert.equal(wake.createVad({ sampleRate: SR, profile: "native", sensitivity: "medium" }).minDb, wake.SENSITIVITY_NATIVE.medium.minDb, "uncalibrated: the fixed preset");
+  assert.equal(wake.createVad({ sampleRate: SR, profile: "page", sensitivity: "medium", speechDb: -31 }).calibrated, false, "the page profile is never calibrated");
+  // A loud device (speech at -31): distant talk 20 dB under the user stays out, the user wakes it.
+  let woke = 0;
+  for (const name of FIXTURES) {
+    assert.equal(detect(headset(name, -55), { sensitivity: "medium", speechDb: -31 }).hit, null, `${name}: -55 dBFS on a -31 dBFS device`);
+    if (detect(headset(name, -35), { sensitivity: "medium", speechDb: -31 }).hit !== null) woke++;
+  }
+  assert.equal(woke, FIXTURES.length);
 });
 
 test("false-wake boost still raises the bar on the native profile", () => {
@@ -239,7 +275,7 @@ test("near misses: quiet speech is reported once per candidate with the reason, 
   assert.equal(hit, null);
   assert.ok(near.length >= 1, "at least one near miss");
   for (const n of near) {
-    assert.deepEqual(Object.keys(n).sort(), ["bar_db", "floor_db", "level_db", "ms", "reason", "snr_db", "voiced_ms"]);
+    assert.deepEqual(Object.keys(n).sort(), ["bar_db", "floor_db", "level_db", "min_db", "ms", "reason", "snr_db", "voiced_ms"]);
     assert.ok(["snr", "level", "periodicity", "flatness", "band", "short", "density", "modulation"].includes(n.reason), n.reason);
     assert.ok(n.ms >= 120);
     assert.equal(n.bar_db, wake.SENSITIVITY_NATIVE.medium.snrDb);

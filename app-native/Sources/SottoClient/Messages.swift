@@ -351,8 +351,10 @@ public struct RouteMessage: Equatable, Sendable {
     public var input: Device?
     public var output: Device?
     public var echoCancellation: String
-    public init(mode: String, input: Device?, output: Device?, echoCancellation: String) {
-        self.mode = mode; self.input = input; self.output = output; self.echoCancellation = echoCancellation
+    /// Why this route was built (the plan's reason plus tags such as `default_changed`); optional on the wire.
+    public var reason: String?
+    public init(mode: String, input: Device?, output: Device?, echoCancellation: String, reason: String? = nil) {
+        self.mode = mode; self.input = input; self.output = output; self.echoCancellation = echoCancellation; self.reason = reason
     }
 }
 
@@ -425,6 +427,7 @@ public enum ClientMessage: Equatable, Sendable {
             }
             o = ["mode": .string(r.mode), "input": dev(r.input, headphones: false), "output": dev(r.output, headphones: true),
                  "echo_cancellation": .string(r.echoCancellation)]
+            if let reason = r.reason, !reason.isEmpty { o["reason"] = .string(reason) }
         case .audioStats(let s):
             o = ["playout_seq": .number(Double(s.playoutSeq)), "playout_host_ns": .number(Double(s.playoutHostNs)),
                  "buffer_ms": .number(s.bufferMs), "underruns": .number(Double(s.underruns)),
