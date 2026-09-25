@@ -65,7 +65,6 @@ public final class StateModel {
     public private(set) var claudeSaysAt: Date?
     public private(set) var claudeTool = ""
     public private(set) var summary: String?
-    public var summaryExpanded = false
     public private(set) var agents = 0
     public private(set) var workSince: Date?
     public private(set) var activityLine: ViewText.ActivityLine?
@@ -137,8 +136,12 @@ public final class StateModel {
     /// lib.milestoneStars' state (ms since 1970), kept as the page keeps it.
     @ObservationIgnored private var starState = ViewText.Stars()
     public private(set) var milestones: [Milestone] = []
-    /// Claude's own words on the page: the latest message and up to two before it.
-    public private(set) var pageMessages: [String] = []
+    /// Claude's page (SPEC-DEVIATIONS "scrolling page"): this turn's messages and the recent
+    /// ones before it (ViewText.pushPage), in a fixed region that scrolls.
+    public private(set) var page = ViewText.Page()
+    /// Bumped at each turn_start: the page follows the latest words again.
+    public private(set) var pageTurnSeq = 0
+    public var pageMessages: [String] { page.msgs }
     @ObservationIgnored private var attentionWas = false
     /// Bumped to make time-based views re-read the clock once (the end of a one-shot).
     public private(set) var redrawTick = 0
@@ -430,7 +433,7 @@ public final class StateModel {
             if let code = m.string("code") { dismissBanner(key: code) }
         case "result_pending":
             pendingResult = nonEmpty(m.string("text"))
-            if let t = pendingResult { summary = ViewText.truncate(t, 420) }
+            if let t = pendingResult { summary = ViewText.truncate(t, 420); pushPage(t) }
         case "wake_heard":
             if let t = nonEmpty(m.string("text")) {
                 addCaption(role: "user", text: t, start: 0, end: 1, session: liveSessionId)
@@ -493,11 +496,11 @@ public final class StateModel {
         activityLine = v
         if kind == "turn_start" || kind == "turn_end" { claudeSays = ""; claudeSaysAt = nil; claudeTool = "" }
         if kind == "text" { claudeSays = m.string("text") ?? ""; claudeSaysAt = now() }
-        if kind == "turn_start" { pageMessages = []; finishedAt = nil }
+        if kind == "turn_start" { page = ViewText.pageTurn(page); pageTurnSeq &+= 1; finishedAt = nil }
         if kind == "text" { pushPage(claudeSays) }
         if kind == "tool" { claudeTool = m.string("text") ?? "" }
         if let b = v.busy { setBusy(b) }
-        if let s = v.summary { summary = s; summaryExpanded = false }
+        if let s = v.summary { summary = s }
         claudeKind = kind
         claudeText = m.string("text") ?? ""
         claudeAgent = kind == "permission" && m.bool("agent") == true
@@ -571,16 +574,10 @@ public final class StateModel {
         if born { announce("Claude: step done.") }
     }
 
-    /// Claude's page: the latest message and two before it (never a tool label).
+    /// Claude's page: its own words (never a tool label).
     private func pushPage(_ text: String) {
-        let t = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !t.isEmpty else { return }
-        if let last = pageMessages.last, ViewText.stripMarkdown(last) == ViewText.stripMarkdown(t) || ViewText.stripMarkdown(t).hasPrefix(ViewText.stripMarkdown(last)) {
-            pageMessages[pageMessages.count - 1] = t
-            return
-        }
-        pageMessages.append(t)
-        if pageMessages.count > 3 { pageMessages.removeFirst(pageMessages.count - 3) }
+        let next = ViewText.pushPage(page, text)
+        if next != page { page = next }
     }
 
     private func setBusy(_ busy: Bool) {
@@ -780,7 +777,7 @@ public final class StateModel {
         claudeSaysAt = nil; claudeTool = ""; summary = nil; agents = 0; workSince = nil; banners = []; pendingResult = nil
         floor = nil; wordHold = WordHold(); floorTracker = FloorTracker(); usageShown = nil; todayShown = nil
         attentionAt = nil; attentionClearedAt = nil; finishedAt = nil; wokeAt = nil; personaSwitch = nil; milestones = []
-        starState = ViewText.Stars(); pageMessages = []; attentionWas = false
+        starState = ViewText.Stars(); page = ViewText.Page(); attentionWas = false
     }
 
     /// Canned event clocks for snapshots (a still frame at any instant of a transition).

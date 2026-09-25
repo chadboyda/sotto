@@ -152,13 +152,15 @@
           <span class="claude-time" id="claude-time" hidden><svg aria-hidden="true"><use href="#i-timer"/></svg><span id="claude-time-value"></span></span>
         </div>
         <p class="claude-request" id="claude-request" hidden></p>
-        <div class="claude-page" id="claude-page">
-          <div class="claude-flow" id="claude-flow">
-            <div class="claude-history serif" id="claude-history"></div>
-            <div class="claude-step serif" id="claude-step" hidden></div>
-            <div class="claude-summary serif" id="summary" hidden></div>
-            <button type="button" class="more" id="more-btn" aria-expanded="false" aria-controls="summary" hidden>More</button>
+        <!-- The page: a fixed region that scrolls (panel.js follow). It follows the newest
+             words; scrolling up stops that and shows "Jump to latest". The scroller is a
+             thin thumb that shows while scrolling or near the right edge, then fades. -->
+        <div class="claude-page" id="claude-page" data-above="false" data-below="false">
+          <div class="claude-scroll" id="claude-scroll" tabindex="0" role="region" aria-label="Claude's messages">
+            <div class="claude-flow serif" id="claude-flow"></div>
           </div>
+          <div class="claude-thumb" id="claude-thumb" aria-hidden="true"></div>
+          <button type="button" class="jump" id="claude-jump" hidden>Jump to latest<svg aria-hidden="true" viewBox="0 0 10 10"><path d="M5 2v6M2.5 5.5 5 8l2.5-2.5"/></svg></button>
           <!-- The question: each part rises into place (styles.css), the zone never moves. -->
           <div class="claude-ask" id="claude-ask" hidden>
             <pre class="claude-command" id="claude-command" hidden></pre>

@@ -734,3 +734,36 @@ test("milestone stars: one per 20 s of Claude's own words, 12 at most, where the
   assert.equal(st.stars.length, 12);
   assert.equal(st.stars[11].born, 430_000);
 });
+
+test("Claude's page keeps this turn and the recent ones; follow rules (SPEC-DEVIATIONS scrolling page)", () => {
+  let p = { msgs: [], turnStart: 0 };
+  p = lib.pushPage(p, "I read the spec.");
+  p = lib.pushPage(p, "I read the spec. Now the helpers.");
+  assert.deepEqual(p.msgs, ["I read the spec. Now the helpers."], "a growing message replaces itself");
+  p = lib.pushPage(p, "  ");
+  assert.equal(p.msgs.length, 1, "blank text is ignored");
+  p = lib.pushPage(p, "Found it.");
+  assert.deepEqual(lib.pageEntries(p).map((e) => e.tone), ["turn", "latest"]);
+  p = lib.pageTurn(p);
+  assert.deepEqual(lib.pageEntries(p).map((e) => e.tone), ["past", "past"], "a new turn: nothing is the latest yet");
+  p = lib.pushPage(p, "Found it. Again.");
+  assert.equal(p.msgs.length, 3, "a new turn never extends the last turn's message");
+  for (let i = 0; i < 20; i++) p = lib.pushPage(p, `Step ${i}`);
+  assert.equal(p.msgs.length, lib.PAGE_MAX);
+  assert.equal(p.turnStart, 0, "the turn start moves with the oldest messages dropped");
+  assert.equal(lib.pageEntries(p).at(-1).tone, "latest");
+
+  assert.equal(lib.followTarget({ scrollHeight: 1000, clientHeight: 300 }), 700);
+  assert.equal(lib.followTarget({ scrollHeight: 200, clientHeight: 300 }), 0);
+  assert.equal(lib.followTarget({ scrollHeight: 1000, clientHeight: 300, latestTop: 420 }), 420, "a long finished reply reads from its start");
+  assert.equal(lib.followTarget({ scrollHeight: 1000, clientHeight: 300, latestTop: 900 }), 700);
+  assert.equal(lib.isFollowing(700, 700), true);
+  assert.equal(lib.isFollowing(680, 700), true, "within the slack");
+  assert.equal(lib.isFollowing(600, 700), false);
+  assert.equal(lib.isFollowing(800, 700), true, "reading below the start of a long reply still follows");
+
+  assert.equal(lib.scrollThumb({ scrollTop: 0, scrollHeight: 300, clientHeight: 300 }), null);
+  assert.deepEqual(lib.scrollThumb({ scrollTop: 0, scrollHeight: 600, clientHeight: 300 }), { top: 6, height: 144 });
+  assert.deepEqual(lib.scrollThumb({ scrollTop: 300, scrollHeight: 600, clientHeight: 300 }), { top: 150, height: 144 });
+  assert.equal(lib.scrollThumb({ scrollTop: 0, scrollHeight: 100_000, clientHeight: 300 }).height, 24, "never thinner than 24 px");
+});

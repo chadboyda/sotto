@@ -27,10 +27,11 @@ export function paintHeadline(word, h, { fade = true } = {}) {
 
 /**
  * Claude's zone: the head row (moon phase, "Claude · Working", the time), the request
- * line, and the page (Claude's own words as rendered markdown) or the question.
+ * line, and the page (Claude's messages as rendered markdown, in a fixed region that
+ * scrolls) or the question.
  * @param {object} el  the elements (see app.js `el`)
- * @param {{m:object, head:object, history:string[], says:string, summary:string|null,
- *          expanded:boolean, time:string|null, requestLine:{text:string,tone:string}|null}} s
+ * @param {{m:object, head:object, entries:{text:string,tone:string}[], says:string,
+ *          time:string|null, requestLine:{text:string,tone:string}|null, newTurn?:boolean}} s
  */
 export function paintClaude(el, s) {
   const { m, head } = s;
@@ -48,18 +49,17 @@ export function paintClaude(el, s) {
   el.claudeRequest.dataset.tone = req?.tone || "";
   setText(el.claudeRequest, req?.text || "");
 
-  // The page. While an approval waits, the working page stays exactly as it was (CSS
-  // dims it while the moon crosses) and the question takes its place.
+  // The page: every message kept (this turn's and the recent ones), newest last. While
+  // an approval waits, the page stays exactly as it was (CSS dims it while the moon
+  // crosses) and the question takes its place.
   const approval = m.kind === "approval";
   const working = m.kind === "working";
-  const finished = m.kind === "finished";
-  setHtml(el.claudeHistory, (working || approval || finished ? s.history : []).map(msg).join(""));
-  const stepMd = working || approval ? s.says || "" : "";
-  el.claudeStep.hidden = !(working || approval) || (!stepMd && !working);
-  setHtml(el.claudeStep, stepMd ? msg(stepMd) : working ? `<div class="msg"><p class="md-omitted">Thinking</p></div>` : "");
-  el.summary.hidden = !finished;
-  setHtml(el.summary, finished ? lib.renderMarkdown(s.summary || "", { code: s.expanded ? "block" : "omit" }) : "");
-  el.claude.dataset.expanded = String(!!s.expanded && finished);
+  const entries = s.entries || [];
+  const thisTurn = entries.some((e) => e.tone !== "past");
+  const thinking = working && !thisTurn ? `<div class="msg" data-tone="latest"><p class="md-omitted">Thinking</p></div>` : "";
+  const html = entries.map((e) => `<div class="msg" data-tone="${e.tone}">${lib.renderMarkdown(e.text, { code: "block" })}</div>`).join("") + thinking;
+  const changed = el.claudeFlow.dataset.html !== html;
+  setHtml(el.claudeFlow, html);
 
   el.claudeAsk.hidden = !approval;
   el.claudeCommand.hidden = !(approval && m.command);
@@ -67,45 +67,129 @@ export function paintClaude(el, s) {
   el.claudeWhy.hidden = !(approval && s.says);
   setHtml(el.claudeWhy, approval && s.says ? lib.renderMarkdown(s.says, { code: "omit" }) : "");
   el.claudeNote.hidden = !approval;
-  fitPage(el, m.kind, !!s.expanded);
+
+  const f = pageFollow(el);
+  if (s.newTurn) f.follow();
+  f.update({ changed, finished: m.kind === "finished" });
 }
 
 /**
- * The page is a fixed box: when the flow is taller, it slides up under a top fade so
- * the newest words stay in view (a finished summary shows from its first line), and
- * "More" opens the rest in place. Never a scroller over live text.
+ * The scrolling page's behaviour (the native ClaudeScroll does the same): it follows
+ * the latest words like a chat; the reader scrolling up stops that and shows "Jump to
+ * latest"; scrolling back down to the latest (or the pill) resumes it. The thumb is
+ * invisible at rest and shows while the reader scrolls or points near the right edge,
+ * fading out 1 s later. Created once per page; returns the controller.
  */
-export function fitPage(el, kind, expanded) {
-  const page = el.claudePage;
-  const flow = el.claudeFlow;
-  if (!page.offsetParent) return;
-  const finished = kind === "finished";
-  if (expanded && finished) {
-    flow.style.translate = "";
-    page.dataset.clipped = "false";
-    el.moreBtn.hidden = false;
-    setText(el.moreBtn, "Less");
-    el.moreBtn.setAttribute("aria-expanded", "true");
-    return;
-  }
-  el.moreBtn.hidden = true;
-  const P = page.clientHeight;
-  let H = flow.offsetHeight;
-  let shift = Math.max(0, H - P);
-  if (finished) {
-    shift = Math.max(0, Math.min(shift, el.summary.offsetTop));
-    // More: the summary runs past the page, or a code block is folded away.
-    const more = H - shift > P + 1 || !!el.summary.querySelector(".md-omitted");
-    if (more) {
-      el.moreBtn.hidden = false;
-      setText(el.moreBtn, "More");
-      el.moreBtn.setAttribute("aria-expanded", "false");
-      H = flow.offsetHeight;
-      shift = Math.max(0, Math.min(Math.max(0, H - P), el.summary.offsetTop));
+/** The page's edge fade (styles.css .claude-scroll --fade-top). */
+const FADE = 28;
+
+export function pageFollow(el) {
+  if (el.follow) return el.follow;
+  const sc = el.claudeScroll, page = el.claudePage, thumb = el.claudeThumb, jump = el.claudeJump, flow = el.claudeFlow;
+  const reduce = () => typeof matchMedia === "function" && matchMedia("(prefers-reduced-motion: reduce)").matches;
+  const st = { following: true, finished: false, auto: false, jumping: false, near: false, drag: null, hideTimer: null };
+  const metrics = () => ({ scrollTop: sc.scrollTop, scrollHeight: sc.scrollHeight, clientHeight: sc.clientHeight });
+  // A finished reply taller than the page reads from its first line, just under the top
+  // fade (the fade falls on the message before it).
+  const latestTop = () => {
+    if (!st.finished) return null;
+    const last = flow.lastElementChild;
+    return last && last.offsetHeight > sc.clientHeight ? Math.max(0, last.offsetTop - FADE) : null;
+  };
+  const target = () => lib.followTarget({ ...metrics(), latestTop: latestTop() });
+  const setTop = (top) => {
+    if (Math.abs(sc.scrollTop - top) < 0.5) return;
+    st.auto = true;
+    sc.scrollTop = top;
+    requestAnimationFrame(() => (st.auto = false));
+  };
+  const hideSoon = () => {
+    clearTimeout(st.hideTimer);
+    st.hideTimer = setTimeout(() => {
+      if (st.near || st.drag) return;
+      thumb.dataset.show = "false";
+    }, 1000);
+  };
+  const show = () => {
+    if (!lib.scrollThumb(metrics())) return;
+    thumb.dataset.show = "true";
+    hideSoon();
+  };
+  const chrome = () => {
+    const mt = metrics();
+    const max = Math.max(0, mt.scrollHeight - mt.clientHeight);
+    page.dataset.above = String(mt.scrollTop > 1);
+    page.dataset.below = String(mt.scrollTop < max - 1);
+    jump.hidden = st.following || max <= 1;
+    const r = lib.scrollThumb(mt);
+    if (!r) { thumb.dataset.show = "false"; thumb.style.height = "0px"; return; }
+    thumb.style.height = `${r.height}px`;
+    thumb.style.translate = `0 ${r.top}px`;
+  };
+  sc.addEventListener("scroll", () => {
+    if (!st.auto) {
+      const on = lib.isFollowing(sc.scrollTop, target());
+      if (st.jumping) { if (on) st.jumping = false; }
+      else st.following = on;
+      if (!st.jumping) show();
     }
-  }
-  flow.style.translate = shift ? `0 ${-Math.round(shift)}px` : "";
-  page.dataset.clipped = String(shift > 0);
+    chrome();
+  }, { passive: true });
+  // A wheel or trackpad flick at an end scrolls nothing but still shows where you are.
+  sc.addEventListener("wheel", () => { st.jumping = false; show(); }, { passive: true });
+  page.addEventListener("pointermove", (e) => {
+    const r = page.getBoundingClientRect();
+    const near = e.clientX >= r.right - 16;
+    if (near && !st.near) { st.near = true; show(); }
+    else if (!near && st.near) { st.near = false; hideSoon(); }
+  });
+  page.addEventListener("pointerleave", () => { st.near = false; hideSoon(); });
+  thumb.addEventListener("pointerdown", (e) => {
+    const mt = metrics(), r = lib.scrollThumb(mt);
+    if (!r) return;
+    e.preventDefault();
+    thumb.setPointerCapture?.(e.pointerId);
+    st.drag = { y: e.clientY, top: sc.scrollTop, ratio: (mt.scrollHeight - mt.clientHeight) / Math.max(1, mt.clientHeight - 12 - r.height) };
+    thumb.dataset.drag = "true";
+  });
+  thumb.addEventListener("pointermove", (e) => {
+    if (st.drag) sc.scrollTop = st.drag.top + (e.clientY - st.drag.y) * st.drag.ratio;
+  });
+  const endDrag = () => { if (!st.drag) return; st.drag = null; thumb.dataset.drag = "false"; hideSoon(); };
+  thumb.addEventListener("pointerup", endDrag);
+  thumb.addEventListener("pointercancel", endDrag);
+  jump.addEventListener("click", () => ctl.jump());
+
+  const ctl = {
+    get following() { return st.following; },
+    /** Follow the latest again (a new turn, or "Jump to latest"). */
+    follow() { st.following = true; st.jumping = false; },
+    jump() {
+      st.following = true;
+      const t = target();
+      st.jumping = !reduce() && Math.abs(sc.scrollTop - t) >= 1;
+      if (st.jumping && typeof sc.scrollTo === "function") sc.scrollTo({ top: t, behavior: "smooth" });
+      else setTop(t);
+      chrome();
+      el.claudeScroll.focus?.({ preventScroll: true });
+    },
+    /** After a paint: new words scroll into view while following; otherwise the reader's place is kept. */
+    update({ changed = false, finished = st.finished } = {}) {
+      st.finished = !!finished;
+      if (!page.offsetParent) return;
+      if (changed && st.following) { st.jumping = false; setTop(target()); }
+      chrome();
+    },
+    /** A new size: keep following (never pull a reader back above where they are reading). */
+    relayout() {
+      if (!page.offsetParent) return;
+      if (st.following) setTop(Math.max(sc.scrollTop, target()));
+      chrome();
+    },
+    state() { return { following: st.following, ...metrics(), target: target(), jump: !jump.hidden, above: page.dataset.above === "true", below: page.dataset.below === "true", thumb: thumb.dataset.show === "true" }; },
+  };
+  el.follow = ctl;
+  return ctl;
 }
 
 /** The footer's persona chip: the tuning's tiny string, the name and the voice. */

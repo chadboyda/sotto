@@ -9,7 +9,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
-import { CHROME, openPage } from "../helpers/web-page.js";
+import { CHROME, openPage, until } from "../helpers/web-page.js";
 
 const SETUP = `
   const lib = await import("/lib.js");
@@ -18,7 +18,7 @@ const SETUP = `
   const el = {
     body: document.body, claude: $("claude"), claudeTitle: $("claude-title"), claudeAgents: $("claude-agents"), claudeTime: $("claude-time"),
     claudeTimeValue: $("claude-time-value"), claudeMoon: $("claude-moon"), claudeDetail: $("claude-detail"), claudePage: $("claude-page"),
-    claudeFlow: $("claude-flow"), claudeHistory: $("claude-history"), claudeStep: $("claude-step"), summary: $("summary"), moreBtn: $("more-btn"),
+    claudeFlow: $("claude-flow"), claudeScroll: $("claude-scroll"), claudeThumb: $("claude-thumb"), claudeJump: $("claude-jump"),
     claudeAsk: $("claude-ask"), claudeCommand: $("claude-command"), claudeWhy: $("claude-why"), claudeNote: $("claude-note"), claudeRequest: $("claude-request"),
   };
   const frames = () => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
@@ -60,7 +60,10 @@ const MEASURE = `(async () => {
     $("overlay").hidden = !v.card || lib.inlineCard(v);
     if (p.banner) panel.paintBanner($("banners"), p.banner, { enter: false }); else $("banners").replaceChildren();
     const m = lib.claudeView(c);
-    panel.paintClaude(el, { m, head: lib.claudeHead(m), history: ["I read the spec."], says: c.says || "", summary: m.summary || null, expanded: false,
+    let pg = lib.pushPage({ msgs: [], turnStart: 0 }, "I read the spec.");
+    if (c.says) pg = lib.pushPage(pg, c.says);
+    if (m.summary) pg = lib.pushPage(pg, m.summary);
+    panel.paintClaude(el, { m, head: lib.claudeHead(m), entries: lib.pageEntries(pg), says: c.says || "",
       time: c.busy ? "4:12" : null, requestLine: m.request ? { tone: "", text: "Asked: " + m.request.text } : null });
     await frames();
     out[name] = {
@@ -110,7 +113,7 @@ const CROWDED = `(async () => {
   b.view = v.view; b.dial = v.dial; b.floor = v.floor; b.card = "";
   const m = lib.claudeView({ busy: true, kind: "permission", agent: true, agents: 5,
     text: "cd /tmp && O=/Users/someone/dev/project/design/concepts-v2/concept-3/stills && rm -f $O/*.png && python3 render_frames_with_a_very_long_script_name_without_spaces.py" });
-  panel.paintClaude(el, { m, head: lib.claudeHead(m), history: [], says: "It renders every concept at both sizes and in both themes, then compares them.", summary: null, expanded: false,
+  panel.paintClaude(el, { m, head: lib.claudeHead(m), entries: [], says: "It renders every concept at both sizes and in both themes, then compares them.",
     time: "7:00", requestLine: { tone: "", text: "Asked: \\u201CRender every concept at both sizes and in both themes, then compare them\\u201D" } });
   await frames();
   const zone = $("claude").getBoundingClientRect();
@@ -134,4 +137,130 @@ test("approval: a crowded head and a long command stay inside the frame at 360-6
     assert.ok(m.zone[0] >= 0 && m.zone[1] <= m.vw + 0.5, `${w}px: zone outside the viewport ${JSON.stringify(m)}`);
     assert.ok(m.sw <= m.vw, `${w}px: horizontal scroll ${m.sw} > ${m.vw}`);
   }
+});
+
+// Claude's page is a fixed region that scrolls (SPEC-DEVIATIONS "scrolling page"): a
+// long reply never moves or resizes it; it follows the latest words, stops when the
+// reader scrolls up (a wheel, as a trackpad would) and shows "Jump to latest", resumes
+// at the bottom or from the pill; the thumb shows while scrolling and hides after ~1 s;
+// a finished reply taller than the page reads from its first line. Silent Chrome.
+const PARA = "The refresh timer now uses the fake clock, so it can no longer fire in the middle of an assertion. I ran the auth suite fifty times in a loop and it passed every time.";
+const FILL = `(async () => {
+  ${SETUP}
+  const v = lib.pageView({ phase: "live", state: "live" });
+  const b = document.body.dataset;
+  b.view = v.view; b.dial = v.dial; b.floor = v.floor; b.card = ""; b.inline = "false";
+  $("overlay").hidden = true;
+  const box = () => { const r = $("claude-page").getBoundingClientRect(); return [r.left, r.top, r.width, r.height].map((x) => Math.round(x * 10) / 10); };
+  const S = { pg: { msgs: [], turnStart: 0 } };
+  S.paint = (kind, extra = {}) => {
+    const last = S.pg.msgs[S.pg.msgs.length - 1] || "";
+    const m = lib.claudeView(kind === "finished" ? { busy: false, summary: last } : kind === "approval"
+      ? { busy: true, kind: "permission", text: "Bash: rm -rf node_modules && npm ci" } : { busy: true, says: last });
+    panel.paintClaude(el, { m, head: lib.claudeHead(m), entries: lib.pageEntries(S.pg), says: kind === "approval" ? "${PARA}" : "", time: "1:00", requestLine: null, ...extra });
+  };
+  S.state = async () => { await frames(); return { ...el.follow.state(), box: box(), pageShown: !!$("claude-page").offsetParent }; };
+  S.push = async (text, kind = "working") => { S.pg = lib.pushPage(S.pg, text); S.paint(kind); return S.state(); };
+  S.lib = lib; S.el = el;
+  window.__t = S;
+  S.pg = lib.pageTurn(S.pg);
+  S.paint("working", { newTurn: true });
+  const empty = await S.state();
+  for (let i = 1; i <= 8; i++) { S.pg = lib.pushPage(S.pg, "Step " + i + ". ${PARA}"); S.paint("working"); await frames(); }
+  const long = await S.state();
+  const sc = $("claude-scroll");
+  return { empty, long, scrollH: sc.scrollHeight, clientH: sc.clientHeight, tones: [...$("claude-flow").children].map((n) => n.dataset.tone),
+    thumbW: $("claude-thumb").getBoundingClientRect().width, gutter: parseFloat(getComputedStyle(sc).paddingRight),
+    scrollbar: sc.offsetWidth - sc.clientWidth };
+})()`;
+const STATE = `window.__t.state()`;
+
+test("Claude's page: a long reply scrolls in a fixed region; follow, unfollow, jump to latest", { skip: fs.existsSync(CHROME) ? false : "Chrome not installed", timeout: 60000 }, async (t) => {
+  const page = await openPage(t, { width: 420, height: 640 });
+  await page.setSize(420, 640);
+  const r = await page.eval(FILL);
+  assert.deepEqual(r.long.box, r.empty.box, `the region moved or resized with its content: ${JSON.stringify(r)}`);
+  assert.ok(r.scrollH > r.clientH * 2, `the reply overflows: ${JSON.stringify(r)}`);
+  assert.deepEqual(r.tones, ["turn", "turn", "turn", "turn", "turn", "turn", "turn", "latest"]);
+  assert.equal(r.scrollbar, 0, "no native scrollbar takes room: the thumb is the scroller");
+  assert.ok(r.gutter >= r.thumbW + 4, `the thumb sits in a gutter clear of the text: ${JSON.stringify(r)}`);
+  // Following: at the end, a fade above, none below, no pill, the thumb hidden at rest.
+  const f0 = r.long;
+  assert.equal(f0.following, true);
+  assert.ok(Math.abs(f0.scrollTop - f0.target) <= 1, JSON.stringify(f0));
+  assert.deepEqual([f0.above, f0.below, f0.jump, f0.thumb], [true, false, false, false]);
+
+  // The reader scrolls up with the wheel: following stops, the pill and the thumb show.
+  const [x, y] = await page.eval(`(() => { const r = document.getElementById("claude-scroll").getBoundingClientRect(); return [r.left + r.width / 2, r.top + r.height / 2]; })()`);
+  await page.send("Input.dispatchMouseEvent", { type: "mouseWheel", x, y, deltaX: 0, deltaY: -500 });
+  const up = await until(async () => { const s = await page.eval(STATE); return s.scrollTop < f0.scrollTop - 100 && !s.following ? s : null; }, 5000);
+  assert.ok(up, "the wheel scrolled the page up and stopped following");
+  assert.deepEqual([up.jump, up.below, up.thumb], [true, true, true], JSON.stringify(up));
+  assert.deepEqual(up.box, r.empty.box);
+  // New words while the reader is up there: their place is kept.
+  const kept = await page.eval(`window.__t.push("Step 9. ${PARA}")`);
+  assert.equal(kept.following, false);
+  assert.ok(Math.abs(kept.scrollTop - up.scrollTop) <= 1, `the reader's place moved: ${up.scrollTop} -> ${kept.scrollTop}`);
+  // The thumb fades about a second after the scrolling stops.
+  const hidden = await until(async () => { const s = await page.eval(STATE); return s.thumb ? null : s; }, 3000);
+  assert.ok(hidden, "the thumb hides after scrolling stops");
+
+  // Back to the bottom by hand: following again, the pill goes.
+  await page.send("Input.dispatchMouseEvent", { type: "mouseWheel", x, y, deltaX: 0, deltaY: 5000 });
+  const down = await until(async () => { const s = await page.eval(STATE); return s.following && !s.jump ? s : null; }, 5000);
+  assert.ok(down, "scrolling to the bottom resumes following");
+  const next = await page.eval(`window.__t.push("Step 10. ${PARA}")`);
+  assert.ok(next.following && Math.abs(next.scrollTop - next.target) <= 1, `new words follow: ${JSON.stringify(next)}`);
+
+  // Up again, then "Jump to latest".
+  await page.send("Input.dispatchMouseEvent", { type: "mouseWheel", x, y, deltaX: 0, deltaY: -800 });
+  assert.ok(await until(async () => (await page.eval(STATE)).jump, 5000), "the pill shows");
+  await page.eval(`document.getElementById("claude-jump").click()`);
+  const jumped = await until(async () => { const s = await page.eval(STATE); return s.following && Math.abs(s.scrollTop - s.target) <= 1 && !s.jump ? s : null; }, 5000);
+  assert.ok(jumped, "Jump to latest scrolls to the newest words and follows");
+
+  // A finished reply taller than the page reads from its first line (still following).
+  const longReply = Array.from({ length: 6 }, (_, i) => `Paragraph ${i + 1}. ${PARA}`).join("\\n\\n");
+  const fin = await page.eval(`(async () => { window.__t.pg = window.__t.lib.pushPage(window.__t.pg, ${JSON.stringify("## Done\n\n")} + "${longReply}"); window.__t.paint("finished"); return window.__t.state(); })()`);
+  const top = await page.eval(`document.getElementById("claude-flow").lastElementChild.offsetTop`);
+  assert.equal(fin.following, true);
+  assert.ok(Math.abs(fin.scrollTop - (top - 28)) <= 1, `the finished reply shows from its start, under the fade: ${fin.scrollTop} vs ${top}`);
+  assert.equal(fin.below, true);
+  assert.deepEqual(fin.box, r.empty.box);
+
+  // A new turn follows again even if the reader had scrolled away.
+  await page.eval(`document.getElementById("claude-scroll").scrollTop = 0`);
+  assert.ok(await until(async () => !(await page.eval(STATE)).following, 3000));
+  const turn = await page.eval(`(async () => { const t = window.__t; t.pg = t.lib.pageTurn(t.pg); t.pg = t.lib.pushPage(t.pg, "Looking at it."); t.paint("working", { newTurn: true }); return t.state(); })()`);
+  assert.ok(turn.following && Math.abs(turn.scrollTop - turn.target) <= 1, JSON.stringify(turn));
+  const tones = await page.eval(`[...document.getElementById("claude-flow").children].map((n) => n.dataset.tone)`);
+  assert.equal(tones.at(-1), "latest");
+  assert.ok(tones.slice(0, -1).every((x) => x === "past"), JSON.stringify(tones));
+});
+
+// Small windows: the page gives way first. At 360 x 420 the approval still shows the
+// command and fits inside the Claude zone; a long page stays a fixed region.
+test("Claude's page at 360 x 420: the approval fits, the page region shrinks first", { skip: fs.existsSync(CHROME) ? false : "Chrome not installed", timeout: 60000 }, async (t) => {
+  const page = await openPage(t, { width: 360, height: 420 });
+  await page.setSize(360, 420);
+  const r = await page.eval(FILL);
+  assert.ok(r.long.pageShown, "the page region is still there at 360 x 420");
+  assert.ok(r.long.box[3] >= 40, `the page keeps a few lines: ${JSON.stringify(r.long.box)}`);
+  assert.deepEqual(r.long.box, r.empty.box);
+  assert.equal(r.long.following, true);
+  const a = await page.eval(`(async () => {
+    window.__t.paint("approval");
+    await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
+    const $ = (id) => document.getElementById(id);
+    const zone = $("claude").getBoundingClientRect(), pg = $("claude-page").getBoundingClientRect(), cmd = $("claude-command").getBoundingClientRect();
+    const footer = document.querySelector(".bottom").getBoundingClientRect();
+    return { ask: !$("claude-ask").hidden, cmd: [cmd.top, cmd.bottom, cmd.height], page: [pg.top, pg.bottom], zone: [zone.top, zone.bottom], footer: footer.top,
+      scroll: getComputedStyle($("claude-scroll")).visibility, jump: getComputedStyle($("claude-jump")).visibility };
+  })()`);
+  assert.equal(a.ask, true);
+  assert.ok(a.cmd[2] > 10, `the command shows: ${JSON.stringify(a)}`);
+  assert.ok(a.cmd[0] >= a.page[0] - 0.5 && a.cmd[1] <= a.page[1] + 0.5, `the command fits the page: ${JSON.stringify(a)}`);
+  assert.ok(a.zone[1] <= a.footer + 0.5, `the zone stays above the footer: ${JSON.stringify(a)}`);
+  assert.equal(a.scroll, "hidden", "the question takes the region");
+  assert.equal(a.jump, "hidden");
 });

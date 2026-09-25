@@ -182,6 +182,1498 @@
   "out": "1:05:09"
  },
  {
+  "fn": "pushPage",
+  "args": [
+   {
+    "msgs": [],
+    "turnStart": 0
+   },
+   "I read the spec."
+  ],
+  "out": {
+   "msgs": [
+    "I read the spec."
+   ],
+   "turnStart": 0
+  }
+ },
+ {
+  "fn": "pageEntries",
+  "args": [
+   {
+    "msgs": [
+     "I read the spec."
+    ],
+    "turnStart": 0
+   }
+  ],
+  "out": [
+   {
+    "text": "I read the spec.",
+    "tone": "latest"
+   }
+  ]
+ },
+ {
+  "fn": "pushPage",
+  "args": [
+   {
+    "msgs": [
+     "I read the spec."
+    ],
+    "turnStart": 0
+   },
+   "I read the spec. Now the helpers."
+  ],
+  "out": {
+   "msgs": [
+    "I read the spec. Now the helpers."
+   ],
+   "turnStart": 0
+  }
+ },
+ {
+  "fn": "pageEntries",
+  "args": [
+   {
+    "msgs": [
+     "I read the spec. Now the helpers."
+    ],
+    "turnStart": 0
+   }
+  ],
+  "out": [
+   {
+    "text": "I read the spec. Now the helpers.",
+    "tone": "latest"
+   }
+  ]
+ },
+ {
+  "fn": "pushPage",
+  "args": [
+   {
+    "msgs": [
+     "I read the spec. Now the helpers."
+    ],
+    "turnStart": 0
+   },
+   "Found it."
+  ],
+  "out": {
+   "msgs": [
+    "I read the spec. Now the helpers.",
+    "Found it."
+   ],
+   "turnStart": 0
+  }
+ },
+ {
+  "fn": "pageEntries",
+  "args": [
+   {
+    "msgs": [
+     "I read the spec. Now the helpers.",
+     "Found it."
+    ],
+    "turnStart": 0
+   }
+  ],
+  "out": [
+   {
+    "text": "I read the spec. Now the helpers.",
+    "tone": "turn"
+   },
+   {
+    "text": "Found it.",
+    "tone": "latest"
+   }
+  ]
+ },
+ {
+  "fn": "pageTurn",
+  "args": [
+   {
+    "msgs": [
+     "I read the spec. Now the helpers.",
+     "Found it."
+    ],
+    "turnStart": 0
+   }
+  ],
+  "out": {
+   "msgs": [
+    "I read the spec. Now the helpers.",
+    "Found it."
+   ],
+   "turnStart": 2
+  }
+ },
+ {
+  "fn": "pageEntries",
+  "args": [
+   {
+    "msgs": [
+     "I read the spec. Now the helpers.",
+     "Found it."
+    ],
+    "turnStart": 2
+   }
+  ],
+  "out": [
+   {
+    "text": "I read the spec. Now the helpers.",
+    "tone": "past"
+   },
+   {
+    "text": "Found it.",
+    "tone": "past"
+   }
+  ]
+ },
+ {
+  "fn": "pushPage",
+  "args": [
+   {
+    "msgs": [
+     "I read the spec. Now the helpers.",
+     "Found it."
+    ],
+    "turnStart": 2
+   },
+   "Found it. Again."
+  ],
+  "out": {
+   "msgs": [
+    "I read the spec. Now the helpers.",
+    "Found it.",
+    "Found it. Again."
+   ],
+   "turnStart": 2
+  }
+ },
+ {
+  "fn": "pageEntries",
+  "args": [
+   {
+    "msgs": [
+     "I read the spec. Now the helpers.",
+     "Found it.",
+     "Found it. Again."
+    ],
+    "turnStart": 2
+   }
+  ],
+  "out": [
+   {
+    "text": "I read the spec. Now the helpers.",
+    "tone": "past"
+   },
+   {
+    "text": "Found it.",
+    "tone": "past"
+   },
+   {
+    "text": "Found it. Again.",
+    "tone": "latest"
+   }
+  ]
+ },
+ {
+  "fn": "pushPage",
+  "args": [
+   {
+    "msgs": [
+     "I read the spec. Now the helpers.",
+     "Found it.",
+     "Found it. Again."
+    ],
+    "turnStart": 2
+   },
+   ""
+  ],
+  "out": {
+   "msgs": [
+    "I read the spec. Now the helpers.",
+    "Found it.",
+    "Found it. Again."
+   ],
+   "turnStart": 2
+  }
+ },
+ {
+  "fn": "pageEntries",
+  "args": [
+   {
+    "msgs": [
+     "I read the spec. Now the helpers.",
+     "Found it.",
+     "Found it. Again."
+    ],
+    "turnStart": 2
+   }
+  ],
+  "out": [
+   {
+    "text": "I read the spec. Now the helpers.",
+    "tone": "past"
+   },
+   {
+    "text": "Found it.",
+    "tone": "past"
+   },
+   {
+    "text": "Found it. Again.",
+    "tone": "latest"
+   }
+  ]
+ },
+ {
+  "fn": "pushPage",
+  "args": [
+   {
+    "msgs": [
+     "I read the spec. Now the helpers.",
+     "Found it.",
+     "Found it. Again."
+    ],
+    "turnStart": 2
+   },
+   "Step 0"
+  ],
+  "out": {
+   "msgs": [
+    "I read the spec. Now the helpers.",
+    "Found it.",
+    "Found it. Again.",
+    "Step 0"
+   ],
+   "turnStart": 2
+  }
+ },
+ {
+  "fn": "pageEntries",
+  "args": [
+   {
+    "msgs": [
+     "I read the spec. Now the helpers.",
+     "Found it.",
+     "Found it. Again.",
+     "Step 0"
+    ],
+    "turnStart": 2
+   }
+  ],
+  "out": [
+   {
+    "text": "I read the spec. Now the helpers.",
+    "tone": "past"
+   },
+   {
+    "text": "Found it.",
+    "tone": "past"
+   },
+   {
+    "text": "Found it. Again.",
+    "tone": "turn"
+   },
+   {
+    "text": "Step 0",
+    "tone": "latest"
+   }
+  ]
+ },
+ {
+  "fn": "pushPage",
+  "args": [
+   {
+    "msgs": [
+     "I read the spec. Now the helpers.",
+     "Found it.",
+     "Found it. Again.",
+     "Step 0"
+    ],
+    "turnStart": 2
+   },
+   "Step 1"
+  ],
+  "out": {
+   "msgs": [
+    "I read the spec. Now the helpers.",
+    "Found it.",
+    "Found it. Again.",
+    "Step 0",
+    "Step 1"
+   ],
+   "turnStart": 2
+  }
+ },
+ {
+  "fn": "pageEntries",
+  "args": [
+   {
+    "msgs": [
+     "I read the spec. Now the helpers.",
+     "Found it.",
+     "Found it. Again.",
+     "Step 0",
+     "Step 1"
+    ],
+    "turnStart": 2
+   }
+  ],
+  "out": [
+   {
+    "text": "I read the spec. Now the helpers.",
+    "tone": "past"
+   },
+   {
+    "text": "Found it.",
+    "tone": "past"
+   },
+   {
+    "text": "Found it. Again.",
+    "tone": "turn"
+   },
+   {
+    "text": "Step 0",
+    "tone": "turn"
+   },
+   {
+    "text": "Step 1",
+    "tone": "latest"
+   }
+  ]
+ },
+ {
+  "fn": "pushPage",
+  "args": [
+   {
+    "msgs": [
+     "I read the spec. Now the helpers.",
+     "Found it.",
+     "Found it. Again.",
+     "Step 0",
+     "Step 1"
+    ],
+    "turnStart": 2
+   },
+   "Step 2"
+  ],
+  "out": {
+   "msgs": [
+    "I read the spec. Now the helpers.",
+    "Found it.",
+    "Found it. Again.",
+    "Step 0",
+    "Step 1",
+    "Step 2"
+   ],
+   "turnStart": 2
+  }
+ },
+ {
+  "fn": "pageEntries",
+  "args": [
+   {
+    "msgs": [
+     "I read the spec. Now the helpers.",
+     "Found it.",
+     "Found it. Again.",
+     "Step 0",
+     "Step 1",
+     "Step 2"
+    ],
+    "turnStart": 2
+   }
+  ],
+  "out": [
+   {
+    "text": "I read the spec. Now the helpers.",
+    "tone": "past"
+   },
+   {
+    "text": "Found it.",
+    "tone": "past"
+   },
+   {
+    "text": "Found it. Again.",
+    "tone": "turn"
+   },
+   {
+    "text": "Step 0",
+    "tone": "turn"
+   },
+   {
+    "text": "Step 1",
+    "tone": "turn"
+   },
+   {
+    "text": "Step 2",
+    "tone": "latest"
+   }
+  ]
+ },
+ {
+  "fn": "pushPage",
+  "args": [
+   {
+    "msgs": [
+     "I read the spec. Now the helpers.",
+     "Found it.",
+     "Found it. Again.",
+     "Step 0",
+     "Step 1",
+     "Step 2"
+    ],
+    "turnStart": 2
+   },
+   "Step 3"
+  ],
+  "out": {
+   "msgs": [
+    "I read the spec. Now the helpers.",
+    "Found it.",
+    "Found it. Again.",
+    "Step 0",
+    "Step 1",
+    "Step 2",
+    "Step 3"
+   ],
+   "turnStart": 2
+  }
+ },
+ {
+  "fn": "pageEntries",
+  "args": [
+   {
+    "msgs": [
+     "I read the spec. Now the helpers.",
+     "Found it.",
+     "Found it. Again.",
+     "Step 0",
+     "Step 1",
+     "Step 2",
+     "Step 3"
+    ],
+    "turnStart": 2
+   }
+  ],
+  "out": [
+   {
+    "text": "I read the spec. Now the helpers.",
+    "tone": "past"
+   },
+   {
+    "text": "Found it.",
+    "tone": "past"
+   },
+   {
+    "text": "Found it. Again.",
+    "tone": "turn"
+   },
+   {
+    "text": "Step 0",
+    "tone": "turn"
+   },
+   {
+    "text": "Step 1",
+    "tone": "turn"
+   },
+   {
+    "text": "Step 2",
+    "tone": "turn"
+   },
+   {
+    "text": "Step 3",
+    "tone": "latest"
+   }
+  ]
+ },
+ {
+  "fn": "pushPage",
+  "args": [
+   {
+    "msgs": [
+     "I read the spec. Now the helpers.",
+     "Found it.",
+     "Found it. Again.",
+     "Step 0",
+     "Step 1",
+     "Step 2",
+     "Step 3"
+    ],
+    "turnStart": 2
+   },
+   "Step 4"
+  ],
+  "out": {
+   "msgs": [
+    "I read the spec. Now the helpers.",
+    "Found it.",
+    "Found it. Again.",
+    "Step 0",
+    "Step 1",
+    "Step 2",
+    "Step 3",
+    "Step 4"
+   ],
+   "turnStart": 2
+  }
+ },
+ {
+  "fn": "pageEntries",
+  "args": [
+   {
+    "msgs": [
+     "I read the spec. Now the helpers.",
+     "Found it.",
+     "Found it. Again.",
+     "Step 0",
+     "Step 1",
+     "Step 2",
+     "Step 3",
+     "Step 4"
+    ],
+    "turnStart": 2
+   }
+  ],
+  "out": [
+   {
+    "text": "I read the spec. Now the helpers.",
+    "tone": "past"
+   },
+   {
+    "text": "Found it.",
+    "tone": "past"
+   },
+   {
+    "text": "Found it. Again.",
+    "tone": "turn"
+   },
+   {
+    "text": "Step 0",
+    "tone": "turn"
+   },
+   {
+    "text": "Step 1",
+    "tone": "turn"
+   },
+   {
+    "text": "Step 2",
+    "tone": "turn"
+   },
+   {
+    "text": "Step 3",
+    "tone": "turn"
+   },
+   {
+    "text": "Step 4",
+    "tone": "latest"
+   }
+  ]
+ },
+ {
+  "fn": "pushPage",
+  "args": [
+   {
+    "msgs": [
+     "I read the spec. Now the helpers.",
+     "Found it.",
+     "Found it. Again.",
+     "Step 0",
+     "Step 1",
+     "Step 2",
+     "Step 3",
+     "Step 4"
+    ],
+    "turnStart": 2
+   },
+   "Step 5"
+  ],
+  "out": {
+   "msgs": [
+    "I read the spec. Now the helpers.",
+    "Found it.",
+    "Found it. Again.",
+    "Step 0",
+    "Step 1",
+    "Step 2",
+    "Step 3",
+    "Step 4",
+    "Step 5"
+   ],
+   "turnStart": 2
+  }
+ },
+ {
+  "fn": "pageEntries",
+  "args": [
+   {
+    "msgs": [
+     "I read the spec. Now the helpers.",
+     "Found it.",
+     "Found it. Again.",
+     "Step 0",
+     "Step 1",
+     "Step 2",
+     "Step 3",
+     "Step 4",
+     "Step 5"
+    ],
+    "turnStart": 2
+   }
+  ],
+  "out": [
+   {
+    "text": "I read the spec. Now the helpers.",
+    "tone": "past"
+   },
+   {
+    "text": "Found it.",
+    "tone": "past"
+   },
+   {
+    "text": "Found it. Again.",
+    "tone": "turn"
+   },
+   {
+    "text": "Step 0",
+    "tone": "turn"
+   },
+   {
+    "text": "Step 1",
+    "tone": "turn"
+   },
+   {
+    "text": "Step 2",
+    "tone": "turn"
+   },
+   {
+    "text": "Step 3",
+    "tone": "turn"
+   },
+   {
+    "text": "Step 4",
+    "tone": "turn"
+   },
+   {
+    "text": "Step 5",
+    "tone": "latest"
+   }
+  ]
+ },
+ {
+  "fn": "pushPage",
+  "args": [
+   {
+    "msgs": [
+     "I read the spec. Now the helpers.",
+     "Found it.",
+     "Found it. Again.",
+     "Step 0",
+     "Step 1",
+     "Step 2",
+     "Step 3",
+     "Step 4",
+     "Step 5"
+    ],
+    "turnStart": 2
+   },
+   "Step 6"
+  ],
+  "out": {
+   "msgs": [
+    "I read the spec. Now the helpers.",
+    "Found it.",
+    "Found it. Again.",
+    "Step 0",
+    "Step 1",
+    "Step 2",
+    "Step 3",
+    "Step 4",
+    "Step 5",
+    "Step 6"
+   ],
+   "turnStart": 2
+  }
+ },
+ {
+  "fn": "pageEntries",
+  "args": [
+   {
+    "msgs": [
+     "I read the spec. Now the helpers.",
+     "Found it.",
+     "Found it. Again.",
+     "Step 0",
+     "Step 1",
+     "Step 2",
+     "Step 3",
+     "Step 4",
+     "Step 5",
+     "Step 6"
+    ],
+    "turnStart": 2
+   }
+  ],
+  "out": [
+   {
+    "text": "I read the spec. Now the helpers.",
+    "tone": "past"
+   },
+   {
+    "text": "Found it.",
+    "tone": "past"
+   },
+   {
+    "text": "Found it. Again.",
+    "tone": "turn"
+   },
+   {
+    "text": "Step 0",
+    "tone": "turn"
+   },
+   {
+    "text": "Step 1",
+    "tone": "turn"
+   },
+   {
+    "text": "Step 2",
+    "tone": "turn"
+   },
+   {
+    "text": "Step 3",
+    "tone": "turn"
+   },
+   {
+    "text": "Step 4",
+    "tone": "turn"
+   },
+   {
+    "text": "Step 5",
+    "tone": "turn"
+   },
+   {
+    "text": "Step 6",
+    "tone": "latest"
+   }
+  ]
+ },
+ {
+  "fn": "pushPage",
+  "args": [
+   {
+    "msgs": [
+     "I read the spec. Now the helpers.",
+     "Found it.",
+     "Found it. Again.",
+     "Step 0",
+     "Step 1",
+     "Step 2",
+     "Step 3",
+     "Step 4",
+     "Step 5",
+     "Step 6"
+    ],
+    "turnStart": 2
+   },
+   "Step 7"
+  ],
+  "out": {
+   "msgs": [
+    "I read the spec. Now the helpers.",
+    "Found it.",
+    "Found it. Again.",
+    "Step 0",
+    "Step 1",
+    "Step 2",
+    "Step 3",
+    "Step 4",
+    "Step 5",
+    "Step 6",
+    "Step 7"
+   ],
+   "turnStart": 2
+  }
+ },
+ {
+  "fn": "pageEntries",
+  "args": [
+   {
+    "msgs": [
+     "I read the spec. Now the helpers.",
+     "Found it.",
+     "Found it. Again.",
+     "Step 0",
+     "Step 1",
+     "Step 2",
+     "Step 3",
+     "Step 4",
+     "Step 5",
+     "Step 6",
+     "Step 7"
+    ],
+    "turnStart": 2
+   }
+  ],
+  "out": [
+   {
+    "text": "I read the spec. Now the helpers.",
+    "tone": "past"
+   },
+   {
+    "text": "Found it.",
+    "tone": "past"
+   },
+   {
+    "text": "Found it. Again.",
+    "tone": "turn"
+   },
+   {
+    "text": "Step 0",
+    "tone": "turn"
+   },
+   {
+    "text": "Step 1",
+    "tone": "turn"
+   },
+   {
+    "text": "Step 2",
+    "tone": "turn"
+   },
+   {
+    "text": "Step 3",
+    "tone": "turn"
+   },
+   {
+    "text": "Step 4",
+    "tone": "turn"
+   },
+   {
+    "text": "Step 5",
+    "tone": "turn"
+   },
+   {
+    "text": "Step 6",
+    "tone": "turn"
+   },
+   {
+    "text": "Step 7",
+    "tone": "latest"
+   }
+  ]
+ },
+ {
+  "fn": "pushPage",
+  "args": [
+   {
+    "msgs": [
+     "I read the spec. Now the helpers.",
+     "Found it.",
+     "Found it. Again.",
+     "Step 0",
+     "Step 1",
+     "Step 2",
+     "Step 3",
+     "Step 4",
+     "Step 5",
+     "Step 6",
+     "Step 7"
+    ],
+    "turnStart": 2
+   },
+   "Step 8"
+  ],
+  "out": {
+   "msgs": [
+    "I read the spec. Now the helpers.",
+    "Found it.",
+    "Found it. Again.",
+    "Step 0",
+    "Step 1",
+    "Step 2",
+    "Step 3",
+    "Step 4",
+    "Step 5",
+    "Step 6",
+    "Step 7",
+    "Step 8"
+   ],
+   "turnStart": 2
+  }
+ },
+ {
+  "fn": "pageEntries",
+  "args": [
+   {
+    "msgs": [
+     "I read the spec. Now the helpers.",
+     "Found it.",
+     "Found it. Again.",
+     "Step 0",
+     "Step 1",
+     "Step 2",
+     "Step 3",
+     "Step 4",
+     "Step 5",
+     "Step 6",
+     "Step 7",
+     "Step 8"
+    ],
+    "turnStart": 2
+   }
+  ],
+  "out": [
+   {
+    "text": "I read the spec. Now the helpers.",
+    "tone": "past"
+   },
+   {
+    "text": "Found it.",
+    "tone": "past"
+   },
+   {
+    "text": "Found it. Again.",
+    "tone": "turn"
+   },
+   {
+    "text": "Step 0",
+    "tone": "turn"
+   },
+   {
+    "text": "Step 1",
+    "tone": "turn"
+   },
+   {
+    "text": "Step 2",
+    "tone": "turn"
+   },
+   {
+    "text": "Step 3",
+    "tone": "turn"
+   },
+   {
+    "text": "Step 4",
+    "tone": "turn"
+   },
+   {
+    "text": "Step 5",
+    "tone": "turn"
+   },
+   {
+    "text": "Step 6",
+    "tone": "turn"
+   },
+   {
+    "text": "Step 7",
+    "tone": "turn"
+   },
+   {
+    "text": "Step 8",
+    "tone": "latest"
+   }
+  ]
+ },
+ {
+  "fn": "pushPage",
+  "args": [
+   {
+    "msgs": [
+     "I read the spec. Now the helpers.",
+     "Found it.",
+     "Found it. Again.",
+     "Step 0",
+     "Step 1",
+     "Step 2",
+     "Step 3",
+     "Step 4",
+     "Step 5",
+     "Step 6",
+     "Step 7",
+     "Step 8"
+    ],
+    "turnStart": 2
+   },
+   "Step 9"
+  ],
+  "out": {
+   "msgs": [
+    "Found it.",
+    "Found it. Again.",
+    "Step 0",
+    "Step 1",
+    "Step 2",
+    "Step 3",
+    "Step 4",
+    "Step 5",
+    "Step 6",
+    "Step 7",
+    "Step 8",
+    "Step 9"
+   ],
+   "turnStart": 1
+  }
+ },
+ {
+  "fn": "pageEntries",
+  "args": [
+   {
+    "msgs": [
+     "Found it.",
+     "Found it. Again.",
+     "Step 0",
+     "Step 1",
+     "Step 2",
+     "Step 3",
+     "Step 4",
+     "Step 5",
+     "Step 6",
+     "Step 7",
+     "Step 8",
+     "Step 9"
+    ],
+    "turnStart": 1
+   }
+  ],
+  "out": [
+   {
+    "text": "Found it.",
+    "tone": "past"
+   },
+   {
+    "text": "Found it. Again.",
+    "tone": "turn"
+   },
+   {
+    "text": "Step 0",
+    "tone": "turn"
+   },
+   {
+    "text": "Step 1",
+    "tone": "turn"
+   },
+   {
+    "text": "Step 2",
+    "tone": "turn"
+   },
+   {
+    "text": "Step 3",
+    "tone": "turn"
+   },
+   {
+    "text": "Step 4",
+    "tone": "turn"
+   },
+   {
+    "text": "Step 5",
+    "tone": "turn"
+   },
+   {
+    "text": "Step 6",
+    "tone": "turn"
+   },
+   {
+    "text": "Step 7",
+    "tone": "turn"
+   },
+   {
+    "text": "Step 8",
+    "tone": "turn"
+   },
+   {
+    "text": "Step 9",
+    "tone": "latest"
+   }
+  ]
+ },
+ {
+  "fn": "pushPage",
+  "args": [
+   {
+    "msgs": [
+     "Found it.",
+     "Found it. Again.",
+     "Step 0",
+     "Step 1",
+     "Step 2",
+     "Step 3",
+     "Step 4",
+     "Step 5",
+     "Step 6",
+     "Step 7",
+     "Step 8",
+     "Step 9"
+    ],
+    "turnStart": 1
+   },
+   "Step 10"
+  ],
+  "out": {
+   "msgs": [
+    "Found it. Again.",
+    "Step 0",
+    "Step 1",
+    "Step 2",
+    "Step 3",
+    "Step 4",
+    "Step 5",
+    "Step 6",
+    "Step 7",
+    "Step 8",
+    "Step 9",
+    "Step 10"
+   ],
+   "turnStart": 0
+  }
+ },
+ {
+  "fn": "pageEntries",
+  "args": [
+   {
+    "msgs": [
+     "Found it. Again.",
+     "Step 0",
+     "Step 1",
+     "Step 2",
+     "Step 3",
+     "Step 4",
+     "Step 5",
+     "Step 6",
+     "Step 7",
+     "Step 8",
+     "Step 9",
+     "Step 10"
+    ],
+    "turnStart": 0
+   }
+  ],
+  "out": [
+   {
+    "text": "Found it. Again.",
+    "tone": "turn"
+   },
+   {
+    "text": "Step 0",
+    "tone": "turn"
+   },
+   {
+    "text": "Step 1",
+    "tone": "turn"
+   },
+   {
+    "text": "Step 2",
+    "tone": "turn"
+   },
+   {
+    "text": "Step 3",
+    "tone": "turn"
+   },
+   {
+    "text": "Step 4",
+    "tone": "turn"
+   },
+   {
+    "text": "Step 5",
+    "tone": "turn"
+   },
+   {
+    "text": "Step 6",
+    "tone": "turn"
+   },
+   {
+    "text": "Step 7",
+    "tone": "turn"
+   },
+   {
+    "text": "Step 8",
+    "tone": "turn"
+   },
+   {
+    "text": "Step 9",
+    "tone": "turn"
+   },
+   {
+    "text": "Step 10",
+    "tone": "latest"
+   }
+  ]
+ },
+ {
+  "fn": "pushPage",
+  "args": [
+   {
+    "msgs": [
+     "Found it. Again.",
+     "Step 0",
+     "Step 1",
+     "Step 2",
+     "Step 3",
+     "Step 4",
+     "Step 5",
+     "Step 6",
+     "Step 7",
+     "Step 8",
+     "Step 9",
+     "Step 10"
+    ],
+    "turnStart": 0
+   },
+   "Step 11"
+  ],
+  "out": {
+   "msgs": [
+    "Step 0",
+    "Step 1",
+    "Step 2",
+    "Step 3",
+    "Step 4",
+    "Step 5",
+    "Step 6",
+    "Step 7",
+    "Step 8",
+    "Step 9",
+    "Step 10",
+    "Step 11"
+   ],
+   "turnStart": 0
+  }
+ },
+ {
+  "fn": "pageEntries",
+  "args": [
+   {
+    "msgs": [
+     "Step 0",
+     "Step 1",
+     "Step 2",
+     "Step 3",
+     "Step 4",
+     "Step 5",
+     "Step 6",
+     "Step 7",
+     "Step 8",
+     "Step 9",
+     "Step 10",
+     "Step 11"
+    ],
+    "turnStart": 0
+   }
+  ],
+  "out": [
+   {
+    "text": "Step 0",
+    "tone": "turn"
+   },
+   {
+    "text": "Step 1",
+    "tone": "turn"
+   },
+   {
+    "text": "Step 2",
+    "tone": "turn"
+   },
+   {
+    "text": "Step 3",
+    "tone": "turn"
+   },
+   {
+    "text": "Step 4",
+    "tone": "turn"
+   },
+   {
+    "text": "Step 5",
+    "tone": "turn"
+   },
+   {
+    "text": "Step 6",
+    "tone": "turn"
+   },
+   {
+    "text": "Step 7",
+    "tone": "turn"
+   },
+   {
+    "text": "Step 8",
+    "tone": "turn"
+   },
+   {
+    "text": "Step 9",
+    "tone": "turn"
+   },
+   {
+    "text": "Step 10",
+    "tone": "turn"
+   },
+   {
+    "text": "Step 11",
+    "tone": "latest"
+   }
+  ]
+ },
+ {
+  "fn": "followTarget",
+  "args": [
+   {
+    "scrollHeight": 1000,
+    "clientHeight": 300
+   }
+  ],
+  "out": 700
+ },
+ {
+  "fn": "followTarget",
+  "args": [
+   {
+    "scrollHeight": 200,
+    "clientHeight": 300
+   }
+  ],
+  "out": 0
+ },
+ {
+  "fn": "followTarget",
+  "args": [
+   {
+    "scrollHeight": 1000,
+    "clientHeight": 300,
+    "latestTop": 420
+   }
+  ],
+  "out": 420
+ },
+ {
+  "fn": "followTarget",
+  "args": [
+   {
+    "scrollHeight": 1000,
+    "clientHeight": 300,
+    "latestTop": 900
+   }
+  ],
+  "out": 700
+ },
+ {
+  "fn": "isFollowing",
+  "args": [
+   700,
+   700
+  ],
+  "out": true
+ },
+ {
+  "fn": "isFollowing",
+  "args": [
+   680,
+   700
+  ],
+  "out": true
+ },
+ {
+  "fn": "isFollowing",
+  "args": [
+   676,
+   700
+  ],
+  "out": true
+ },
+ {
+  "fn": "isFollowing",
+  "args": [
+   675.5,
+   700
+  ],
+  "out": false
+ },
+ {
+  "fn": "isFollowing",
+  "args": [
+   600,
+   700
+  ],
+  "out": false
+ },
+ {
+  "fn": "isFollowing",
+  "args": [
+   800,
+   700
+  ],
+  "out": true
+ },
+ {
+  "fn": "isFollowing",
+  "args": [
+   0,
+   0
+  ],
+  "out": true
+ },
+ {
+  "fn": "scrollThumb",
+  "args": [
+   {
+    "scrollTop": 0,
+    "scrollHeight": 300,
+    "clientHeight": 300
+   }
+  ],
+  "out": null
+ },
+ {
+  "fn": "scrollThumb",
+  "args": [
+   {
+    "scrollTop": 0,
+    "scrollHeight": 600,
+    "clientHeight": 300
+   }
+  ],
+  "out": {
+   "top": 6,
+   "height": 144
+  }
+ },
+ {
+  "fn": "scrollThumb",
+  "args": [
+   {
+    "scrollTop": 300,
+    "scrollHeight": 600,
+    "clientHeight": 300
+   }
+  ],
+  "out": {
+   "top": 150,
+   "height": 144
+  }
+ },
+ {
+  "fn": "scrollThumb",
+  "args": [
+   {
+    "scrollTop": 77,
+    "scrollHeight": 100000,
+    "clientHeight": 300
+   }
+  ],
+  "out": {
+   "top": 6.2,
+   "height": 24
+  }
+ },
+ {
+  "fn": "scrollThumb",
+  "args": [
+   {
+    "scrollTop": 10,
+    "scrollHeight": 301,
+    "clientHeight": 300
+   }
+  ],
+  "out": null
+ },
+ {
   "fn": "usagePills",
   "args": [
    {

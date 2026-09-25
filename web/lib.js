@@ -1573,3 +1573,77 @@ export function milestoneStars(state, ev, ctx) {
   const stars = [...st.stars, { s, born: now }].slice(-STAR_MAX);
   return { stars, lastAt: now };
 }
+
+// ---- Claude's page (SPEC-DEVIATIONS "scrolling page"): a fixed region that scrolls ----
+// Native: StateModel.pushPage / ViewText.pageEntries / Follow (the same rules, pinned by
+// test/fixtures/native/viewtext.json).
+
+/** How many of Claude's messages the page keeps: this turn's and the recent ones before it. */
+export const PAGE_MAX = 12;
+/** The newest message at full ink, the rest of this turn at half, earlier turns quieter. */
+export const PAGE_OPACITY = { latest: 1, turn: 0.5, past: 0.36 };
+/** Within this many px of the latest text still counts as "at the latest" (follow on). */
+export const FOLLOW_SLACK = 24;
+
+/** A new turn: the messages so far become the earlier turns. `page` = {msgs:string[], turnStart:number}. */
+export function pageTurn(page) {
+  const msgs = Array.isArray(page?.msgs) ? page.msgs : [];
+  return { msgs, turnStart: msgs.length };
+}
+
+/**
+ * Add one of Claude's messages. A message that repeats or extends the last one of this
+ * turn replaces it (the hook sends the growing text again); at most PAGE_MAX are kept,
+ * the oldest out first.
+ */
+export function pushPage(page, text) {
+  const msgs = Array.isArray(page?.msgs) ? page.msgs : [];
+  let turnStart = Math.min(msgs.length, Math.max(0, Number(page?.turnStart) || 0));
+  const t = String(text ?? "").trim();
+  if (!t) return { msgs, turnStart };
+  const last = msgs.length > turnStart ? msgs[msgs.length - 1] : null;
+  if (last != null) {
+    const a = stripMarkdown(last), b = stripMarkdown(t);
+    if (a === b || b.startsWith(a)) return { msgs: [...msgs.slice(0, -1), t], turnStart };
+  }
+  let next = [...msgs, t];
+  const drop = Math.max(0, next.length - PAGE_MAX);
+  if (drop) { next = next.slice(drop); turnStart = Math.max(0, turnStart - drop); }
+  return { msgs: next, turnStart };
+}
+
+/** The page's messages with their tone: "latest" (the newest of this turn), "turn" (earlier this turn), "past" (earlier turns). */
+export function pageEntries(page) {
+  const msgs = Array.isArray(page?.msgs) ? page.msgs : [];
+  const start = Math.max(0, Number(page?.turnStart) || 0);
+  return msgs.map((text, i) => ({ text, tone: i < start ? "past" : i === msgs.length - 1 ? "latest" : "turn" }));
+}
+
+/**
+ * Where "the latest" is in the scrolling page: the end of the text, or, for a finished
+ * reply taller than the page (`latestTop` given), the top of that reply, so it reads from
+ * its first line like a chat.
+ */
+export function followTarget({ scrollHeight = 0, clientHeight = 0, latestTop = null } = {}) {
+  const max = Math.max(0, scrollHeight - clientHeight);
+  if (latestTop == null) return max;
+  return Math.max(0, Math.min(max, latestTop));
+}
+
+/** Following: the reader is at (or past) the latest text. Scrolling up away from it stops following. */
+export function isFollowing(scrollTop, target, slack = FOLLOW_SLACK) {
+  return scrollTop >= target - slack;
+}
+
+/**
+ * The auto-hiding scroller's thumb in the page's own box: inset `inset` px from the top
+ * and bottom edges, at least `min` px tall. Null when nothing overflows.
+ */
+export function scrollThumb({ scrollTop = 0, scrollHeight = 0, clientHeight = 0 } = {}, { inset = 6, min = 24 } = {}) {
+  const over = scrollHeight - clientHeight;
+  if (over <= 1 || clientHeight <= 0) return null;
+  const track = Math.max(0, clientHeight - 2 * inset);
+  const height = Math.min(track, Math.max(min, (track * clientHeight) / scrollHeight));
+  const f = Math.max(0, Math.min(1, scrollTop / over));
+  return { top: Math.round((inset + (track - height) * f) * 10) / 10, height: Math.round(height * 10) / 10 };
+}

@@ -91,18 +91,17 @@ const el = {
   claudeDetail: $("claude-detail"),
   claudePage: $("claude-page"),
   claudeFlow: $("claude-flow"),
-  claudeHistory: $("claude-history"),
+  claudeScroll: $("claude-scroll"),
+  claudeThumb: $("claude-thumb"),
+  claudeJump: $("claude-jump"),
   claudeAsk: $("claude-ask"),
   claudeWhy: $("claude-why"),
   personaChip: $("persona-chip"),
   chipWave: $("chip-wave"),
   chipName: $("chip-name"),
   chipVoice: $("chip-voice"),
-  claudeStep: $("claude-step"),
   claudeCommand: $("claude-command"),
   claudeNote: $("claude-note"),
-  summary: $("summary"),
-  moreBtn: $("more-btn"),
   claudeRequest: $("claude-request"),
   captions: $("captions"),
   captionsPanel: $("captions-panel"),
@@ -305,11 +304,11 @@ const S = {
   claudeTool: "", // plain-words tool line (SSE activity "tool")
   agents: 0, // background agents working (SSE activity "agents")
   workSince: null,
-  summaryExpanded: false,
-  // The hybrid panel (design/concepts-v2/hybrid): Claude's words this turn (older
-  // ones dim above the newest), milestone stars, and the timing of the eclipse and
-  // of "Claude finished" as the headline.
-  claudeWords: [],
+  // The hybrid panel (design/concepts-v2/hybrid): Claude's page (this turn's messages
+  // and the recent ones before it, lib.pushPage), milestone stars, and the timing of the
+  // eclipse and of "Claude finished" as the headline.
+  page: { msgs: [], turnStart: 0 },
+  pageNewTurn: false,
   stars: { stars: [], lastAt: null },
   attnAt: null, // when the current approval arrived (the eclipse starts; totality 750 ms later)
   finishedAt: null,
@@ -494,9 +493,11 @@ function handleDaemonMessage(msg) {
       }
       const v = lib.activityView(msg);
       S.activity = { text: v.text, tone: v.tone };
-      // Claude's page: the words said earlier this turn stay above the newest, dimmed.
-      if (msg.kind === "turn_start") S.claudeWords = [];
-      if ((msg.kind === "text" || msg.kind === "turn_end") && S.claudeSays) S.claudeWords = [...S.claudeWords, S.claudeSays].slice(-3);
+      // Claude's page: every message stays (dimmer as it ages) in the scrolling region; a
+      // new turn follows the latest again.
+      if (msg.kind === "turn_start") { S.page = lib.pageTurn(S.page); S.pageNewTurn = true; }
+      if (msg.kind === "text") S.page = lib.pushPage(S.page, msg.text || "");
+      if (msg.kind === "turn_end" && v.summary) S.page = lib.pushPage(S.page, v.summary);
       if (msg.kind === "turn_start" || msg.kind === "turn_end") { S.claudeSays = ""; S.claudeSaysAt = null; S.claudeTool = ""; }
       if (msg.kind === "text") { S.claudeSays = msg.text || ""; S.claudeSaysAt = Date.now(); }
       if (msg.kind === "tool") S.claudeTool = msg.text || "";
@@ -510,10 +511,7 @@ function handleDaemonMessage(msg) {
         finishedTimer = setTimeout(render, lib.FINISHED_HEADLINE_MS + 50);
       }
       if (msg.kind === "turn_start") S.finishedAt = null;
-      if (v.summary) {
-        S.summary = v.summary;
-        S.summaryExpanded = false;
-      }
+      if (v.summary) S.summary = v.summary;
       S.claudeKind = msg.kind || null;
       S.claudeText = msg.text || "";
       S.claudeAgent = msg.kind === "permission" && msg.agent === true;
@@ -540,6 +538,8 @@ function handleDaemonMessage(msg) {
     case "result_pending":
       S.pendingResult = msg.text || null;
       if (msg.text) S.summary = lib.truncate(msg.text, 420);
+      // The result held for the voice is on the page too (native: ClaudeColumn.messages).
+      if (msg.text) S.page = lib.pushPage(S.page, msg.text);
       render();
       break;
     default:
@@ -2459,17 +2459,14 @@ function renderClaude() {
   const m = m0.kind === "approval" && !totality() ? { ...m0, kind: "working" } : m0;
   const req = m.request;
   const showReq = !!req && (m.kind === "working" || m.kind === "approval" || REQUEST_ACTIVE.has(d?.status));
-  // Words already in the final summary are not repeated above it.
-  const flat = (t) => lib.stripMarkdown(t).toLowerCase();
-  const summaryFlat = m.kind === "finished" ? flat(m.summary || "") : "";
-  const history = S.claudeWords.filter((w) => !summaryFlat || !summaryFlat.includes(flat(w)));
+  const newTurn = S.pageNewTurn;
+  S.pageNewTurn = false;
   panel.paintClaude(el, {
     m,
     head: lib.claudeHead(m),
-    history,
+    entries: lib.pageEntries(S.page),
     says: S.claudeSays,
-    summary: m.summary || null,
-    expanded: S.summaryExpanded,
+    newTurn,
     time: claudeTimeText(),
     requestLine: showReq ? { tone: req.tone || "", text: `${req.tone === "error" || req.tone === "warn" ? req.label : "Asked"}: “${req.text}”` } : null,
   });
@@ -3008,11 +3005,6 @@ el.voiceSelect.addEventListener("change", () => chooseVoice(el.voiceSelect.value
 el.personaSelect.addEventListener("change", () => choosePersona(el.personaSelect.value));
 el.personaVoice.addEventListener("change", () => setPersonaVoice(el.personaVoice.checked));
 
-el.moreBtn.addEventListener("click", () => {
-  S.summaryExpanded = !S.summaryExpanded;
-  renderClaude();
-});
-
 // ---------------------------------------------------------------------------
 // OpenAI API key (SPEC §4.3). The key goes to the daemon once (POST /api/key,
 // page-token auth), which checks it with OpenAI and keeps it in the macOS
@@ -3288,11 +3280,11 @@ renderCaptions();
 // The caption panel's height comes from the layout, not its content, so refitting on
 // resize cannot loop.
 if (typeof ResizeObserver === "function") new ResizeObserver(() => fitCaptions()).observe(el.captionsPanel);
-// Claude's page is a fixed box: a new size re-fits its flow (panel.fitPage), and the
-// string re-measures the peg and the frame.
+// Claude's page is a fixed region: a new size keeps it following the latest words
+// (panel.pageFollow), and the string re-measures the peg and the frame.
 if (typeof ResizeObserver === "function") {
   new ResizeObserver(() => {
-    panel.fitPage(el, el.body.dataset.claude, S.summaryExpanded);
+    panel.pageFollow(el).relayout();
     drawString("relayout");
   }).observe(el.claudePage);
 }

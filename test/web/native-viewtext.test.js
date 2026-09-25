@@ -65,6 +65,23 @@ function cases() {
     add("formatDuration", [s, true], lib.formatDuration(s, { long: true }));
   }
   for (const s of [0, 5, 852, 3909]) add("formatClock", [s], lib.formatClock(s));
+  // Claude's scrolling page (SPEC-DEVIATIONS "scrolling page"): the kept messages and the follow rules.
+  {
+    const steps = [["push", "I read the spec."], ["push", "I read the spec. Now the helpers."], ["push", "Found it."], ["turn"], ["push", "Found it. Again."],
+      ["push", ""], ...Array.from({ length: 12 }, (_, i) => ["push", `Step ${i}`])];
+    let p = { msgs: [], turnStart: 0 };
+    for (const st of steps) {
+      const next = st[0] === "turn" ? lib.pageTurn(p) : lib.pushPage(p, st[1]);
+      add(st[0] === "turn" ? "pageTurn" : "pushPage", st[0] === "turn" ? [p] : [p, st[1]], next);
+      add("pageEntries", [next], lib.pageEntries(next));
+      p = next;
+    }
+  }
+  for (const o of [{ scrollHeight: 1000, clientHeight: 300 }, { scrollHeight: 200, clientHeight: 300 }, { scrollHeight: 1000, clientHeight: 300, latestTop: 420 },
+    { scrollHeight: 1000, clientHeight: 300, latestTop: 900 }]) add("followTarget", [o], lib.followTarget(o));
+  for (const [top, target] of [[700, 700], [680, 700], [676, 700], [675.5, 700], [600, 700], [800, 700], [0, 0]]) add("isFollowing", [top, target], lib.isFollowing(top, target));
+  for (const o of [{ scrollTop: 0, scrollHeight: 300, clientHeight: 300 }, { scrollTop: 0, scrollHeight: 600, clientHeight: 300 }, { scrollTop: 300, scrollHeight: 600, clientHeight: 300 },
+    { scrollTop: 77, scrollHeight: 100_000, clientHeight: 300 }, { scrollTop: 10, scrollHeight: 301, clientHeight: 300 }]) add("scrollThumb", [o], lib.scrollThumb(o));
   // The header pills (SPEC-DEVIATIONS "header pills"): the text and the one widening.
   for (const p of [
     { sessionSeconds: null, todaySeconds: 0, costSeconds: 0 },

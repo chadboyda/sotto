@@ -319,6 +319,25 @@ final class AppController: NSObject, NSApplicationDelegate, PanelControllerDeleg
                 o["tag"] = obj["tag"] as? String ?? ""
                 o["panel_visible"] = model.panelVisible
                 log.log("panel_probe", o)
+            case "page_scroll":
+                // Scroll Claude's page as a reader would ("top", "up", "bottom", "latest").
+                guard let view = panel.panel.contentView else { continue }
+                var o = PanelTestSupport.scrollPage(in: view, to: obj["to"] as? String ?? "top")
+                o["action"] = action
+                log.log("test_action", o)
+            case "panel_size":
+                // Resize the panel (small-window captures); the frame rules still apply.
+                guard let w = obj["width"] as? Double, let h = obj["height"] as? Double else { continue }
+                panel.panel.setContentSize(NSSize(width: w, height: h))
+                log.log("test_action", ["action": action, "width": w, "height": h])
+            case "snapshot":
+                // The live panel's own window content to a PNG (the real views, no screen capture).
+                guard let out = obj["path"] as? String, out.hasPrefix("/"), let view = panel.panel.contentView else { continue }
+                let data = PanelTestSupport.png(of: view)
+                let ok = data.map { (try? $0.write(to: URL(fileURLWithPath: out))) != nil } ?? false
+                var o = PanelTestSupport.pageState(in: view)
+                o["action"] = action; o["ok"] = ok; o["path"] = out
+                log.log("test_action", o)
             default:
                 log.log("test_action", ["action": action, "ok": false])
             }

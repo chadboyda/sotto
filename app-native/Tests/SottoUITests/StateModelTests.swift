@@ -371,7 +371,7 @@ final class SnapshotTests: XCTestCase {
         let dir = env.map { URL(fileURLWithPath: $0) } ?? FileManager.default.temporaryDirectory.appendingPathComponent("sotto-ui-parity-\(UUID().uuidString)")
         let files = try UISnapshot.renderParity(to: dir)
         XCTAssertEqual(files.count, (UISnapshot.parityNames.count + 3) * 2)
-        XCTAssertTrue(files.contains { $0.lastPathComponent == "26-claude-finished-long-expanded--420--dark.png" })
+        XCTAssertTrue(files.contains { $0.lastPathComponent == "26-claude-working-long--420--dark.png" })
         if env == nil { try? FileManager.default.removeItem(at: dir) }
     }
 }

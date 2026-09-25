@@ -138,26 +138,37 @@ struct ClaudeColumn: View {
 
     // MARK: Page
 
-    static func messages(_ m: StateModel, pending: String?) -> [String] {
-        var msgs = m.pageMessages
-        if let p = pending, msgs.last.map({ ViewText.stripMarkdown($0) != ViewText.stripMarkdown(p) }) ?? true { msgs.append(p) }
-        return msgs
+    /// The page's messages, with a result held for the voice added when it is not already there.
+    static func entries(_ m: StateModel, pending: String?) -> [ViewText.PageEntry] {
+        var p = m.page
+        if let pending { p = ViewText.pushPage(p, pending) }
+        return ViewText.pageEntries(p)
     }
+
+    /// The request line has its own fixed slot when the panel has room for it, so the page
+    /// under it never moves (a short panel gives it up, as the page's `max-height: 520px`).
+    private var requestSlot: Bool { layout.size.height > 520 }
 
     @ViewBuilder private func page(_ t: HybridTheme, _ v: ViewText.PageView) -> some View {
         let pending = v.card?.pending
-        let msgs = Self.messages(model, pending: pending)
+        let entries = Self.entries(model, pending: pending)
         let finished = model.claudeCard.kind == "finished" || pending != nil
-        VStack(alignment: .leading, spacing: 10) {
-            // "Asked: ..." while the request is in flight (a failed or held one says so), as on the page.
-            if let r = model.requestLine {
-                Text(r.text).font(.system(size: 13)).foregroundStyle(r.tone == "error" ? t.err : r.tone == "warn" ? t.ink : t.fg3)
-                    .lineLimit(1).truncationMode(.tail)
+        VStack(alignment: .leading, spacing: 6) {
+            if requestSlot {
+                // "Asked: ..." while the request is in flight (a failed or held one says so), as on the page.
+                Group {
+                    if let r = model.requestLine {
+                        Text(r.text).font(.system(size: 13)).foregroundStyle(r.tone == "error" ? t.err : r.tone == "warn" ? t.ink : t.fg3)
+                            .lineLimit(1).truncationMode(.tail)
+                    } else {
+                        Color.clear
+                    }
+                }
+                .frame(maxWidth: .infinity, minHeight: 18, maxHeight: 18, alignment: .leading)
             }
-            if !msgs.isEmpty {
-                ClaudePage(messages: msgs, finished: finished, layout: layout, expanded: model.summaryExpanded,
-                           toggle: { model.summaryExpanded.toggle() })
-            }
+            ClaudePage(entries: entries, finished: finished, layout: layout, turn: model.pageTurnSeq)
+                .frame(minHeight: 0, maxHeight: .infinity)
+                .background(PanelFrames.reader("claude-page"))
         }
     }
 }
@@ -180,128 +191,6 @@ struct ClaudeTimer: View {
         .frame(width: Self.width, alignment: .trailing)
         .opacity(text == nil ? 0 : 1)
         .accessibilityHidden(text == nil)
-    }
-}
-
-/// Claude's words: the latest message at 100%, earlier ones at 50% and 42%, the page
-/// hanging from the bottom and older lines passing out under a top fade (so a half-clipped
-/// line never reads as a bug). A finished summary that does not fit shows from its start
-/// with "More"; expanded, it scrolls inside the page (the zone never grows).
-struct ClaudePage: View {
-    let messages: [String]
-    let finished: Bool
-    let layout: HybridLayout
-    var expanded = false
-    var toggle: () -> Void = {}
-    @Environment(\.colorScheme) private var scheme
-    @Environment(\.colorSchemeContrast) private var contrast
-    @Environment(\.sottoStill) private var still
-
-    static let opacities: [Double] = [0.42, 0.5, 1]
-
-    var body: some View {
-        let t = HybridTheme.of(scheme, increaseContrast: contrast == .increased)
-        let n = messages.count
-        let latest = messages[n - 1]
-        GeometryReader { geo in
-        Group {
-            if finished && expanded {
-                if still {
-                    // ImageRenderer draws no ScrollView content: the same box, clipped, with a scroller mark.
-                    VStack(alignment: .leading, spacing: 6) {
-                        MarkdownPage(markdown: latest, layout: layout, expanded: true).padding(.trailing, 10)
-                            .frame(minHeight: 0, maxHeight: .infinity, alignment: .topLeading).clipped()
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .overlay(alignment: .topTrailing) { Capsule().fill(t.ink3.opacity(0.5)).frame(width: 5, height: 80).padding(.top, 4) }
-                        more(t, "Less")
-                    }
-                } else {
-                    VStack(alignment: .leading, spacing: 6) {
-                        ScrollView(.vertical) {
-                            MarkdownPage(markdown: latest, layout: layout, expanded: true).padding(.trailing, 10)
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                        }
-                        .scrollIndicators(.automatic)
-                        more(t, "Less")
-                    }
-                }
-            } else {
-                FirstFit {
-                    stack(t, Array(messages.suffix(3)))
-                    stack(t, Array(messages.suffix(2)))
-                    stack(t, [latest])
-                    if finished {
-                        // From its start, with a bottom fade and More.
-                        VStack(alignment: .leading, spacing: 4) {
-                            MarkdownPage(markdown: latest, layout: layout, expanded: false)
-                                .frame(minHeight: 0, maxHeight: .infinity, alignment: .topLeading)
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                                .clipped()
-                                .mask(LinearGradient(stops: [.init(color: .black, location: 0), .init(color: .black, location: 0.8), .init(color: .clear, location: 1)],
-                                                     startPoint: .top, endPoint: .bottom))
-                            more(t, "More")
-                        }
-                    } else {
-                        // Streaming: hang from the bottom; older words go out under the top fade.
-                        stack(t, Array(messages.suffix(3)))
-                            .fixedSize(horizontal: false, vertical: true)
-                            .frame(minHeight: 0, maxHeight: .infinity, alignment: .bottomLeading)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .clipped()
-                            .mask(LinearGradient(stops: [.init(color: .clear, location: 0), .init(color: .clear, location: 10 / 300),
-                                                         .init(color: .black, location: 68 / 300), .init(color: .black, location: 1)],
-                                                 startPoint: .top, endPoint: .bottom))
-                    }
-                }
-            }
-        }
-        .frame(width: geo.size.width, height: geo.size.height, alignment: .topLeading)
-        }
-        .textSelection(.enabled)
-        .accessibilityElement(children: .combine)
-        .accessibilityLabel("Claude: " + ViewText.stripMarkdown(latest))
-    }
-
-    private func stack(_ t: HybridTheme, _ msgs: [String]) -> some View {
-        VStack(alignment: .leading, spacing: layout.lineHeight * 0.55) {
-            ForEach(Array(msgs.enumerated()), id: \.offset) { i, m in
-                let op = Self.opacities[max(0, Self.opacities.count - msgs.count + i)]
-                MarkdownPage(markdown: m, layout: layout, expanded: false).opacity(op)
-            }
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-    }
-
-    private func more(_ t: HybridTheme, _ label: String) -> some View {
-        Button(action: toggle) {
-            Text(label).font(.system(size: 12.5, weight: .semibold)).foregroundStyle(t.ink).underline(true, color: t.hair2)
-                .frame(minHeight: 28).contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .accessibilityValue(expanded ? "expanded" : "collapsed")
-    }
-}
-
-/// Shows the first subview whose natural height fits the box (the rest are parked out of
-/// view). A Layout rather than ViewThatFits, so still frames (ImageRenderer) choose the same.
-struct FirstFit: Layout {
-    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
-        proposal.replacingUnspecifiedDimensions()
-    }
-
-    static func chosen(_ subviews: Subviews, in size: CGSize) -> Int {
-        for (i, s) in subviews.enumerated() where i < subviews.count - 1 {
-            if s.sizeThatFits(ProposedViewSize(width: size.width, height: nil)).height <= size.height + 0.5 { return i }
-        }
-        return subviews.count - 1
-    }
-
-    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
-        let pick = Self.chosen(subviews, in: bounds.size)
-        for (i, s) in subviews.enumerated() {
-            if i == pick { s.place(at: bounds.origin, proposal: ProposedViewSize(bounds.size)) }
-            else { s.place(at: CGPoint(x: bounds.minX - 100_000, y: bounds.minY), proposal: ProposedViewSize(bounds.size)) }
-        }
     }
 }
 
