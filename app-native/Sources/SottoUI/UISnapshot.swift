@@ -15,13 +15,17 @@ public enum UISnapshot {
         let floor: String?
         /// Seconds from the session start to the still frame.
         var elapsed: TimeInterval = 252
+        /// Event clocks set relative to the still frame's time (a transition at any instant).
+        var after: (@MainActor @Sendable (StateModel, Date) -> Void)? = nil
+        /// Render with Reduce Motion on.
+        var reduced = false
     }
 
     static func status(_ state: String, muted: Bool = false, busy: Bool = false, lastError: [String: JSONValue]? = nil,
-                       key: [String: JSONValue]? = nil, todaySeconds: Double = 852, live: Bool? = nil) -> [String: JSONValue] {
+                       key: [String: JSONValue]? = nil, todaySeconds: Double = 852, live: Bool? = nil, persona: String = "sotto", voice: String = "marin") -> [String: JSONValue] {
         var s: [String: JSONValue] = [
             "state": .string(state), "owner": .object(["project": .string("claude-live"), "cwd": .string("/tmp/claude-live")]),
-            "voice": .string("marin"), "speaking_policy": .string("milestones"), "idle_minutes": .number(5), "idle_seconds": .number(300),
+            "voice": .string(voice), "persona": .string(persona), "speaking_policy": .string("milestones"), "idle_minutes": .number(5), "idle_seconds": .number(300),
             "echo_guard": .string("auto"), "wake": .object(["enabled": .bool(true), "sensitivity": .string("medium")]),
             "today": .object(["seconds": .number(todaySeconds), "cap_minutes": .number(120)]), "claude": .object(["busy": .bool(busy)]),
             "key": .object(["present": .bool(true), "source": .string("keychain"), "hint": .string("wxyz"), "label": .string("the macOS Keychain"),
@@ -40,9 +44,38 @@ public enum UISnapshot {
         var o = fields; o["type"] = .string(type); return o
     }
 
+    static let personas: JSONValue = .object(["current": .string("sotto"), "personas": .array([
+        .object(["id": .string("sotto"), "name": .string("Sotto"), "voice": .string("marin"), "description": .string("Balanced and friendly, with real opinions.")]),
+        .object(["id": .string("june"), "name": .string("June"), "voice": .string("coral"), "description": .string("Warm, encouraging, keeps you steady.")]),
+        .object(["id": .string("moss"), "name": .string("Moss"), "voice": .string("cedar"), "description": .string("Dry-witted senior engineer.")]),
+        .object(["id": .string("koan"), "name": .string("Koan"), "voice": .string("sage"), "description": .string("Calm zen mentor: slow, unflappable.")]),
+    ])])
+
     static func connected(_ m: StateModel, _ st: [String: JSONValue]) {
         m.linkState = .connected
-        m.apply(object: ["type": .string("welcome"), "protocol": .number(1), "version": .string("0.3.0"), "status": st["status"]!])
+        m.apply(object: ["type": .string("welcome"), "protocol": .number(1), "version": .string("0.3.0"), "status": st["status"]!,
+                         "settings": .object(["personas": personas])])
+        m.terminalName = "iTerm2"
+        m.showTerminal = {}
+    }
+
+    /// Two older stars from earlier turns and two from this one (minutes old).
+    static func stars(_ m: StateModel, _ t: Date) {
+        m.setEventsForPreview(milestones: [
+            .init(s: 0.11, born: t.addingTimeInterval(-1900)), .init(s: 0.43, born: t.addingTimeInterval(-1300)),
+            .init(s: 0.62, born: t.addingTimeInterval(-160)), .init(s: 0.79, born: t.addingTimeInterval(-70)),
+        ])
+    }
+
+    static let approval: @MainActor @Sendable (StateModel) -> Void = { m in
+        connected(m, status("live", busy: true)); working(m)
+        m.apply(object: ev("activity", ["kind": .string("text"), "text": .string("The lockfile and `node_modules` disagree, which is why CI installs a different version. A clean install fixes it.")]))
+        m.apply(object: ev("activity", ["kind": .string("permission"), "text": .string("Bash: rm -rf node_modules && npm ci")]))
+    }
+
+    /// The eclipse `age` seconds in (IMPLEMENTATION.md §4.1).
+    static func eclipse(_ age: Double) -> @MainActor @Sendable (StateModel, Date) -> Void {
+        { m, t in stars(m, t); m.setEventsForPreview(attentionAt: t.addingTimeInterval(-age)) }
     }
 
     static func captions(_ m: StateModel, _ you: String, _ sotto: String? = nil) {
@@ -53,7 +86,8 @@ public enum UISnapshot {
     static let working: @MainActor @Sendable (StateModel) -> Void = { m in
         m.apply(object: ev("delegation", ["id": .string("d1"), "status": .string("delivered"), "text": .string("Fix the flaky auth test, then run the full suite")]))
         m.apply(object: ev("activity", ["kind": .string("turn_start"), "text": .string("")]))
-        m.apply(object: ev("activity", ["kind": .string("text"), "text": .string("The auth spec shares a token cache with login. I'll isolate it, then run the suite.")]))
+        m.apply(object: ev("activity", ["kind": .string("text"), "text": .string("I read `auth.spec.ts` and the session helpers. The failure only shows up when the refresh timer fires during the assertion.")]))
+        m.apply(object: ev("activity", ["kind": .string("text"), "text": .string("Found the race: the token refresh in `withSession()` resolves **after** the assertion runs.\n\n- Await the refresh instead of sleeping 50 ms\n- Run the auth suite 40 times\n- Then the full suite")]))
         m.apply(object: ev("activity", ["kind": .string("tool"), "text": .string("Running the tests")]))
     }
 
@@ -69,17 +103,23 @@ public enum UISnapshot {
         State(name: "06-you-speaking", build: { m in connected(m, status("live")); captions(m, "Also have it run the whole suite once it's done.") }, mic: 0.8, speaker: 0, floor: "you"),
         State(name: "07-sotto-speaking", build: { m in connected(m, status("live")); captions(m, "What's failing?", "Two specs fail: login and auth. Want me to ask Claude to fix them?") }, mic: 0, speaker: 0.75, floor: "voice"),
         State(name: "08-muted", build: { m in connected(m, status("live", muted: true)) }, mic: 0, speaker: 0, floor: nil),
-        State(name: "09-claude-working", build: { m in connected(m, status("live", busy: true)); working(m); captions(m, "Also have it run the whole suite once it's done.") }, mic: 0.1, speaker: 0, floor: nil),
-        State(name: "10-claude-needs-approval", build: { m in
-            connected(m, status("live", busy: true)); working(m)
-            m.apply(object: ev("activity", ["kind": .string("permission"), "text": .string("Bash: rm -rf node_modules && npm ci")]))
-        }, mic: 0, speaker: 0, floor: nil),
+        State(name: "09-claude-working", build: { m in connected(m, status("live", busy: true)); working(m); captions(m, "Also have it run the whole suite once it's done.", "Sure. I'll ask Claude to run the full suite after the fix.") },
+              mic: 0, speaker: 0, floor: nil, after: { m, t in stars(m, t); m.setWorkSinceForPreview(t.addingTimeInterval(-100)) }),
+        State(name: "10-claude-needs-approval", build: approval, mic: 0, speaker: 0, floor: nil, after: eclipse(6)),
+        State(name: "10a-approval-freeze", build: approval, mic: 0, speaker: 0, floor: nil, after: eclipse(0.15)),
+        State(name: "10b-approval-moon-crossing", build: approval, mic: 0, speaker: 0, floor: nil, after: eclipse(0.64)),
+        State(name: "10c-approval-totality", build: approval, mic: 0, speaker: 0, floor: nil, after: eclipse(0.84)),
         State(name: "11-claude-finished", build: { m in
             connected(m, status("live"))
             m.apply(object: ev("delegation", ["id": .string("d1"), "status": .string("answered"), "text": .string("Fix the flaky auth test")]))
             m.apply(object: ev("activity", ["kind": .string("turn_end"), "text": .string(""), "summary": .string("Fixed the flaky auth test: the **login** and **auth** specs shared a module-level token cache, so the order they ran in mattered.\n\n- Each spec now builds its own cache\n- `npm test` passes: 214 tests\n\nSee [the PR](https://github.com/example/pr/1).")]))
             captions(m, "Nice. Anything else failing?")
-        }, mic: 0, speaker: 0, floor: nil),
+        }, mic: 0, speaker: 0, floor: nil, after: { m, t in stars(m, t); m.setEventsForPreview(finishedAt: t.addingTimeInterval(-6)) }),
+        State(name: "11a-finished-stars-flash", build: { m in
+            connected(m, status("live"))
+            m.apply(object: ev("activity", ["kind": .string("turn_end"), "text": .string(""), "summary": .string("**Done.** The auth test is stable across 40 runs, and the full suite passes: 412 tests in 38 s.")]))
+            captions(m, "Nice.")
+        }, mic: 0, speaker: 0, floor: nil, after: { m, t in stars(m, t); m.setEventsForPreview(finishedAt: t.addingTimeInterval(-1.08)) }),
         State(name: "12-background-agents", build: { m in
             connected(m, status("live", busy: true)); working(m)
             m.apply(object: ev("activity", ["kind": .string("agents"), "text": .string("2 background agents"), "count": .number(2)]))
@@ -100,7 +140,9 @@ public enum UISnapshot {
             m.apply(object: ev("result_pending", ["text": .string("All 214 tests pass. The flaky auth spec is fixed.")]))
         }, mic: 0, speaker: 0, floor: nil),
         State(name: "17-paused-daily-cap", build: { m in connected(m, status("paused", lastError: ["code": .string("daily_cap"), "message": .string("cap")])) }, mic: 0, speaker: 0, floor: nil),
-        State(name: "18-sleeping", build: { m in connected(m, status("sleeping")) }, mic: 0, speaker: 0, floor: nil),
+        State(name: "18-sleeping", build: { m in connected(m, status("sleeping")) }, mic: 0, speaker: 0, floor: nil, after: { m, t in stars(m, t) }),
+        State(name: "18b-sunrise-wake", build: { m in connected(m, status("sleeping")); m.apply(object: status("live")) }, mic: 0, speaker: 0, floor: nil,
+              after: { m, t in stars(m, t); m.setEventsForPreview(wokeAt: t.addingTimeInterval(-0.3)) }),
         State(name: "19-sleeping-muted", build: { m in connected(m, status("sleeping")); m.wakeMuted = true }, mic: 0, speaker: 0, floor: nil),
         State(name: "20-mic-blocked", build: { m in connected(m, status("paused")); m.micFailure = "macos" }, mic: 0, speaker: 0, floor: nil),
         State(name: "21-lost-daemon", build: { m in connected(m, status("live")); m.linkState = .backoff(seconds: 2) }, mic: 0, speaker: 0, floor: nil),
@@ -118,6 +160,12 @@ public enum UISnapshot {
             m.apply(object: ev("activity", ["kind": .string("permission"), "agent": .bool(true),
                                             "text": .string("A background agent needs approval to run a shell command")]))
         }, mic: 0, speaker: 0, floor: nil, elapsed: 420),
+        State(name: "28-persona-switch", build: { m in
+            connected(m, status("live", persona: "koan", voice: "sage")); captions(m, "Switch to Koan.")
+        }, mic: 0, speaker: 0.5, floor: nil, after: { m, t in m.setEventsForPreview(personaSwitch: ("sotto", "koan", t.addingTimeInterval(-0.9))) }),
+        State(name: "29-reduce-motion-approval", build: approval, mic: 0, speaker: 0, floor: nil, after: eclipse(6), reduced: true),
+        State(name: "30-reduce-motion-you-speaking", build: { m in connected(m, status("live")); captions(m, "Also have it run the whole suite once it's done.") },
+              mic: 0.8, speaker: 0, floor: "you", reduced: true),
     ]
 
     /// Claude's long final message (the user's report: the card grew and a scroller sat on the text).
@@ -165,6 +213,19 @@ public enum UISnapshot {
             + render(to: dir, states: picked.filter { ["05-listening", "24-long-session", "09-claude-working"].contains($0.name) }, size: CGSize(width: 360, height: 640), suffix: "360")
     }
 
+    /// The Filament + Orrery screenshots (design/hybrid-impl/native/): every state in the
+    /// 420 x 640 panel, the key states in the 640 x 900 large panel and the 320 x 96 strip.
+    public static let largeNames = ["05-listening", "07-sotto-speaking", "09-claude-working", "10-claude-needs-approval", "11-claude-finished"]
+    public static let miniNames = ["05-listening", "06-you-speaking", "07-sotto-speaking", "08-muted", "09-claude-working", "10-claude-needs-approval", "13-cant-hear", "18-sleeping"]
+
+    @discardableResult
+    public static func renderHybrid(to dir: URL) throws -> [URL] {
+        var out = try render(to: dir, states: states, size: CGSize(width: 420, height: 640), suffix: nil, prefix: "panel-")
+        out += try render(to: dir, states: states.filter { largeNames.contains($0.name) }, size: CGSize(width: 640, height: 900), suffix: nil, prefix: "large-")
+        out += try render(to: dir, states: states.filter { miniNames.contains($0.name) }, size: MiniPanelView.size, suffix: nil, prefix: "mini-", mini: true)
+        return out
+    }
+
     /// A model in the named state (for previews and tests).
     public static func model(_ s: State) -> StateModel {
         let m = StateModel()
@@ -176,6 +237,8 @@ public enum UISnapshot {
         m.micLevel = s.mic
         m.speakerLevel = s.speaker
         m.setFloorForPreview(s.floor)
+        m.reducedMotion = s.reduced
+        s.after?(m, t0.addingTimeInterval(s.elapsed))
         return m
     }
 
@@ -185,14 +248,16 @@ public enum UISnapshot {
         try render(to: dir, states: states, size: size, suffix: nil, scale: scale)
     }
 
-    static func render(to dir: URL, states: [State], size: CGSize, suffix: String?, scale: CGFloat = 2) throws -> [URL] {
+    static func render(to dir: URL, states: [State], size: CGSize, suffix: String?, scale: CGFloat = 2, prefix: String = "", mini: Bool = false) throws -> [URL] {
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         var out: [URL] = []
         for s in states {
             let still = Date(timeIntervalSinceReferenceDate: 780_000_000 + s.elapsed).timeIntervalSinceReferenceDate
             for scheme in [ColorScheme.light, .dark] {
                 let m = model(s)
-                let view = PanelView(model: m, stillAt: still)
+                let view = Group {
+                    if mini { MiniPanelView(model: m, stillAt: still) } else { PanelView(model: m, stillAt: still) }
+                }
                     .frame(width: size.width, height: size.height)
                     .environment(\.colorScheme, scheme)
                 let r = ImageRenderer(content: view)
@@ -200,7 +265,7 @@ public enum UISnapshot {
                 guard let cg = r.cgImage else { throw NSError(domain: "UISnapshot", code: 1, userInfo: [NSLocalizedDescriptionKey: "render failed: \(s.name)"]) }
                 let rep = NSBitmapImageRep(cgImage: cg)
                 guard let png = rep.representation(using: .png, properties: [:]) else { continue }
-                let url = dir.appendingPathComponent("\(s.name)\(suffix.map { "--\($0)" } ?? "")--\(scheme == .dark ? "dark" : "light").png")
+                let url = dir.appendingPathComponent("\(prefix)\(s.name)\(suffix.map { "--\($0)" } ?? "")--\(scheme == .dark ? "dark" : "light").png")
                 try png.write(to: url)
                 out.append(url)
             }

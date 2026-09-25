@@ -528,3 +528,12 @@ The voice page now follows design/concepts-v2/hybrid (IMPLEMENTATION.md, DECISIO
 7. **Cost:** the idle panel draws no frames at all (`test/web/string.test.js`); sound runs frames until the string is still; the working bead redraws at 10 fps only when it moved; sleeping shivers at 15 fps or less; a hidden window draws nothing.
 8. **Tokens:** deep-space dark ground `#05070C` with a static lift behind the string, a printed-page light ground `#FBFCFD`, star gold for "needs you" (`#FFB547` dark; `#C4800E` line and `#A55200` text on white), rose for muted, teal for you, periwinkle for the voice. No beige.
 
+
+
+## The Filament + Orrery panel in the app (feat/hybrid-native, 2026-09-24)
+The native panel follows the same design and the same rules as the page (the section above; docs/NATIVE.md "Hybrid panel"). Differences from the page and from 0.3.x:
+1. **Layout:** the dial, the raised Claude card and the two-line captions are gone; see the section above. Banners share the caption line instead of floating (can't hear reads "Using <mic>." with Switch mic), and the approval's caption names the terminal ("In iTerm2 · project") when the app knows it (the last terminal app the user activated). "Show terminal" activates that app.
+2. **Compact:** a 320 x 96 strip (peg, string, word, Claude's moon and timer, caption, Expand) replaces the 290 x 44 pill; its approval word names the terminal ("Approve in iTerm2").
+3. **Menu bar:** Claude's moon phase on a short string replaces the per-state SF Symbols; gold only when Claude needs you; errors keep the warning symbol.
+4. **Corona:** drawn with Canvas on a small quad, not the Metal `.colorEffect` of the plan (SwiftPM builds no `.metallib` without Xcode).
+5. **The headline does not show "Switching to <Name>"** (the design's Filament word), to match `lib.headline`; the persona switch shows in the string (glissando, the old shape lifting away, frets), the caption (the persona's description) and the footer chip.

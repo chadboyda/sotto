@@ -45,6 +45,9 @@ final class AppController: NSObject, NSApplicationDelegate, PanelControllerDeleg
     /// `data_dir` from the daemon's settings (for Open Logs after a direct launch without --data-dir).
     private var settingsDataDir: String?
 
+    /// The terminal Claude Code most likely runs in (the last one the user activated).
+    private let terminals = TerminalTracker()
+
     private var muteSpec = HotkeySpec.parse("opt+cmd+m")!
     private var showSpec = HotkeySpec.parse("opt+cmd+t")!
 
@@ -337,6 +340,16 @@ final class AppController: NSObject, NSApplicationDelegate, PanelControllerDeleg
         model.openMicSwitcher = { [weak self] in self?.showSettings(activate: true, reason: "switch_mic") }
         model.onUserActivity = { [weak self] in self?.link?.send(.activity) }
         model.reducedMotion = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+        // Reduce Motion can change while the app runs.
+        NSWorkspace.shared.notificationCenter.addObserver(forName: NSWorkspace.accessibilityDisplayOptionsDidChangeNotification, object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.model.reducedMotion = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion }
+        }
+        terminals.start { [weak self] name in
+            MainActor.assumeIsolated { self?.model.terminalName = name }
+        }
+        model.terminalName = terminals.name
+        // "Show terminal" brings the terminal forward; never in test mode (automation must not move focus).
+        if !options.testMode { model.showTerminal = { [weak self] in self?.terminals.activate() } }
         model.sendCommand = { [weak self] name, args in
             guard let self = self else { return .failure(CommandError(code: "gone", message: "Sotto is quitting.")) }
             if name == "mute", case .bool(let on)? = args["on"] { return await self.muteCommand(on: on) }
@@ -789,9 +802,10 @@ final class AppController: NSObject, NSApplicationDelegate, PanelControllerDeleg
         }
         let project = model.status?.owner?.project ?? ""
         let muted = model.effectiveMuted || mutePending
-        panel?.updatePill(icon: ic, project: project, muted: muted)
         var ms = MenuState()
         ms.icon = ic
+        ms.phase = HybridText.Phase(head: ViewText.claudeHead(model.claudeCard).phase)
+        panel?.setTitle(ViewText.windowTitle(floor: model.pageView.floor, attention: model.attention))
         ms.project = project
         ms.errorMessage = model.status?.last_error?.message ?? ""
         ms.attached = request != nil

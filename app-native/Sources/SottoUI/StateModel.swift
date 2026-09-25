@@ -88,6 +88,12 @@ public final class StateModel {
     public var reducedMotion = false
     /// The user muted local wake listening while sleeping.
     public var wakeMuted = false
+    /// The panel is on screen and not occluded (the app sets it from NSWindow's occlusion
+    /// state): the hero's timelines pause when it is false.
+    public var panelVisible = true
+    /// The terminal Claude Code runs in, when the app knows it (the last terminal app the
+    /// user activated). Shown in the approval caption ("In iTerm2 · project").
+    public var terminalName: String?
 
     // MARK: Wiring (set by the app)
     /// Send a command, get the result (docs/NATIVE.md §3.3).
@@ -98,11 +104,35 @@ public final class StateModel {
     public var openMicSwitcher: (() -> Void)?
     /// The user touched the UI (sent as `activity {}`).
     public var onUserActivity: (() -> Void)?
+    /// Bring the terminal forward ("Show terminal" in the approval); nil hides the button.
+    public var showTerminal: (() -> Void)?
     /// Last command error, shown as a banner.
     public private(set) var lastCommandError: CommandError?
 
     /// Injectable clock for tests.
     public var now: () -> Date = { Date() }
+
+    // MARK: Filament + Orrery (design/concepts-v2/hybrid): event clocks and milestones
+    /// When Claude started waiting for you (the eclipse's t = 0), and when it stopped.
+    public private(set) var attentionAt: Date?
+    public private(set) var attentionClearedAt: Date?
+    /// When Claude last finished a turn ("Claude finished", the finish ring and star flash).
+    public private(set) var finishedAt: Date?
+    /// When the panel woke from sleep (the sunrise).
+    public private(set) var wokeAt: Date?
+    /// A persona switch in flight: the tuning glissando and "Switching to <Name>".
+    public private(set) var personaSwitch: (from: String, to: String, at: Date)?
+    /// Milestone stars on the string: where the bead was when Claude finished a step.
+    public struct Milestone: Equatable, Sendable { public var s: Double; public var born: Date }
+    /// lib.milestoneStars' state (ms since 1970), kept as the page keeps it.
+    @ObservationIgnored private var starState = ViewText.Stars()
+    public private(set) var milestones: [Milestone] = []
+    /// Claude's own words on the page: the latest message and up to two before it.
+    public private(set) var pageMessages: [String] = []
+    @ObservationIgnored private var attentionWas = false
+    /// Bumped to make time-based views re-read the clock once (the end of a one-shot).
+    public private(set) var redrawTick = 0
+    public func touchForRedraw() { redrawTick &+= 1 }
 
     private var everConnected = false
     private var wordHold = WordHold()
@@ -204,6 +234,73 @@ public final class StateModel {
     public func workingTime(at t: Date) -> String? {
         guard claudeBusy, let since = workSince else { return nil }
         return ViewText.formatElapsed(t.timeIntervalSince(since) * 1000)
+    }
+
+    /// The approval's wait so far ("0:14"), while Claude waits.
+    public func waitingTime(at t: Date) -> String? {
+        guard attention, let since = attentionAt else { return nil }
+        return ViewText.formatClock(max(0, t.timeIntervalSince(since)))
+    }
+
+    /// Claude's elapsed time as a clock ("4:17"), while it works.
+    public func workingClock(at t: Date) -> String? {
+        guard claudeBusy, let since = workSince else { return nil }
+        return ViewText.formatClock(max(0, t.timeIntervalSince(since)))
+    }
+
+    /// The can't-hear notice is up (the string is drawn broken, the word says so).
+    public var cantHear: Bool { banners.contains { $0.key == "cant_hear" } }
+
+    /// The persona in effect: the daemon's status (a terminal switch updates it first), then settings.
+    public var personaId: String {
+        if let p = status?.persona, !p.isEmpty { return p }
+        if case .object(let o)? = settings?["personas"], case .string(let c)? = o["current"] { return c }
+        return "sotto"
+    }
+
+    /// The personas the daemon offers (id, name, voice), for the footer chip.
+    public var personaList: [(id: String, name: String, voice: String?)] {
+        guard case .object(let o)? = settings?["personas"], case .array(let list)? = o["personas"] else { return [] }
+        return list.compactMap { item in
+            guard case .object(let p) = item, case .string(let id)? = p["id"] else { return nil }
+            let name: String = { if case .string(let n)? = p["name"] { return n }; return id.capitalized }()
+            let voice: String? = { if case .string(let v)? = p["voice"] { return v }; return nil }()
+            return (id, name, voice)
+        }
+    }
+
+    public func personaName(_ id: String) -> String { personaList.first { $0.id == id }?.name ?? id.prefix(1).uppercased() + id.dropFirst() }
+
+    /// "Switching to <Name>" while a persona switch runs (at most 2.5 s, or until the new session is live).
+    public func switchingTo(at t: Date) -> String? {
+        guard let sw = personaSwitch else { return nil }
+        let st = status?.state ?? "off"
+        let age = t.timeIntervalSince(sw.at)
+        guard age >= 0, age < 2.5 || ((st == "connecting" || st == "reconnecting") && age < 20) else { return nil }
+        return personaName(sw.to)
+    }
+
+    /// Claude needing you, as the words show it: at totality (0.75 s into the eclipse), or at
+    /// once under Reduce Motion. Until then the headline and caption still say what Claude was doing.
+    public func attentionShown(at t: Date) -> Bool {
+        guard attention else { return false }
+        if reducedMotion { return true }
+        guard let a = attentionAt else { return true }
+        return t.timeIntervalSince(a) * 1000 >= ViewText.eclipseTotalityMs
+    }
+
+    /// The headline (lib.headline over the model) at `t`: the approval only from totality.
+    public func headline(at t: Date) -> ViewText.Headline {
+        ViewText.headline(pageView(at: t), .init(attention: attentionShown(at: t), question: claudeKind == "question", busy: claudeBusy,
+                                                  tool: claudeTool, finishedAt: finishedAt.map { $0.timeIntervalSince1970 * 1000 },
+                                                  now: t.timeIntervalSince1970 * 1000))
+    }
+
+    /// The page view at `t`: as `pageView`, with an approval shown only from totality (lib.ECLIPSE_TOTALITY_MS).
+    public func pageView(at t: Date) -> ViewText.PageView {
+        var p = pageInput
+        p.attention = attentionShown(at: t)
+        return ViewText.pageView(p)
     }
 
     /// Today's billed seconds: the daemon's figure plus fresher usage from this session's events.
@@ -367,6 +464,13 @@ public final class StateModel {
         if ["live", "connecting", "reconnecting", "waiting_page"].contains(s.state) { pausedReason = nil }
         if s.state == "live" && prev?.state != "live" { dismissBanner(key: "lost") }
         if s.state != prev?.state { announceState(s.state) }
+        // The sunrise: sleeping to awake.
+        if prev?.state == "sleeping" && ["live", "connecting", "reconnecting"].contains(s.state) { wokeAt = now() }
+        // A persona switch (from the panel, Settings or the terminal).
+        if let p = s.persona, let old = prev?.persona, p != old { personaSwitch = (old, p, now()) }
+        // Milestones belong to the voice session: cleared when voice ends.
+        if s.state == "off" { milestones = []; starState = ViewText.Stars() }
+        noteAttention()
     }
 
     private func applyActivity(_ m: [String: JSONValue]) {
@@ -379,12 +483,20 @@ public final class StateModel {
         activityLine = v
         if kind == "turn_start" || kind == "turn_end" { claudeSays = ""; claudeSaysAt = nil; claudeTool = "" }
         if kind == "text" { claudeSays = m.string("text") ?? ""; claudeSaysAt = now() }
+        if kind == "turn_start" { pageMessages = []; finishedAt = nil }
+        if kind == "text" { pushPage(claudeSays) }
         if kind == "tool" { claudeTool = m.string("text") ?? "" }
         if let b = v.busy { setBusy(b) }
         if let s = v.summary { summary = s; summaryExpanded = false }
         claudeKind = kind
         claudeText = m.string("text") ?? ""
         claudeAgent = kind == "permission" && m.bool("agent") == true
+        noteMilestone(kind: kind, text: m.string("text"))
+        if kind == "turn_end" {
+            finishedAt = now()
+            if let s = v.summary { pushPage(s) }
+        }
+        noteAttention()
         switch kind {
         case "turn_start": announce("Claude is working.")
         case "permission":
@@ -427,6 +539,38 @@ public final class StateModel {
         case "close_window": closed = true
         default: break
         }
+    }
+
+    /// The eclipse clocks: when Claude started and stopped waiting for you.
+    private func noteAttention() {
+        let a = attention
+        if a && !attentionWas { attentionAt = now(); attentionClearedAt = nil }
+        if !a && attentionWas { attentionClearedAt = now() }
+        attentionWas = a
+    }
+
+    /// A step Claude reports in its own words leaves a star where the bead is (lib.milestoneStars).
+    private func noteMilestone(kind: String?, text: String?) {
+        let t = now()
+        let next = ViewText.milestoneStars(starState, kind: kind, text: text, busy: claudeBusy, now: t.timeIntervalSince1970 * 1000,
+                                           workSince: workSince.map { $0.timeIntervalSince1970 * 1000 })
+        guard next != starState else { return }
+        let born = next.stars.count > starState.stars.count || next.lastAt != starState.lastAt
+        starState = next
+        milestones = next.stars.map { Milestone(s: $0.s, born: Date(timeIntervalSince1970: $0.born / 1000)) }
+        if born { announce("Claude: step done.") }
+    }
+
+    /// Claude's page: the latest message and two before it (never a tool label).
+    private func pushPage(_ text: String) {
+        let t = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !t.isEmpty else { return }
+        if let last = pageMessages.last, ViewText.stripMarkdown(last) == ViewText.stripMarkdown(t) || ViewText.stripMarkdown(t).hasPrefix(ViewText.stripMarkdown(last)) {
+            pageMessages[pageMessages.count - 1] = t
+            return
+        }
+        pageMessages.append(t)
+        if pageMessages.count > 3 { pageMessages.removeFirst(pageMessages.count - 3) }
     }
 
     private func setBusy(_ busy: Bool) {
@@ -603,7 +747,23 @@ public final class StateModel {
         captions = []; delegations = []; claudeBusy = false; claudeKind = nil; claudeAgent = false; claudeText = ""; claudeSays = ""
         claudeSaysAt = nil; claudeTool = ""; summary = nil; agents = 0; workSince = nil; banners = []; pendingResult = nil
         floor = nil; wordHold = WordHold(); floorTracker = FloorTracker(); usageShown = nil; todayShown = nil
+        attentionAt = nil; attentionClearedAt = nil; finishedAt = nil; wokeAt = nil; personaSwitch = nil; milestones = []
+        starState = ViewText.Stars(); pageMessages = []; attentionWas = false
     }
+
+    /// Canned event clocks for snapshots (a still frame at any instant of a transition).
+    public func setEventsForPreview(attentionAt: Date? = nil, clearedAt: Date? = nil, finishedAt: Date? = nil, wokeAt: Date? = nil,
+                                    personaSwitch: (from: String, to: String, at: Date)? = nil, milestones: [Milestone]? = nil) {
+        if let a = attentionAt { self.attentionAt = a }
+        if let c = clearedAt { attentionClearedAt = c }
+        if let f = finishedAt { self.finishedAt = f }
+        if let w = wokeAt { self.wokeAt = w }
+        if let p = personaSwitch { self.personaSwitch = p }
+        if let m = milestones { self.milestones = m }
+    }
+
+    /// Move the work clock (snapshots: a turn that started minutes ago).
+    public func setWorkSinceForPreview(_ d: Date) { workSince = d }
 
     /// Force the shown floor (previews/snapshots, where the 1.3 s hold would never elapse).
     public func setFloorForPreview(_ f: String?) { floor = f }

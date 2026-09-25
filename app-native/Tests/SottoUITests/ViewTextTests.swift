@@ -116,7 +116,29 @@ final class ViewTextTests: XCTestCase {
             card.tone = o.string("tone") ?? "neutral"
             guard let r = ViewText.cardAnnouncement(card) else { return .null }
             return .object(["text": .string(r.text), "assertive": .bool(r.assertive)])
-        case "windowTitle": return .string(ViewText.windowTitle(floor: a[0].str ?? "", attention: a[1].boolean ?? false))
+        case "windowTitle": return .string(ViewText.windowTitle(floor: a[0].str ?? a[0].obj?.string("floor") ?? "", attention: a[1].boolean ?? false))
+        // The Filament + Orrery panel (docs/NATIVE.md "Hybrid panel").
+        case "claudeVerb": return .string(ViewText.claudeVerb(a[0].str))
+        case "headline":
+            let c = a[1].obj ?? [:]
+            let h = ViewText.headline(pageViewFrom(a[0].obj ?? [:]), .init(attention: c.bool("attention") ?? false, question: c.bool("question") ?? false,
+                                                                        busy: c.bool("busy") ?? false, tool: c.string("tool"), finishedAt: c.number("finishedAt"), now: c.number("now") ?? 0))
+            return .object(["word": .string(h.word), "tone": opt(h.tone), "news": .bool(h.news)])
+        case "statusWord": return .string(ViewText.statusWord(pageViewFrom(a[0].obj ?? [:])))
+        case "captionNote": return opt(ViewText.captionNote(pageViewFrom(a[0].obj ?? [:])))
+        case "claudeHead":
+            let o = a[0].obj ?? [:]
+            let h = ViewText.claudeHead(ViewText.ClaudeCard(kind: o.string("kind") ?? "idle", title: o.string("title") ?? ""))
+            return .object(["phase": .string(h.phase), "label": .string(h.label), "detail": opt(h.detail), "need": .bool(h.need)])
+        case "beadPosition": return .number(ViewText.beadPosition(a[0].num))
+        case "starAlpha": return .number(ViewText.starAlpha(a[0].num))
+        case "milestoneStars":
+            let st = a[0].obj ?? [:], ev = a[1].obj ?? [:], ctx = a[2].obj ?? [:]
+            var stars = ViewText.Stars(lastAt: st.number("lastAt"))
+            if case .array(let list)? = st["stars"] { stars.stars = list.compactMap { $0.obj }.map { .init(s: $0.number("s") ?? 0, born: $0.number("born") ?? 0) } }
+            let n = ViewText.milestoneStars(stars, kind: ev.string("kind"), text: ev.string("text"), busy: ctx.bool("busy") ?? false,
+                                            now: ctx.number("now") ?? 0, workSince: ctx.number("workSince"))
+            return .object(["stars": .array(n.stars.map { .object(["s": .number($0.s), "born": .number($0.born)]) }), "lastAt": n.lastAt.map { .number($0) } ?? .null])
         default:
             XCTFail("no Swift port for \(fn)")
             return .null
@@ -199,6 +221,20 @@ final class ViewTextTests: XCTestCase {
         let e = JSONEncoder(); e.outputFormatting = [.sortedKeys]
         return (try? String(data: e.encode(v), encoding: .utf8)) ?? "?"
     }
+}
+
+/// A PageView from lib.pageView()'s JSON (the fields the hybrid rules read).
+func pageViewFrom(_ o: [String: JSONValue]) -> ViewText.PageView {
+    let h = o.object("header") ?? [:]
+    var v = ViewText.PageView(header: .init(key: h.string("key") ?? "off", label: h.string("label") ?? "", detail: h.string("detail")))
+    v.view = o.string("view") ?? "card"; v.floor = o.string("floor") ?? "off"; v.word = o.string("word") ?? ""
+    v.sub = o.string("sub"); v.wordTone = o.string("wordTone")
+    if let c = o.object("card") {
+        var card = ViewText.Card(kind: c.string("kind") ?? "", title: c.string("title") ?? "", body: c.string("body") ?? "")
+        card.tone = c.string("tone") ?? "neutral"
+        v.card = card
+    }
+    return v
 }
 
 extension JSONValue {

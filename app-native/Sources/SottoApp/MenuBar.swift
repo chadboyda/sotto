@@ -2,6 +2,8 @@
 // state, and the menu Show/Hide Panel, Compact, Mute, Pause/Resume, End Voice,
 // Open in Browser, Open Logs, Settings, Stay in Menu Bar, Quit.
 import AppKit
+import SwiftUI
+import SottoUI
 
 @MainActor
 protocol MenuBarDelegate: AnyObject {
@@ -20,6 +22,8 @@ protocol MenuBarDelegate: AnyObject {
 /// What the menu shows, as plain values (built by the controller).
 struct MenuState: Equatable {
     var icon: VoiceIcon = .off
+    /// Claude's moon phase (design/concepts-v2/hybrid §3 "Menu bar item").
+    var phase: HybridText.Phase = .idle
     var project = ""
     var errorMessage = ""
     var attached = false
@@ -91,11 +95,12 @@ final class MenuBar: NSObject {
         guard s != last else { return }
         last = s
         if let b = statusItem.button {
-            let img = NSImage(systemSymbolName: s.icon.symbol, accessibilityDescription: "Sotto: \(s.icon.label)")
-            img?.isTemplate = true
-            b.image = img
-            b.contentTintColor = s.icon.tint
+            b.image = Self.image(s, dark: b.effectiveAppearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua)
+            // Gold only when Claude needs you (a non-template image); red for errors; rose when muted.
+            b.contentTintColor = s.phase == .need ? nil : s.icon == .error ? .systemRed : s.icon == .muted ? NSColor(srgbRed: 1, green: 0.435, blue: 0.682, alpha: 1) : nil
+            b.appearsDisabled = [.off, .sleeping, .paused, .connecting].contains(s.icon) && s.phase != .need
             var tip = "Sotto: \(s.icon.label)"
+            if s.phase == .need { tip += "\nClaude needs you in the terminal" }
             if !s.project.isEmpty { tip += " (\(s.project))" }
             if s.icon == .error, !s.errorMessage.isEmpty { tip += "\n\(s.errorMessage)" }
             b.toolTip = tip
@@ -115,6 +120,25 @@ final class MenuBar: NSObject {
         logsItem.isEnabled = s.hasDataDir
         settingsItem.isEnabled = s.attached
         residentItem.state = s.stayResident ? .on : .off
+    }
+
+    /// Claude's moon on the end of a short string, 22 x 16 (template), or the gold eclipse
+    /// when Claude needs you; errors keep the warning symbol so they read at a glance.
+    static func image(_ s: MenuState, dark: Bool) -> NSImage? {
+        if s.icon == .error && s.phase != .need {
+            let img = NSImage(systemSymbolName: s.icon.symbol, accessibilityDescription: "Sotto: \(s.icon.label)")
+            img?.isTemplate = true
+            return img
+        }
+        let view = MenuBarGlyph(phase: s.phase, cut: s.icon == .muted)
+            .foregroundStyle(s.phase == .need ? (dark ? Color.white : Color.black) : Color.black)
+        let r = ImageRenderer(content: view)
+        r.scale = 2
+        guard let cg = r.cgImage else { return nil }
+        let img = NSImage(cgImage: cg, size: NSSize(width: 22, height: 16))
+        img.isTemplate = s.phase != .need
+        img.accessibilityDescription = "Sotto: \(s.icon.label)" + (s.phase == .need ? ", Claude needs you" : "")
+        return img
     }
 
     @objc private func show() { delegate?.menuToggleShow() }

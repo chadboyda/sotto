@@ -1,8 +1,10 @@
-// The Claude card never pushes the captions or the footer (the user's report on 0.3.1:
-// long output made the card grow, with a scroll bar over the text). The real PanelView
-// is laid out in an off-screen window for the canned states; the captions must end in
-// the same place whatever the card shows, the card must end above them, and its height
-// is bounded: a three-line summary collapsed, a capped scroller expanded.
+// No layout shift (the user's standing complaint; docs/NATIVE.md parity table): the real
+// PanelView is laid out in an off-screen window for the canned states, and every zone
+// (the caption line, Claude's column and its row, the footer) must sit in exactly the same
+// place whatever the panel shows: listening, speaking, working, the eclipse approval at any
+// instant, finished with long output (collapsed or expanded), can't hear, sleeping. Claude's
+// column stays inside the panel and above the footer at every width, and long output never
+// grows it (it clips under a fade or scrolls inside it).
 import XCTest
 import SwiftUI
 import AppKit
@@ -12,7 +14,7 @@ import AppKit
 final class ClaudeCardLayoutTests: XCTestCase {
     final class Box { var frames: [String: CGRect] = [:] }
 
-    func layout(_ name: String, size: CGSize = CGSize(width: 420, height: 720), scheme: NSAppearance.Name = .aqua) -> [String: CGRect] {
+    func layout(_ name: String, size: CGSize = CGSize(width: 420, height: 640), scheme: NSAppearance.Name = .aqua) -> [String: CGRect] {
         let state = UISnapshot.states.first { $0.name == name }!
         let m = UISnapshot.model(state)
         let box = Box()
@@ -34,44 +36,56 @@ final class ClaudeCardLayoutTests: XCTestCase {
         return box.frames
     }
 
-    func testLongOutputNeverPushesTheCaptions() {
-        for size in [CGSize(width: 420, height: 720), CGSize(width: 420, height: 640), CGSize(width: 360, height: 560)] {
-            var captionsBottom: CGFloat?
-            for name in ["05-listening", "09-claude-working", "11-claude-finished", "25-claude-finished-long", "26-claude-finished-long-expanded", "10-claude-needs-approval"] {
+    static let states = ["05-listening", "06-you-speaking", "07-sotto-speaking", "08-muted", "09-claude-working", "10a-approval-freeze",
+                         "10b-approval-moon-crossing", "10c-approval-totality", "10-claude-needs-approval", "11-claude-finished",
+                         "11a-finished-stars-flash", "12-background-agents", "13-cant-hear", "25-claude-finished-long",
+                         "26-claude-finished-long-expanded", "27-agent-approval-crowded", "28-persona-switch"]
+
+    func testZonesNeverMoveBetweenStates() {
+        for size in [CGSize(width: 420, height: 640), CGSize(width: 420, height: 720), CGSize(width: 360, height: 560), CGSize(width: 640, height: 900)] {
+            var base: [String: CGRect]?
+            var baseName = ""
+            for name in Self.states {
                 let f = layout(name, size: size)
-                guard let claude = f["claude"], let captions = f["captions"] else { return XCTFail("\(name): no frames \(f)") }
-                XCTAssertLessThanOrEqual(claude.maxY, captions.minY + 0.5, "\(name) at \(size): the card overlaps the captions")
-                if let b = captionsBottom { XCTAssertEqual(captions.maxY, b, accuracy: 0.5, "\(name) at \(size): the captions moved") }
-                captionsBottom = captions.maxY
+                for k in ["captions", "claude", "claude-head", "footer"] { XCTAssertNotNil(f[k], "\(name) at \(size): no \(k) frame") }
+                guard let b = base else { base = f; baseName = name; continue }
+                for k in ["captions", "claude", "claude-head", "footer"] {
+                    guard let a = f[k], let bb = b[k] else { continue }
+                    XCTAssertEqual(a.minX, bb.minX, accuracy: 0.5, "\(k) moved between \(baseName) and \(name) at \(size)")
+                    XCTAssertEqual(a.minY, bb.minY, accuracy: 0.5, "\(k) moved between \(baseName) and \(name) at \(size)")
+                    XCTAssertEqual(a.width, bb.width, accuracy: 0.5, "\(k) resized between \(baseName) and \(name) at \(size)")
+                    XCTAssertEqual(a.height, bb.height, accuracy: 0.5, "\(k) resized between \(baseName) and \(name) at \(size)")
+                }
             }
         }
     }
 
-    func testCardHeightIsBounded() {
-        let short = layout("11-claude-finished")["claude"]!.height
-        let long = layout("25-claude-finished-long")["claude"]!.height
-        let expanded = layout("26-claude-finished-long-expanded")["claude"]!.height
-        // Collapsed: head, three summary lines, More, the request line, padding.
-        XCTAssertLessThanOrEqual(long, 12 + 20 + 4 + ClaudeCardView.collapsedSummary + 4 + 24 + 4 + 18 + 12 + 2, "collapsed long output is clamped")
-        XCTAssertLessThanOrEqual(short, long + 0.5)
-        // Expanded: the summary scrolls inside a capped box.
-        XCTAssertLessThanOrEqual(expanded, 12 + 20 + 4 + ClaudeCardView.expandedCap + 4 + 24 + 4 + 18 + 12 + 2, "expanded output scrolls inside the card")
-        XCTAssertGreaterThan(expanded, long, "More shows more")
-    }
-
-    /// The card never runs past the panel's content edge (16 pt each side) at any panel
-    /// width, in any state; its head never runs past the card's own padding. The 0.3.2
-    /// report: the crowded approval head (title, agents chip, "7 min 0 sec") was clipped.
-    func testCardStaysInsideThePanelAtEveryWidth() {
+    /// The column stays inside the panel's reading column and above the footer at every
+    /// width; its row never runs past it (the 0.3.2 report: a crowded approval head was clipped).
+    func testColumnStaysInsideThePanelAtEveryWidth() {
         for width in [360, 400, 420, 480, 560, 640] as [CGFloat] {
             let size = CGSize(width: width, height: 720)
             for name in ["27-agent-approval-crowded", "10-claude-needs-approval", "09-claude-working", "12-background-agents", "11-claude-finished", "25-claude-finished-long"] {
                 let f = layout(name, size: size)
-                guard let card = f["claude"], let head = f["claude-head"] else { return XCTFail("\(name): no frames \(f)") }
-                XCTAssertGreaterThanOrEqual(card.minX, 16 - 0.5, "\(name) at \(width): card starts left of the content edge")
-                XCTAssertLessThanOrEqual(card.maxX, width - 16 + 0.5, "\(name) at \(width): card runs past the panel (\(card))")
-                XCTAssertLessThanOrEqual(head.maxX, card.maxX - 12 + 0.5, "\(name) at \(width): head runs past the card's padding (\(head) in \(card))")
-                XCTAssertGreaterThanOrEqual(head.minX, card.minX + 12 - 0.5, "\(name) at \(width): head")
+                guard let col = f["claude"], let head = f["claude-head"], let footer = f["footer"], let cap = f["captions"] else { return XCTFail("\(name): no frames \(f)") }
+                XCTAssertGreaterThanOrEqual(col.minX, 16 - 0.5, "\(name) at \(width): column starts left of the content edge")
+                XCTAssertLessThanOrEqual(col.maxX, width - 16 - 20 + 0.5, "\(name) at \(width): column runs past the reading column (\(col))")
+                XCTAssertLessThanOrEqual(head.maxX, col.maxX + 0.5, "\(name) at \(width): row runs past the column (\(head) in \(col))")
+                XCTAssertLessThanOrEqual(col.maxY, footer.minY - 12 + 0.5, "\(name) at \(width): column reaches the footer")
+                XCTAssertLessThanOrEqual(cap.maxY, col.minY + 0.5, "\(name) at \(width): the caption overlaps Claude's row")
+            }
+        }
+    }
+
+    /// The question fits its frame at every size: "Show terminal" is never clipped or pushed
+    /// into the footer, however long Claude's reason is (the reason gives way first).
+    func testApprovalActionAlwaysFits() {
+        for size in [CGSize(width: 360, height: 420), CGSize(width: 360, height: 560), CGSize(width: 420, height: 640), CGSize(width: 640, height: 900)] {
+            for name in ["10-claude-needs-approval", "27-agent-approval-crowded"] {
+                let f = layout(name, size: size)
+                guard let col = f["claude"], let go = f["show-terminal"] else { return XCTFail("\(name) at \(size): no frames \(f.keys)") }
+                XCTAssertLessThanOrEqual(go.maxY, col.maxY + 0.5, "\(name) at \(size): Show terminal is clipped (\(go) in \(col))")
+                XCTAssertGreaterThanOrEqual(go.height, 44 - 0.5, "\(name) at \(size): the action is a full 44 pt target")
             }
         }
     }
@@ -84,9 +98,9 @@ final class ClaudeCardLayoutTests: XCTestCase {
         XCTAssertEqual(m.workingTime(at: m.now()), "7 min 0 sec")
     }
 
-    func testWorkingLineIsOneLine() {
-        let working = layout("09-claude-working")["claude"]!.height
-        let agents = layout("12-background-agents")["claude"]!.height
-        XCTAssertEqual(working, agents, accuracy: 0.5, "the agents chip sits in the head row and adds no height")
+    func testAgentsAddNoHeight() {
+        let working = layout("09-claude-working")["claude-head"]!.height
+        let agents = layout("12-background-agents")["claude-head"]!.height
+        XCTAssertEqual(working, agents, accuracy: 0.5, "the agents note sits in the row and adds no height")
     }
 }
