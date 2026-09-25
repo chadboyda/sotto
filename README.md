@@ -185,20 +185,20 @@ Spoken updates never cut the voice off mid-answer: they wait until it has finish
 
 ### Personas
 
-The voice has a personality, and you can pick it. A persona changes *how* the voice talks: its tone, humor, energy, pacing, and whether it offers opinions ("honestly, I'd ship it", "that design's a bit busy") or reacts with feeling (a little celebration at green tests, sympathy when the build breaks). It never changes *what* it relays. Every persona still hands your requests and decisions to Claude, only says something is done when Claude's result says so, answers mic checks itself, never reads secrets aloud and keeps replies short. Those rules come after the persona in the voice model's instructions and are marked as taking precedence.
+The voice has a personality, and you can pick it. The persona *is* the voice: it names itself after the persona and stays in character in every line, from the greeting and a one-word "mm-hm" to handing your request to Claude, relaying a failing test and telling you an approval is waiting. A persona changes *how* the voice talks: its pace, pitch and energy, its pauses, sounds like a soft laugh, a dry exhale, a whoop or a whisper (voiced, never read out, and never over bad news), its pet phrases, and whether it offers opinions ("honestly, I'd ship it", "that design's a bit busy") or reacts with feeling. It never changes *what* it relays. Every persona still hands your requests and decisions to Claude, only says something is done when Claude's result says so, answers mic checks itself, never reads secrets aloud and keeps replies short. Those rules come after the persona in the voice model's instructions and decide what is said; the persona decides how.
 
 | Persona | Voice | In one line |
 |---|---|---|
 | `sotto` (default) | marin | Balanced and friendly, with real opinions and a light touch of humor. |
 | `june` | coral | Warm, encouraging partner who celebrates progress and keeps you steady. |
-| `moss` | cedar | Dry-witted senior engineer: understated, seen-it-all, quietly funny. |
-| `tempo` | tempo | High-energy hype buddy: every green test is a small victory. |
-| `koan` | sage | Calm zen mentor: slow, unflappable, finds the lesson in the bug. |
-| `vic` | ash | Blunt no-nonsense reviewer: straight answers, zero fluff. |
-| `pip` | echo | Playful, sarcastic sidekick with a soft spot for the user. |
-| `fern` | verse | Curious explorer who narrates the codebase like a field naturalist. |
-| `lark` | shimmer | Warm, curious and fully present: notices how you sound and finds your day interesting. |
-| `vela` | vesper | Attentive and devoted: remembers the little things, has quiet taste and a wistful streak. |
+| `moss` | cinder | Dry-witted senior engineer: understated, seen-it-all, quietly funny. |
+| `tempo` | quartz | High-energy hype buddy: every green test is a small victory. |
+| `koan` | stone | Calm zen mentor: slow, unflappable, finds the lesson in the bug. |
+| `vic` | meridian | Blunt no-nonsense reviewer: straight answers, zero fluff. |
+| `pip` | verse | Playful, sarcastic sidekick with a soft spot for the user. |
+| `fern` | ballad | Curious explorer who narrates the codebase like a field naturalist. |
+| `lark` | gleam | Warm, curious and fully present: notices how you sound and finds your day interesting. |
+| `vela` | willow | Attentive and devoted: remembers the little things, has quiet taste and a wistful streak. |
 
 Switch with `/talk persona <name>`, the **Persona** picker in the voice window's settings, or just ask out loud ("switch to Moss", "can you be more upbeat?"): the voice hands that to Claude, which runs `sotto persona <name>` (add `Bash(sotto persona:*)` to your allow rules to skip the approval prompt). The choice is saved in `prefs.json`. A persona's instructions are fixed for a Live session, so a switch starts a fresh session with the conversation carried over, like a voice change, and the new persona says hello in one line. By default choosing a persona also switches to its suggested voice; turn off **Switch to the persona's own voice** in settings to keep your voice (a voice you pick afterwards always wins).
 
@@ -210,13 +210,26 @@ name: Captain
 description: A calm ship's captain who treats every deploy like a voyage.
 voice: stone
 ---
-You are the Captain: calm, weathered and dryly nautical.
-- Good news: "Fair winds. All tests pass." Bad news: "Rough seas: the build failed in the router."
-- Hold opinions and say them plainly: "I'd not sail with that migration untested."
-- One nautical turn of phrase per reply at most, then the facts. Slow, steady pacing.
+Voice: LOW, CALM and WEATHERED, unhurried, like a captain on a quiet night watch.
+
+Who you are: the Captain, calm and dryly nautical. Every deploy is a voyage.
+
+Delivery:
+- Pace: slow and steady, a beat before the news.
+- Sounds: a low, satisfied chuckle at fair winds; a long exhale at rough seas.
+
+Signature habits:
+- One nautical turn of phrase per reply at most, then the facts.
+- Plain opinions: "I'd not sail with that migration untested."
+
+How you sound in each moment:
+- Handing work to Claude (said as you delegate it): "Aye. Sending it to Claude." / "Claude has the helm on that one."
+- Good result: "Fair winds. All tests pass."
+- A failure: "Rough seas: the build failed in the router."
+- Approval needed: "Claude needs your approval in the terminal before we sail."
 ```
 
-Keep it short: tone, humor, what you have opinions about, how you react to good and bad news, pacing, a catchphrase or two to use sparingly. Around 150 to 250 words works well; anything past 2,000 characters is cut. Don't restate the relay rules; they are already there and they win. A project file beats a user file with the same name, and either one replaces a built-in of that name. Edits apply from the next voice session; the settings picker reloads the list each time it opens.
+What makes a persona audible: a one-line voice direction at the top (capitals for the parts that matter), delivery directions (pace, pitch, pauses, the sounds it makes, written as directions, never in brackets), a few habits, and two or three sample lines for each kind of moment (greeting, handing work to Claude, good news, a failure, an approval, quick acks). The voice follows samples closely but is told to make up fresh lines in their spirit. Around 250 to 500 words works well; anything past 4,000 characters is cut. Don't restate the relay rules; they are already there and they win. A project file beats a user file with the same name, and either one replaces a built-in of that name. Edits apply from the next voice session; the settings picker reloads the list each time it opens.
 
 ### Names the voice should recognize (vocabulary)
 

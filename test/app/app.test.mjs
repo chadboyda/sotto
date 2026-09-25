@@ -415,7 +415,7 @@ describe("native desktop app", { skip: SKIP }, () => {
       act("2-persona", { action: "persona", persona: "moss" });
       await waitFor(() => readLog(appLog).filter((e) => e.ev === "cmd_result" && e.name === "set_persona" && e.ok === true).length === 2, 10_000, "persona result");
       await waitFor(() => live.sessions.length > sessionsBefore && live.last().started, 10_000, "a new Live session for the persona");
-      assert.match(live.last().start.instructions, /Your persona is Moss/);
+      assert.match(live.last().start.instructions, /Personality and Tone: you are Moss/);
       assert.equal(live.last().start.audio.output.voice, "marin", "the voice stays: the toggle is off");
       await waitFor(() => d.voice.state === "live" && d.voice.live?.persona === "moss", 10_000, "live in Moss");
       assert.ok(readLog(appLog).some((e) => e.ev === "audio_flush" && e.reason === "voice_change"), "the app dropped the old session's audio");
