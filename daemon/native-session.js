@@ -24,6 +24,7 @@ import { createHearingMonitor } from "../web/lib.js";
 import { createLeakEstimator, classifyLeak, echoTestVerdict } from "../web/echo.js";
 import { createUplinkAgc, createMicProfiles } from "./agc.js";
 import { writeAtomic } from "./statefiles.js";
+import { createDebugCapture } from "./debugcapture.js";
 
 /** Speaker frames at or above this peak count as audible speech (same bar as preview.js). */
 export const LOUD_PEAK = 1200;
@@ -129,6 +130,8 @@ export class NativeController {
       save: (o) => { if (micFile) writeAtomic(micFile, `${JSON.stringify(o)}\n`); },
     });
     this.agc = createUplinkAgc({ sampleRate: SAMPLE_RATE });
+    // Opt-in raw and uplink WAVs for diagnosis (`sotto debug capture on`; daemon/debugcapture.js).
+    this.capture = createDebugCapture({ dir: voice.paths?.debug || null, clock, log });
     this.settle = { done: true, at: 0, audioAt: null, ms: SETTLE_MS, rearm: false };
     this.localSpeechAt = 0;
     this.echoTest = null;
@@ -338,6 +341,7 @@ export class NativeController {
       if (a.utterance) this.onUtterance(a.utterance);
     }
     if (this.session?.ready) this.pacer.push(up);
+    this.capture.frame(pcm, this.session?.ready && !muted ? up : null);
     const needLevel = !muted && (this.session?.ready || this.echoTest || v.state === "sleeping" || this.wake?.capturing);
     const m = needLevel ? framePeakRms(pcm) : null;
     if (this.wake && (v.state === "sleeping" || this.wake.capturing)) {
@@ -715,6 +719,7 @@ export class NativeController {
 
   dispose() {
     this.pacer.dispose();
+    this.capture.close();
     this.cancelEchoTest("daemon_exit");
   }
 }
