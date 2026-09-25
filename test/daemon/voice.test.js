@@ -265,7 +265,7 @@ test("liveness check every 30 s releases a dead owner", async (t) => {
   assert.equal(h.voice.state, "off");
 });
 
-test("owner switch while live: orphan, rewrite active, instructions, keep the session", async (t) => {
+test("owner switch while live: orphan, rewrite active, a spoken note (commentary, never instructions), keep the session", async (t) => {
   const h = await makeHarness();
   t.after(() => h.cleanup());
   const ws = await h.goLive();
@@ -274,7 +274,8 @@ test("owner switch while live: orphan, rewrite active, instructions, keep the se
   assert.equal(r.message, "sotto: voice ON (proj-b), moved from proj-a.");
   assert.equal(h.voice.delegation.get("item_1").status, "orphaned");
   assert.match(fs.readFileSync(path.join(h.dataDir, "active"), "utf8"), /^\/tmp\/clv-owner-b\.sock\t/);
-  assert.match(appends(ws, "instructions").at(-1).content, /switched to a different Claude Code session, in the project proj-b/);
+  assert.match(appends(ws, "commentary").at(-1).content, /switched to a different Claude Code session, in the project proj-b/);
+  assert.ok(!appends(ws, "instructions").some((e) => /switched to a different/.test(e.content)), "an owner switch never interrupts the voice with instructions");
   assert.equal(h.voice.state, "live");
   assert.equal(h.fetchCalls.length, 1);
   assert.equal(h.on(SESSION("/tmp/clv-owner-b.sock", { project_dir: "/work/proj-b" })).message, "sotto: voice is already ON here (proj-b).");

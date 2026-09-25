@@ -853,7 +853,10 @@ export class Voice {
       removePendingContext(this.paths);
       this.owner = next;
       this.log.info("owner.switch", { from: old.project, to: next.project, session_id: next.session_id });
-      if (this.sideband) this.deliver({ kind: "instructions", content: ownerSwitchInstruction(next.project), delegationId: null });
+      // Commentary, not instructions: an instructions append can cut off the
+      // voice mid-sentence (guide-live-delegation "Send the right kind of
+      // update"); commentary is fitted into the conversation by the model.
+      if (this.sideband) this.deliver({ kind: "commentary", content: ownerSwitchInstruction(next.project), delegationId: null, source: "owner_switch" });
       this.refreshVocabulary(next);
     } else {
       this.owner = next;
@@ -2134,7 +2137,9 @@ export class Voice {
       // The switch instruction already names the project itself.
       const own = v.terms.filter((t) => t.tier <= TIER.folder && t.kinds[0] !== "project");
       const content = vocabularyUpdateInstruction(renderVocabulary(own, { maxTokens: 380 }));
-      if (content) this.deliver({ kind: "instructions", content, delegationId: null });
+      // Silent context (thinking), not instructions: a glossary is reasoning
+      // material and an instructions append can cut off the voice mid-sentence.
+      if (content) this.deliver({ kind: "thinking", content, delegationId: null });
     }).catch(() => {});
   }
 
