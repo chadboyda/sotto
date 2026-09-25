@@ -255,6 +255,54 @@
     --drawer-bg: rgba(12, 16, 26, 0.9);
 }
 
+/* ---------- tokens: increase contrast ----------
+   macOS Increase contrast (prefers-contrast: more; the native panel's HybridTheme does
+   the same): every quiet token steps up, text and lines alike. Placed after the theme
+   blocks with matching specificity, so each theme gets its own raised values. */
+@media (prefers-contrast: more) {
+  :root {
+    --ink2: rgba(12, 13, 18, 0.85);
+    --ink3: rgba(12, 13, 18, 0.72);
+    --fg-2: #3A3D44;
+    --fg-3: #45484F;
+    --hair: rgba(12, 13, 18, 0.24);
+    --hair2: rgba(12, 13, 18, 0.4);
+    --cap: rgba(12, 13, 18, 0.12);
+    --line: rgba(12, 13, 18, 0.24);
+    --hairline: rgba(12, 13, 18, 0.4);
+    --string: rgba(12, 13, 18, 0.85);
+    --edge: #505764;
+  }
+  :root[data-theme="dark"] {
+    --ink2: rgba(242, 244, 248, 0.85);
+    --ink3: rgba(242, 244, 248, 0.72);
+    --fg-2: #CDD2DB;
+    --fg-3: #B6BCC8;
+    --hair: rgba(255, 255, 255, 0.24);
+    --hair2: rgba(255, 255, 255, 0.4);
+    --cap: rgba(255, 255, 255, 0.12);
+    --line: rgba(255, 255, 255, 0.24);
+    --hairline: rgba(255, 255, 255, 0.4);
+    --string: rgba(236, 242, 255, 0.85);
+    --edge: #9AA2B1;
+  }
+}
+@media (prefers-contrast: more) and (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --ink2: rgba(242, 244, 248, 0.85);
+    --ink3: rgba(242, 244, 248, 0.72);
+    --fg-2: #CDD2DB;
+    --fg-3: #B6BCC8;
+    --hair: rgba(255, 255, 255, 0.24);
+    --hair2: rgba(255, 255, 255, 0.4);
+    --cap: rgba(255, 255, 255, 0.12);
+    --line: rgba(255, 255, 255, 0.24);
+    --hairline: rgba(255, 255, 255, 0.4);
+    --string: rgba(236, 242, 255, 0.85);
+    --edge: #9AA2B1;
+  }
+}
+
 /* ---------- base ---------- */
 *, *::before, *::after { box-sizing: border-box; }
 html {

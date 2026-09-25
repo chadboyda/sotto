@@ -11,7 +11,9 @@ public struct HybridTheme: Sendable {
     public var ground: Color
     /// The static radial lift behind the string (dark only; light = ground).
     public var lift: Color
-    public var ink, ink2, ink3, hair, hair2, cap: Color
+    /// `ink3` is for glyphs and lines only (3:1); `fg3` is its text-safe twin (>= 4.5:1 on
+    /// `ground`, as the page's --fg-3).
+    public var ink, ink2, ink3, fg3, hair, hair2, cap: Color
     public var string, bead, star, night: Color
     public var you, youInk, voice, voiceInk: Color
     /// Star gold: light and line only, never a fill. Light mode splits line and text.
@@ -29,17 +31,23 @@ public struct HybridTheme: Sendable {
     public static func of(_ scheme: ColorScheme, increaseContrast: Bool = false) -> HybridTheme {
         var t = scheme == .dark ? darkTheme : lightTheme
         if increaseContrast {
+            // System Settings > Accessibility > Display > Increase contrast (the page's
+            // `prefers-contrast: more`): every quiet token steps up, text and lines alike.
             t.increaseContrast = true
-            t.ink2 = t.ink.opacity(0.8)
+            t.ink2 = t.ink.opacity(0.85)
+            t.ink3 = t.ink.opacity(0.72)
+            t.fg3 = t.ink.opacity(0.78)
             t.string = t.dark ? Color.white.opacity(0.85) : Color.hex(0x0C0D12).opacity(0.85)
-            t.hair = t.dark ? Color.white.opacity(0.24) : Color.hex(0x0C0D12).opacity(0.24)
+            t.hair = t.ink.opacity(0.24)
+            t.hair2 = t.ink.opacity(0.4)
+            t.cap = t.ink.opacity(0.12)
         }
         return t
     }
 
     public static let darkTheme = HybridTheme(
         dark: true, ground: .hex(0x05070C), lift: .hex(0x0C1222),
-        ink: .hex(0xF2F4F8), ink2: .hex(0xF2F4F8).opacity(0.66), ink3: .hex(0xF2F4F8).opacity(0.46),
+        ink: .hex(0xF2F4F8), ink2: .hex(0xF2F4F8).opacity(0.66), ink3: .hex(0xF2F4F8).opacity(0.46), fg3: .hex(0x8A91A0),
         hair: .white.opacity(0.07), hair2: .white.opacity(0.15), cap: .white.opacity(0.065),
         string: Color(.sRGB, red: 236 / 255, green: 242 / 255, blue: 1, opacity: 0.55), bead: .white, star: .hex(0xE6EDF7), night: .hex(0x03050A),
         you: .hex(0x5EEAD4), youInk: .hex(0x5EEAD4), voice: .hex(0xA5B4FC), voiceInk: .hex(0xA5B4FC),
@@ -48,7 +56,7 @@ public struct HybridTheme: Sendable {
 
     public static let lightTheme = HybridTheme(
         dark: false, ground: .hex(0xFBFCFD), lift: .hex(0xFBFCFD),
-        ink: .hex(0x0C0D12), ink2: .hex(0x0C0D12).opacity(0.64), ink3: .hex(0x0C0D12).opacity(0.5),
+        ink: .hex(0x0C0D12), ink2: .hex(0x0C0D12).opacity(0.64), ink3: .hex(0x0C0D12).opacity(0.5), fg3: .hex(0x686B73),
         hair: .hex(0x0C0D12).opacity(0.08), hair2: .hex(0x0C0D12).opacity(0.16), cap: .hex(0x0C0D12).opacity(0.05),
         string: .hex(0x0C0D12).opacity(0.72), bead: .hex(0x0C0D12), star: .hex(0x1A2A44), night: .hex(0x070B16),
         // Gold line #C4800E is 3.2:1 on white (a component boundary); gold text #A55200 is 5.4:1.
