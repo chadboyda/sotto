@@ -526,6 +526,8 @@ Both sides implement design/concepts-v2/hybrid (IMPLEMENTATION.md is the spec fo
 | Milestone stars | §5.4 rule above | Done (memory only) | Done: `ViewText.milestoneStars` in `StateModel` |
 | Cost | Idle 0 fps; working bead 10 fps; approval shimmer only (web: 24 fps clipped to the corona box); sleeping ≤ 15 fps | Done, `test/web/string.test.js` | Done: `FilamentEngine.rate` (0 fps idle, 10 fps bead, ≤ 15 fps sleep, corona quad at 30 fps), paused when hidden or occluded |
 | Tokens | IMPLEMENTATION §2 (ground `#05070C` / `#FBFCFD`, need `#FFB547` / `#C4800E` + text `#A55200`) | Done (`styles.css`) | Done: `HybridTheme` (the old `Theme` stays for Settings) |
+| Text contrast | Text tokens >= 4.5:1 on the ground in both themes; `ink3` is for glyphs and lines only (3:1), `fg3` / `--fg-3` is its text-safe twin (`#686B73` / `#8A91A0`) | Done | Done: `HybridTheme.fg3`; `HybridContrastTests` checks every text token |
+| Increase contrast | macOS Increase contrast raises every quiet token (ink2, ink3, fg3, hairlines, capsule fill, the string) in both themes; the theme itself does not change | Done: `@media (prefers-contrast: more)` after the theme blocks; `string.js` re-reads its colours on the change (`test/web/theme.test.js`) | Done: every view resolves `HybridTheme.of(scheme, increaseContrast:)` from `colorSchemeContrast` (before: the string only) |
 | Footer | Persona chip (tuning glyph, name, voice) opens Settings; Pause, End voice, gear as 40 pt icon buttons; the gear left the header | Done | Done |
 | Header capsule | Unchanged `lib.usagePills` figures (Today stays m:ss; "32m" from the design was not adopted, to keep the pinned readout) | Kept | Kept |
 

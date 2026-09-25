@@ -10,6 +10,7 @@ public struct MiniPanelView: View {
     var onExpand: () -> Void
     var stillAt: Double?
     @Environment(\.colorScheme) private var scheme
+    @Environment(\.colorSchemeContrast) private var contrast
 
     public init(model: StateModel, onExpand: @escaping () -> Void) { self.model = model; self.onExpand = onExpand }
     init(model: StateModel, stillAt: Double?) { self.model = model; self.onExpand = {}; self.stillAt = stillAt }
@@ -20,7 +21,7 @@ public struct MiniPanelView: View {
 
     public var body: some View {
         let L = HybridLayout.mini(Self.size)
-        let t = HybridTheme.of(scheme)
+        let t = HybridTheme.of(scheme, increaseContrast: contrast == .increased)
         let now = stillAt.map { Date(timeIntervalSinceReferenceDate: $0) } ?? Date()
         ZStack(alignment: .topLeading) {
             PanelBackground(layout: L)
