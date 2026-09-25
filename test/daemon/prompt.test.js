@@ -158,3 +158,10 @@ test("buildSeedInput: voice history as user/assistant messages, merged by role, 
   assert.ok(big.some((m) => m.role === "assistant"), "recent voice lines survive");
   assert.ok(long.startsWith(big.at(-2).text.slice(0, -1)), "the newest line is kept (capped at 600 chars)");
 });
+
+test("instructions: never invent reasons for a problem; say plainly you didn't catch it", () => {
+  const t = render({ project: "p", policyText: "", vocabulary: "", persona: null });
+  assert.match(t, /Never invent reasons for a problem \("just a short delay", "a small glitch"\)/);
+  assert.match(t, /"Sorry, I didn't catch that"/);
+  assert.match(t, /"I'm having trouble hearing you\. You might want to check the mic\."/);
+});

@@ -327,8 +327,9 @@ test("voice: collection starts at bind and is reused; an owner switch sends the 
   h.on(SESSION("/tmp/clv-owner-b.sock", { cwd: projB, project_dir: projB }));
   await h.voice.vocabJob.promise;
   await new Promise((r) => setImmediate(r));
-  const ins = appendsOf(ws, "instructions").map((e) => e.content);
-  assert.match(ins.at(-2), /switched to a different Claude Code session/);
+  assert.match(appendsOf(ws, "commentary").map((e) => e.content).at(-1), /switched to a different Claude Code session/);
+  assert.ok(!appendsOf(ws, "instructions").some((e) => /^Names for the new project/.test(e.content)), "the glossary is silent context, not instructions");
+  const ins = appendsOf(ws, "thinking").map((e) => e.content);
   assert.match(ins.at(-1), /^Names for the new project, in addition to the vocabulary you already have:\nVocabulary:/);
   assert.ok(ins.at(-1).includes("- Kubrick (the render farm)"));
   assert.ok(estTokens(ins.at(-1)) <= 450);
