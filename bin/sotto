@@ -11,6 +11,10 @@
 #   sotto restart          same as /talk restart (reload the daemon's code)
 #   sotto window [mode]    same as /talk window (auto, app or chrome)
 #   sotto app              same as /talk app (install and use the desktop app)
+#   sotto debug capture on|off|status
+#                          record the app mic's raw and uplink audio as WAVs
+#                          in <data dir>/debug for 10 minutes at most (off
+#                          deletes them; daemon/debugcapture.js)
 #
 # It reuses scripts/toggle.sh (the /talk handler) with a synthesized hook
 # input, so both paths share one implementation. The Bash tool does not get
@@ -28,7 +32,7 @@ done
 ROOT="$(cd "${SELF%/*}/.." && pwd)"
 
 usage() {
-  printf 'usage: sotto voice [name] | sotto persona [name] | sotto status | sotto restart | sotto window [auto|app|chrome] | sotto app\n' >&2
+  printf 'usage: sotto voice [name] | sotto persona [name] | sotto status | sotto restart | sotto window [auto|app|chrome] | sotto app | sotto debug capture on|off|status\n' >&2
   exit 2
 }
 
@@ -39,6 +43,7 @@ case "$1" in
   restart)      ARGS="restart" ;;
   window|windows) ARGS="window${2:+ $2}" ;;
   app)          ARGS="app" ;;
+  debug)        [[ "$2" == capture && "$3" =~ ^(on|off|status)$ ]] || usage; ARGS="debug" ;;
   -h|--help|help|"") usage ;;
   *) usage ;;
 esac
@@ -95,6 +100,25 @@ if [[ -z "$D" ]]; then
   fi
 fi
 PORT="${PORT%%[[:space:]]*}"
+
+# --- debug capture: a flag file the daemon looks at once a second -----------------
+if [[ "$1" == debug ]]; then
+  DBG="$D/debug"
+  case "$3" in
+    on)
+      mkdir -p -m 700 "$DBG" && : > "$DBG/capture.on" && chmod 600 "$DBG/capture.on" \
+        || { printf 'sotto: ERROR cannot write %s\n' "$DBG"; exit 1; }
+      printf 'sotto: debug capture on for 10 minutes: the app mic (raw) and what gpt-live-1 hears go to %s\n' "$DBG" ;;
+    off)
+      rm -f "$DBG/capture.on"; sleep 2; rm -f "$DBG"/*.wav
+      printf 'sotto: debug capture off, recordings deleted.\n' ;;
+    status)
+      N=0; for f in "$DBG"/*.wav; do [[ -e "$f" ]] && N=$((N + 1)); done
+      if [[ -e "$DBG/capture.on" ]]; then S=on; else S=off; fi
+      printf 'sotto: debug capture %s, %s recording file(s) in %s\n' "$S" "$N" "$DBG" ;;
+  esac
+  exit 0
+fi
 
 # --- run the /talk handler --------------------------------------------------------
 ENVV=(CLAUDE_PLUGIN_DATA="$D" CLAUDE_PLUGIN_ROOT="$ROOT" SOTTO_VIA=cli)
