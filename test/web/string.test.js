@@ -23,7 +23,15 @@ const RUN = `(async () => {
   ctx.clearRect = (...a) => { draws++; return clear(...a); };
   const out = {};
   s.set({ view: "live", floor: "listening", persona: "sotto", stars: [] });
+  // Let the first paint settle: on a slow CI runner its last frame landed after a
+  // fixed 600 ms wait and was counted as an idle draw. Wait for 450 ms without a
+  // draw (at most 5 s), then measure a full idle second.
   await wait(600);
+  for (let quiet = 0, end = Date.now() + 5000; quiet < 3 && Date.now() < end;) {
+    const d = draws;
+    await wait(150);
+    quiet = draws === d && !s.animating ? quiet + 1 : 0;
+  }
   draws = 0; await wait(1000);
   out.idle = { draws, animating: s.animating };
   for (let i = 0; i < 30; i++) { s.input(0, 0.5); await wait(16); }
