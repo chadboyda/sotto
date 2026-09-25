@@ -1082,7 +1082,7 @@ export class Voice {
 
   /**
    * {voices, current, live, live_voice, info} for GET /api/voices, the app's
-   * settings and get_voices. `info` (added in 0.4.x) maps each voice to
+   * settings and get_voices. `info` (added in 0.4.5) maps each voice to
    * {description, tone, presentation, accent} for the pickers.
    */
   voices() {
