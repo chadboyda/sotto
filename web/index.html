@@ -33,6 +33,8 @@
     <symbol id="i-close" viewBox="0 0 24 24"><path d="M6.5 6.5l11 11M17.5 6.5l-11 11"/></symbol>
     <symbol id="i-check" viewBox="0 0 24 24"><path d="m5 12.5 4.4 4.3L19 7.2"/></symbol>
     <symbol id="i-mic" viewBox="0 0 24 24"><path d="M12 3a3 3 0 0 0-3 3v6a3 3 0 0 0 6 0V6a3 3 0 0 0-3-3Z"/><path d="M5.5 11.5a6.5 6.5 0 0 0 13 0M12 18v3"/></symbol>
+    <symbol id="i-speaker" viewBox="0 0 24 24"><path d="M4 9.5h3.2L12 5.5v13l-4.8-4H4z"/><path d="M15.5 9a4 4 0 0 1 0 6M18 6.5a7.5 7.5 0 0 1 0 11"/></symbol>
+    <symbol id="i-headphones" viewBox="0 0 24 24"><path d="M4 16v-3a8 8 0 0 1 16 0v3"/><rect x="3.5" y="14" width="4" height="6" rx="1.6"/><rect x="16.5" y="14" width="4" height="6" rx="1.6"/></symbol>
     <symbol id="i-key" viewBox="0 0 24 24"><circle cx="8" cy="15" r="4"/><path d="m11 12 8.5-8.5M16.5 6.5l2.5 2.5M14 9l2 2"/></symbol>
   </svg>
 
@@ -152,13 +154,15 @@
           <span class="claude-time" id="claude-time" hidden><svg aria-hidden="true"><use href="#i-timer"/></svg><span id="claude-time-value"></span></span>
         </div>
         <p class="claude-request" id="claude-request" hidden></p>
-        <div class="claude-page" id="claude-page">
-          <div class="claude-flow" id="claude-flow">
-            <div class="claude-history serif" id="claude-history"></div>
-            <div class="claude-step serif" id="claude-step" hidden></div>
-            <div class="claude-summary serif" id="summary" hidden></div>
-            <button type="button" class="more" id="more-btn" aria-expanded="false" aria-controls="summary" hidden>More</button>
+        <!-- The page: a fixed region that scrolls (panel.js follow). It follows the newest
+             words; scrolling up stops that and shows "Jump to latest". The scroller is a
+             thin thumb that shows while scrolling or near the right edge, then fades. -->
+        <div class="claude-page" id="claude-page" data-above="false" data-below="false">
+          <div class="claude-scroll" id="claude-scroll" tabindex="0" role="region" aria-label="Claude's messages">
+            <div class="claude-flow serif" id="claude-flow"></div>
           </div>
+          <div class="claude-thumb" id="claude-thumb" aria-hidden="true"></div>
+          <button type="button" class="jump" id="claude-jump" hidden>Jump to latest<svg aria-hidden="true" viewBox="0 0 10 10"><path d="M5 2v6M2.5 5.5 5 8l2.5-2.5"/></svg></button>
           <!-- The question: each part rises into place (styles.css), the zone never moves. -->
           <div class="claude-ask" id="claude-ask" hidden>
             <pre class="claude-command" id="claude-command" hidden></pre>
@@ -179,6 +183,13 @@
         <svg class="pc-chev" viewBox="0 0 10 10" aria-hidden="true"><path d="M2.5 4l2.5 2.5L7.5 4"/></svg>
       </button>
       <div class="ctl">
+        <!-- Which mic and speaker are in use; a click opens the quick picker (panel.paintDevicePicker). -->
+        <button type="button" class="icon-btn dev" id="mic-btn" aria-label="Microphone" aria-haspopup="menu" aria-expanded="false" aria-controls="dev-picker">
+          <svg aria-hidden="true"><use href="#i-mic"/></svg>
+        </button>
+        <button type="button" class="icon-btn dev" id="speaker-btn" aria-label="Speaker" aria-haspopup="menu" aria-expanded="false" aria-controls="dev-picker">
+          <svg aria-hidden="true"><use href="#i-speaker"/></svg>
+        </button>
         <button type="button" class="icon-btn" id="pause-btn" title="Pause the paid voice session; resume any time">
           <svg aria-hidden="true"><use href="#i-pause"/></svg><span class="sr-only">Pause</span>
         </button>
@@ -190,6 +201,8 @@
         </button>
       </div>
     </footer>
+    <!-- The footer's device picker: System default first, a check on the one in use. -->
+    <div class="dev-picker" id="dev-picker" role="menu" hidden></div>
   </div>
 
   <!-- Screen readers hear floor changes, Claude's steps and approvals here, not every caption delta. -->

@@ -588,22 +588,77 @@ body[data-claude="approval"] .claude-title { color: var(--need-ink); }
 .claude-request[hidden] { display: block !important; visibility: hidden; }
 .claude-request[data-tone="error"] { color: var(--err); }
 .claude-request[data-tone="warn"] { color: var(--need-ink); }
-/* The page: a fixed box. Words fade in; if the flow overflows, it slides up under a
-   top fade (app.js sets the offset), never a scroller over live text. */
+/* The page: a fixed region that scrolls (SPEC-DEVIATIONS "scrolling page"). Its box
+   never changes with its content. It follows the newest words (panel.js pageFollow);
+   the native scroller is hidden and a thin thumb (.claude-thumb) shows while scrolling
+   or near the right edge, then fades. A soft fade at an edge says there is more past it. */
 .claude-page { position: relative; flex: 1 1 auto; min-height: 0; margin-top: 4px; overflow: hidden; }
-.claude-page[data-clipped="true"] {
-  -webkit-mask-image: linear-gradient(to bottom, transparent 0, transparent 10px, #000 68px);
-  mask-image: linear-gradient(to bottom, transparent 0, transparent 10px, #000 68px);
+.claude-scroll {
+  --fade-top: 0px;
+  --fade-bottom: 0px;
+  position: absolute;
+  inset: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: none;
+  /* The thumb's gutter: text never runs under it. */
+  padding-right: 12px;
+  outline: none;
+  -webkit-mask-image: linear-gradient(to bottom, transparent 0, #000 var(--fade-top), #000 calc(100% - var(--fade-bottom)), transparent 100%);
+  mask-image: linear-gradient(to bottom, transparent 0, #000 var(--fade-top), #000 calc(100% - var(--fade-bottom)), transparent 100%);
 }
-.claude-flow { position: absolute; left: 0; right: 0; top: 0; transition: translate 260ms var(--ease-swap); }
-.claude[data-expanded="true"] .claude-page { overflow-y: auto; overscroll-behavior: contain; scrollbar-width: thin; scrollbar-color: var(--hair2) transparent; -webkit-mask-image: none; mask-image: none; }
-.claude[data-expanded="true"] .claude-flow { position: static; translate: none !important; }
-.claude-history, .claude-step, .claude-summary { font-size: var(--serif-size); line-height: var(--serif-lh); }
+.claude-scroll::-webkit-scrollbar { display: none; }
+.claude-scroll:focus-visible { box-shadow: inset 0 0 0 2px var(--hair2); border-radius: var(--radius-sm); }
+.claude-page[data-above="true"] .claude-scroll { --fade-top: 28px; }
+.claude-page[data-below="true"] .claude-scroll { --fade-bottom: 28px; }
+.claude-flow { font-size: var(--serif-size); line-height: var(--serif-lh); }
+.claude-flow .msg:last-child { margin-bottom: 0.3em; }
 .msg { margin-bottom: 0.9em; }
-.claude-history .msg { opacity: 0.42; }
-.claude-history .msg:not(:last-child) { opacity: 0.3; }
-body[data-claude="finished"] .claude-history .msg { opacity: 0.3; }
-body[data-claude="idle"] .claude-summary { opacity: 0.55; }
+.msg[data-tone="turn"] { opacity: 0.5; }
+.msg[data-tone="past"] { opacity: 0.36; }
+body[data-claude="idle"] .msg[data-tone="latest"] { opacity: 0.55; }
+/* The auto-hiding scroller: invisible at rest, 5 px inset from the page's edges. */
+.claude-thumb {
+  position: absolute;
+  top: 0;
+  right: 2px;
+  width: 5px;
+  height: 0;
+  border-radius: 3px;
+  background: var(--ink3);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 320ms var(--ease-out), width var(--dur-fast) var(--ease-out);
+}
+.claude-thumb::after { content: ""; position: absolute; inset: 0 -5px; }
+.claude-thumb[data-show="true"] { opacity: 0.6; pointer-events: auto; transition-duration: 120ms, var(--dur-fast); }
+.claude-thumb[data-show="true"]:hover, .claude-thumb[data-drag="true"] { opacity: 0.8; width: 7px; }
+/* Scrolled away from the newest words: one small pill brings them back. */
+.jump {
+  position: absolute;
+  left: 50%;
+  bottom: 8px;
+  translate: -50% 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 28px;
+  padding: 0 12px;
+  border: 1px solid var(--hair2);
+  border-radius: 14px;
+  background: var(--surface-1);
+  color: var(--ink);
+  font: 600 12px/1 var(--font-ui);
+  white-space: nowrap;
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.12);
+  cursor: pointer;
+}
+.jump[hidden] { display: none; }
+.jump::after { content: ""; position: absolute; inset: -8px -4px; }
+.jump svg { width: 10px; height: 10px; fill: none; stroke: currentColor; stroke-width: 1.4; stroke-linecap: round; stroke-linejoin: round; }
+.jump:hover { border-color: var(--ink3); }
+html[data-motion="on"] .jump:not([hidden]) { animation: fade-in 200ms var(--ease-out) both; }
 .serif p { margin: 0 0 0.55em; }
 .serif ul, .serif ol { list-style: none; margin: 0.2em 0 0.55em; padding: 0; }
 .serif li { position: relative; padding-left: 1.05em; }
@@ -618,27 +673,8 @@ body[data-claude="idle"] .claude-summary { opacity: 0.55; }
 .serif pre { margin: 0 0 0.55em; padding: 2px 0 2px 12px; border-left: 1px solid var(--hair2); overflow-x: auto; font-size: 0.8em; line-height: 1.5; color: var(--ink2); }
 .serif pre code { text-decoration: none; font-size: 1em; }
 .serif .md-omitted { color: var(--fg-3); font-family: var(--font-ui); font-size: var(--text-small); }
-.more {
-  position: relative;
-  display: inline-flex;
-  align-items: center;
-  min-height: 32px;
-  margin: -4px 0 0;
-  padding: 0;
-  border: 0;
-  background: transparent;
-  color: var(--ink);
-  font: 600 12.5px/1 var(--font-ui);
-  text-decoration: underline;
-  text-decoration-color: var(--hair2);
-  text-underline-offset: 3px;
-  cursor: pointer;
-}
-.more::after { content: ""; position: absolute; inset: -6px -8px; }
-.more:hover { text-decoration-color: currentColor; }
 /* New words fade in; nothing moves (only after the first render). */
-html[data-motion="on"] .claude-step .msg:last-child,
-html[data-motion="on"] .claude-summary { animation: fade-in 320ms var(--ease-swap) both; }
+html[data-motion="on"] .claude-flow .msg[data-tone="latest"] { animation: fade-in 320ms var(--ease-swap) both; }
 @keyframes fade-in { from { opacity: 0; } }
 
 /* ---------- the approval: the question in the frame of light ----------
@@ -662,8 +698,8 @@ html[data-motion="on"] .claude-summary { animation: fade-in 320ms var(--ease-swa
 .claude-why p { margin: 0 0 0.4em; }
 .claude-note { flex: none; margin-top: auto; padding-top: var(--space-3); font-size: 12.5px; line-height: 18px; color: var(--ink2); }
 .claude-note .note-short { display: none; }
-body[data-eclipsing="true"] .claude-flow { opacity: 0.15; transition: opacity 450ms var(--ease-out) 300ms; }
-body[data-claude="approval"] .claude-flow { opacity: 0; visibility: hidden; }
+body[data-eclipsing="true"] .claude-scroll { opacity: 0.15; transition: opacity 450ms var(--ease-out) 300ms; }
+body[data-claude="approval"] :is(.claude-scroll, .claude-thumb, .jump) { opacity: 0; visibility: hidden; }
 html[data-motion="on"] body[data-claude="approval"] .claude-ask > * { animation: ask-rise 320ms var(--ease-swap) both; animation-delay: 250ms; }
 html[data-motion="on"] body[data-claude="approval"] .claude-ask > :nth-child(2) { animation-delay: 310ms; }
 html[data-motion="on"] body[data-claude="approval"] .claude-ask > :nth-child(3) { animation-delay: 370ms; }
@@ -689,7 +725,56 @@ body[data-view="live"] .bottom:focus-within { opacity: 1 !important; transition-
   padding: 0 10px 0 12px;
   transition: opacity 450ms var(--ease-swap);
 }
-.ctl { display: flex; gap: var(--space-2); }
+.ctl { display: flex; gap: 2px; }
+/* The footer's device buttons: the icon says what is in use; a gold flash when a chosen
+   device went away and the system default took over. */
+.icon-btn.dev[aria-expanded="true"] { background: var(--hair); color: var(--ink); }
+.icon-btn.dev[data-flash="true"] { color: var(--need-ink); animation: dev-flash 1.6s var(--ease-out) both; }
+@keyframes dev-flash { 0%, 30%, 60% { scale: 1.12; } 15%, 45%, 100% { scale: 1; } }
+/* The quick picker, over the panel above the footer. */
+.dev-picker {
+  position: fixed;
+  right: 10px;
+  bottom: calc(var(--footer-h) + 4px);
+  z-index: 30;
+  width: min(280px, calc(100vw - 24px));
+  max-height: calc(100vh - var(--footer-h) - var(--header-h) - 12px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 4px;
+  border: 1px solid var(--hair2);
+  border-radius: 12px;
+  background: var(--surface-1);
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.16);
+  font-size: 13px;
+}
+.dev-picker[hidden] { display: none; }
+html[data-motion="on"] .dev-picker:not([hidden]) { animation: fade-in 160ms var(--ease-out) both; }
+.dev-head { padding: 6px 10px 4px; font-size: 11px; font-weight: 600; color: var(--fg-3); }
+.dev-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  min-height: 32px;
+  padding: 0 8px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--ink);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.dev-item:hover, .dev-item:focus-visible { background: var(--hair); outline: none; }
+.dev-item svg { flex: none; width: 14px; height: 14px; stroke-width: 2; visibility: hidden; }
+.dev-item[aria-checked="true"] { font-weight: 600; }
+.dev-item[aria-checked="true"] svg { visibility: visible; }
+.dev-name { flex: 1 1 auto; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.dev-level { flex: none; width: 40px; height: 4px; border-radius: 2px; background: var(--hair); overflow: hidden; }
+.dev-level i { display: block; height: 100%; width: 0; background: var(--you); transition: width 80ms linear; }
+.dev-sep { height: 1px; margin: 4px 6px; background: var(--hair); }
+.dev-more { color: var(--ink2); font-weight: 400; }
 /* The persona chip: its tuning as a tiny string, the name and the voice. */
 .pchip {
   position: relative;
@@ -1114,7 +1199,9 @@ body[data-card="permission"] .stage { padding-top: 56px; }
   .card-body { font-size: var(--text-small); line-height: 1.45; }
   .kbd-hint { display: none; }
 }
-@media (max-height: 420px) {
+/* The page gives way first: at 360 x 420 it is a few lines (and the question, in an
+   approval); only below that is it gone. */
+@media (max-height: 380px) {
   body[data-view="live"] .claude-page { display: none; }
 }
 @media (max-width: 380px) {

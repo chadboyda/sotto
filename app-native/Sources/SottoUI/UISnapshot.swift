@@ -151,8 +151,9 @@ public enum UISnapshot {
         State(name: "24-long-session", build: { m in
             connected(m, status("live", todaySeconds: 4 * 3600 + 1234)); captions(m, "How long have we been at this?", "A little over an hour.")
         }, mic: 0, speaker: 0, floor: nil, elapsed: 3600 + 125),
-        State(name: "25-claude-finished-long", build: finishedLong(expanded: false), mic: 0, speaker: 0, floor: nil),
-        State(name: "26-claude-finished-long-expanded", build: finishedLong(expanded: true), mic: 0, speaker: 0, floor: nil),
+        State(name: "25-claude-finished-long", build: finishedLong, mic: 0, speaker: 0, floor: nil),
+        // A long turn: the last reply (dim) above this turn's messages, the page following the newest.
+        State(name: "26-claude-working-long", build: workingLong, mic: 0, speaker: 0, floor: nil, elapsed: 95),
         // The 0.3.2 report: a background agent's approval with five agents at work, 7 minutes in.
         State(name: "27-agent-approval-crowded", build: { m in
             connected(m, status("live", busy: true)); working(m)
@@ -191,19 +192,34 @@ public enum UISnapshot {
     See [the PR](https://github.com/example/pr/1) for the full list.
     """
 
-    static func finishedLong(expanded: Bool) -> @MainActor @Sendable (StateModel) -> Void {
-        { m in
-            connected(m, status("live"))
-            m.apply(object: ev("delegation", ["id": .string("d1"), "status": .string("answered"), "text": .string("Clean up the auth code")]))
-            m.apply(object: ev("activity", ["kind": .string("turn_end"), "text": .string(""), "summary": .string(longSummary)]))
-            m.summaryExpanded = expanded
-            captions(m, "Great, what changed?")
-        }
+    static let finishedLong: @MainActor @Sendable (StateModel) -> Void = { m in
+        connected(m, status("live"))
+        m.apply(object: ev("delegation", ["id": .string("d1"), "status": .string("answered"), "text": .string("Clean up the auth code")]))
+        m.apply(object: ev("activity", ["kind": .string("turn_end"), "text": .string(""), "summary": .string(longSummary)]))
+        captions(m, "Great, what changed?")
+    }
+
+    /// Claude's messages in a long turn (the page scrolls; it follows the newest).
+    static let longTurn = [
+        "I read `auth.spec.ts` and the session helpers. The failure only shows up when the refresh timer fires during the assertion.",
+        "The **login** and **auth** specs share a module-level token cache, so the order they run in decides whether they pass.",
+        "Each spec now builds its own cache in `beforeEach`, and `SessionStore` no longer keeps a static instance.",
+        "The retry helper waits on the fake clock instead of `setTimeout`, so it can no longer fire mid-assertion.",
+        "Running the auth suite 50 times in a loop to be sure it is not just luck.",
+    ]
+
+    static let workingLong: @MainActor @Sendable (StateModel) -> Void = { m in
+        connected(m, status("live", busy: true))
+        m.apply(object: ev("activity", ["kind": .string("turn_end"), "text": .string(""), "summary": .string("Done. The branch is rebased on main and pushed.")]))
+        m.apply(object: ev("delegation", ["id": .string("d2"), "status": .string("delivered"), "text": .string("Fix the flaky auth test")]))
+        m.apply(object: ev("activity", ["kind": .string("turn_start"), "text": .string("")]))
+        for t in longTurn { m.apply(object: ev("activity", ["kind": .string("text"), "text": .string(t)])) }
+        captions(m, "Fix the flaky auth test.", "On it.")
     }
 
     /// The states in design/native/parity/ (docs/NATIVE.md "Parity with the page").
     public static let parityNames = ["05-listening", "08-muted", "09-claude-working", "10-claude-needs-approval", "11-claude-finished", "12-background-agents",
-                                     "13-cant-hear", "24-long-session", "25-claude-finished-long", "26-claude-finished-long-expanded"]
+                                     "13-cant-hear", "24-long-session", "25-claude-finished-long", "26-claude-working-long"]
 
     /// Render the parity states at the default 420 x 720 panel and a narrow 360 x 640 one.
     @discardableResult

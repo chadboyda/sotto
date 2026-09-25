@@ -734,3 +734,60 @@ test("milestone stars: one per 20 s of Claude's own words, 12 at most, where the
   assert.equal(st.stars.length, 12);
   assert.equal(st.stars[11].born, 430_000);
 });
+
+test("Claude's page keeps this turn and the recent ones; follow rules (SPEC-DEVIATIONS scrolling page)", () => {
+  let p = { msgs: [], turnStart: 0 };
+  p = lib.pushPage(p, "I read the spec.");
+  p = lib.pushPage(p, "I read the spec. Now the helpers.");
+  assert.deepEqual(p.msgs, ["I read the spec. Now the helpers."], "a growing message replaces itself");
+  p = lib.pushPage(p, "  ");
+  assert.equal(p.msgs.length, 1, "blank text is ignored");
+  p = lib.pushPage(p, "Found it.");
+  assert.deepEqual(lib.pageEntries(p).map((e) => e.tone), ["turn", "latest"]);
+  p = lib.pageTurn(p);
+  assert.deepEqual(lib.pageEntries(p).map((e) => e.tone), ["past", "past"], "a new turn: nothing is the latest yet");
+  p = lib.pushPage(p, "Found it. Again.");
+  assert.equal(p.msgs.length, 3, "a new turn never extends the last turn's message");
+  for (let i = 0; i < 20; i++) p = lib.pushPage(p, `Step ${i}`);
+  assert.equal(p.msgs.length, lib.PAGE_MAX);
+  assert.equal(p.turnStart, 0, "the turn start moves with the oldest messages dropped");
+  assert.equal(lib.pageEntries(p).at(-1).tone, "latest");
+
+  assert.equal(lib.followTarget({ scrollHeight: 1000, clientHeight: 300 }), 700);
+  assert.equal(lib.followTarget({ scrollHeight: 200, clientHeight: 300 }), 0);
+  assert.equal(lib.followTarget({ scrollHeight: 1000, clientHeight: 300, latestTop: 420 }), 420, "a long finished reply reads from its start");
+  assert.equal(lib.followTarget({ scrollHeight: 1000, clientHeight: 300, latestTop: 900 }), 700);
+  assert.equal(lib.isFollowing(700, 700), true);
+  assert.equal(lib.isFollowing(680, 700), true, "within the slack");
+  assert.equal(lib.isFollowing(600, 700), false);
+  assert.equal(lib.isFollowing(800, 700), true, "reading below the start of a long reply still follows");
+
+  assert.equal(lib.scrollThumb({ scrollTop: 0, scrollHeight: 300, clientHeight: 300 }), null);
+  assert.deepEqual(lib.scrollThumb({ scrollTop: 0, scrollHeight: 600, clientHeight: 300 }), { top: 6, height: 144 });
+  assert.deepEqual(lib.scrollThumb({ scrollTop: 300, scrollHeight: 600, clientHeight: 300 }), { top: 150, height: 144 });
+  assert.equal(lib.scrollThumb({ scrollTop: 0, scrollHeight: 100_000, clientHeight: 300 }).height, 24, "never thinner than 24 px");
+});
+
+test("footer devices: System default first, the check, the fallback, the labels (SPEC-DEVIATIONS Devices in the footer)", () => {
+  const devs = [
+    { kind: "audioinput", deviceId: "default", label: "Default - MacBook Pro Microphone" },
+    { kind: "audioinput", deviceId: "mbp", label: "MacBook Pro Microphone" },
+    { kind: "audioinput", deviceId: "usb", label: "USB Mic" },
+    { kind: "audiooutput", deviceId: "default", label: "Default - AirPods Pro" },
+    { kind: "audiooutput", deviceId: "pods", label: "AirPods Pro" },
+  ];
+  const m = lib.deviceMenu(devs, "audioinput", null);
+  assert.deepEqual(m.map((x) => x.label), ["System default (MacBook Pro Microphone)", "MacBook Pro Microphone", "USB Mic"]);
+  assert.deepEqual(m.map((x) => x.checked), [true, false, false]);
+  assert.deepEqual(lib.deviceMenu(devs, "audioinput", "usb").map((x) => x.checked), [false, false, true]);
+  assert.deepEqual(lib.deviceMenu(devs, "audioinput", "gone").map((x) => x.checked), [true, false, false], "a missing choice: System default is in use");
+  assert.equal(lib.deviceMenu(devs, "audiooutput", "")[0].label, "System default (AirPods Pro)");
+  assert.equal(lib.deviceLost(devs, "audioinput", "usb"), false);
+  assert.equal(lib.deviceLost(devs, "audioinput", "gone"), true);
+  assert.equal(lib.deviceLost(devs, "audioinput", ""), false, "System default is never lost");
+  assert.equal(lib.deviceLost([], "audioinput", "usb"), false, "an unread list loses nothing");
+  assert.equal(lib.deviceButtonLabel("audioinput", "Default - MacBook Pro Microphone"), "Microphone: MacBook Pro Microphone");
+  assert.equal(lib.deviceButtonLabel("audiooutput", ""), "Speaker: none");
+  assert.equal(lib.isHeadphonesLabel("AirPods Pro"), true);
+  assert.equal(lib.isHeadphonesLabel("MacBook Pro Speakers"), false);
+});

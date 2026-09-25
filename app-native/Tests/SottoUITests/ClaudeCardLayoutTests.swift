@@ -2,7 +2,7 @@
 // PanelView is laid out in an off-screen window for the canned states, and every zone
 // (the caption line, Claude's column and its row, the footer) must sit in exactly the same
 // place whatever the panel shows: listening, speaking, working, the eclipse approval at any
-// instant, finished with long output (collapsed or expanded), can't hear, sleeping. Claude's
+// instant, finished with long output, a long turn, can't hear, sleeping. Claude's
 // column stays inside the panel and above the footer at every width, and long output never
 // grows it (it clips under a fade or scrolls inside it).
 import XCTest
@@ -39,7 +39,7 @@ final class ClaudeCardLayoutTests: XCTestCase {
     static let states = ["05-listening", "06-you-speaking", "07-sotto-speaking", "08-muted", "09-claude-working", "10a-approval-freeze",
                          "10b-approval-moon-crossing", "10c-approval-totality", "10-claude-needs-approval", "11-claude-finished",
                          "11a-finished-stars-flash", "12-background-agents", "13-cant-hear", "25-claude-finished-long",
-                         "26-claude-finished-long-expanded", "27-agent-approval-crowded", "28-persona-switch"]
+                         "26-claude-working-long", "27-agent-approval-crowded", "28-persona-switch"]
 
     func testZonesNeverMoveBetweenStates() {
         for size in [CGSize(width: 420, height: 640), CGSize(width: 420, height: 720), CGSize(width: 360, height: 560), CGSize(width: 640, height: 900)] {
@@ -57,6 +57,146 @@ final class ClaudeCardLayoutTests: XCTestCase {
                     XCTAssertEqual(a.height, bb.height, accuracy: 0.5, "\(k) resized between \(baseName) and \(name) at \(size)")
                 }
             }
+        }
+    }
+
+    /// Claude's page is one fixed region: wherever it shows (listening, working, finished,
+    /// a long turn, a long reply), it is the same box, and it fills the column below the row.
+    func testPageRegionIsFixed() {
+        for size in [CGSize(width: 420, height: 640), CGSize(width: 360, height: 420), CGSize(width: 640, height: 900)] {
+            var base: CGRect?
+            for name in ["05-listening", "09-claude-working", "11-claude-finished", "25-claude-finished-long", "26-claude-working-long", "13-cant-hear"] {
+                let f = layout(name, size: size)
+                guard let p = f["claude-page"], let col = f["claude"] else { return XCTFail("\(name) at \(size): no page frame") }
+                XCTAssertEqual(p.maxY, col.maxY, accuracy: 0.5, "\(name) at \(size): the page does not reach the column's end")
+                XCTAssertGreaterThanOrEqual(p.height, 40, "\(name) at \(size): the page keeps a few lines")
+                guard let b = base else { base = p; continue }
+                XCTAssertEqual(p, b, "\(name) at \(size): the page region moved or resized")
+            }
+        }
+    }
+
+    // MARK: The live scroll view (not a still frame)
+
+    @MainActor final class Live {
+        let window: NSWindow
+        let host: NSView
+        let model: StateModel
+        init(_ state: String, size: CGSize, scheme: NSAppearance.Name = .aqua) {
+            model = UISnapshot.model(UISnapshot.states.first { $0.name == state }!)
+            host = NSHostingView(rootView: PanelView(model: model).frame(width: size.width, height: size.height))
+            host.frame = CGRect(origin: .zero, size: size)
+            window = NSWindow(contentRect: CGRect(x: -20_000, y: -20_000, width: size.width, height: size.height), styleMask: [.borderless], backing: .buffered, defer: false)
+            window.isReleasedWhenClosed = false
+            window.appearance = NSAppearance(named: scheme)
+            window.contentView = host
+            pump(0.4)
+        }
+        func pump(_ s: Double = 0.15) {
+            let end = Date().addingTimeInterval(s)
+            while Date() < end { host.layoutSubtreeIfNeeded(); RunLoop.current.run(until: Date().addingTimeInterval(0.02)) }
+        }
+        var scroll: FollowScrollView? { Self.find(host) }
+        static func find(_ v: NSView) -> FollowScrollView? {
+            if let s = v as? FollowScrollView { return s }
+            for sub in v.subviews { if let s = find(sub) { return s } }
+            return nil
+        }
+        var frame: CGRect { scroll.map { $0.convert($0.bounds, to: nil) } ?? .null }
+        func text(_ t: String) { model.apply(object: ["type": .string("activity"), "kind": .string("text"), "text": .string(t)]); pump() }
+        func userScroll(to y: CGFloat) {
+            guard let s = scroll else { return }
+            s.contentView.scroll(to: NSPoint(x: 0, y: y))
+            s.reflectScrolledClipView(s.contentView)
+            pump()
+        }
+        func close() { window.close() }
+    }
+
+    func testLongReplyScrollsInAFixedRegionAndFollows() throws {
+        let live = Live("26-claude-working-long", size: CGSize(width: 420, height: 640))
+        defer { live.close() }
+        let s = try XCTUnwrap(live.scroll, "the page is a scroll view")
+        let c = try XCTUnwrap(s.coordinator)
+        let frame0 = live.frame
+        XCTAssertEqual(s.scrollerStyle, .overlay, "the overlay scroller: hidden at rest, shown while scrolling")
+        XCTAssertTrue(s.hasVerticalScroller)
+        XCTAssertGreaterThan(c.total, c.viewport * 1.3, "the long turn overflows the page (\(c.total) in \(c.viewport))")
+        // Following: at the newest words.
+        XCTAssertTrue(c.following)
+        XCTAssertEqual(c.offset, c.target(), accuracy: 1)
+        XCTAssertFalse(c.follow.showJump)
+
+        // The reader scrolls up (a real wheel event where the system allows one, else the clip view).
+        if let cg = CGEvent(scrollWheelEvent2Source: nil, units: .pixel, wheelCount: 1, wheel1: 400, wheel2: 0, wheel3: 0), let e = NSEvent(cgEvent: cg) {
+            s.scrollWheel(with: e)
+            live.pump(0.3)
+        }
+        if c.offset > c.target() - 100 { live.userScroll(to: 0) }
+        XCTAssertLessThan(c.offset, c.target() - 100)
+        XCTAssertFalse(c.following, "scrolling up stops following")
+        XCTAssertTrue(c.follow.showJump, "Jump to latest shows")
+        let up = c.offset
+
+        // New words while the reader is up there: their place is kept, the frame never moves.
+        let total0 = c.total
+        live.text("The auth suite passed 50 times in a row. Pushing the branch now, then I will open the pull request with the summary.")
+        XCTAssertGreaterThan(c.total, total0)
+        XCTAssertEqual(c.offset, up, accuracy: 1, "the reader's place is kept")
+        XCTAssertEqual(live.frame, frame0, "the region never moves or resizes with its content")
+
+        // Back to the bottom by hand: following again.
+        live.userScroll(to: c.maxOffset)
+        XCTAssertTrue(c.following)
+        XCTAssertFalse(c.follow.showJump)
+        live.text("Opened the pull request.")
+        XCTAssertEqual(c.offset, c.target(), accuracy: 1, "new words scroll into view while following")
+
+        // Up again, then the pill.
+        live.userScroll(to: 0)
+        XCTAssertTrue(c.follow.showJump)
+        c.follow.jump()
+        live.pump(0.6)
+        XCTAssertTrue(c.following)
+        XCTAssertEqual(c.offset, c.target(), accuracy: 1, "Jump to latest lands on the newest words")
+        XCTAssertFalse(c.follow.showJump)
+
+        // A new turn follows again even if the reader had scrolled away.
+        live.userScroll(to: 0)
+        XCTAssertFalse(c.following)
+        live.model.apply(object: ["type": .string("activity"), "kind": .string("turn_start"), "text": .string("")])
+        live.text("Looking at the release notes.")
+        XCTAssertTrue(c.following)
+        XCTAssertEqual(c.offset, c.target(), accuracy: 1)
+        XCTAssertEqual(live.frame, frame0)
+    }
+
+    /// A finished reply taller than the page reads from its first line (still following).
+    func testLongFinishedReplyReadsFromItsStart() throws {
+        let live = Live("25-claude-finished-long", size: CGSize(width: 420, height: 640))
+        defer { live.close() }
+        let s = try XCTUnwrap(live.scroll)
+        let c = try XCTUnwrap(s.coordinator)
+        XCTAssertNotNil(c.latestTop)
+        XCTAssertTrue(c.following)
+        XCTAssertEqual(c.offset, c.target(), accuracy: 1)
+        XCTAssertLessThan(c.offset, c.maxOffset - 1, "more below: the reply shows from its start")
+    }
+
+    /// At 360 x 420 the page shrinks first: a few lines still scroll, and the approval takes the region and fits.
+    func testSmallPanelKeepsThePageAndTheApproval() throws {
+        let live = Live("26-claude-working-long", size: CGSize(width: 360, height: 420))
+        defer { live.close() }
+        let s = try XCTUnwrap(live.scroll)
+        let c = try XCTUnwrap(s.coordinator)
+        XCTAssertGreaterThanOrEqual(c.viewport, 40)
+        XCTAssertTrue(c.following)
+        XCTAssertEqual(c.offset, c.target(), accuracy: 1)
+        for name in ["10-claude-needs-approval", "27-agent-approval-crowded"] {
+            let f = layout(name, size: CGSize(width: 360, height: 420))
+            let col = try XCTUnwrap(f["claude"]), go = try XCTUnwrap(f["show-terminal"])
+            XCTAssertNil(f["claude-page"], "\(name): the question takes the page's region")
+            XCTAssertLessThanOrEqual(go.maxY, col.maxY + 0.5, "\(name): Show terminal fits at 360 x 420")
         }
     }
 

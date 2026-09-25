@@ -78,6 +78,17 @@ final class ViewTextTests: XCTestCase {
             if let s = v.summary { out["summary"] = .string(s) }
             return .object(out)
         case "stripMarkdown": return .string(ViewText.stripMarkdown(a[0].str))
+        case "pageTurn": return pageJSON(ViewText.pageTurn(page(a[0])))
+        case "pushPage": return pageJSON(ViewText.pushPage(page(a[0]), a[1].str ?? ""))
+        case "pageEntries": return .array(ViewText.pageEntries(page(a[0])).map { .object(["text": .string($0.text), "tone": .string($0.tone.rawValue)]) })
+        case "followTarget":
+            let o = a[0].obj ?? [:]
+            return .number(ViewText.followTarget(scrollHeight: o.number("scrollHeight") ?? 0, clientHeight: o.number("clientHeight") ?? 0, latestTop: o.number("latestTop")))
+        case "isFollowing": return .bool(ViewText.isFollowing(a[0].num ?? 0, target: a[1].num ?? 0))
+        case "scrollThumb":
+            let o = a[0].obj ?? [:]
+            guard let r = ViewText.scrollThumb(scrollTop: o.number("scrollTop") ?? 0, scrollHeight: o.number("scrollHeight") ?? 0, clientHeight: o.number("clientHeight") ?? 0) else { return .null }
+            return .object(["top": .number(r.top), "height": .number(r.height)])
         case "keySettingsView":
             let v = ViewText.keySettingsView(key(a[0]))
             return .object(["text": .string(v.text), "help": .string(v.help), "change": .bool(v.change), "remove": .bool(v.remove), "changeLabel": .string(v.changeLabel)])
@@ -207,6 +218,15 @@ final class ViewTextTests: XCTestCase {
     func opt(_ s: String?) -> JSONValue { s.map { .string($0) } ?? .null }
 
     /// Absent and null are the same (JS drops `undefined` in JSON).
+    func page(_ v: JSONValue) -> ViewText.Page {
+        let o = v.obj ?? [:]
+        var msgs: [String] = []
+        if case .array(let a)? = o["msgs"] { msgs = a.compactMap { $0.str } }
+        return ViewText.Page(msgs: msgs, turnStart: Int(o.number("turnStart") ?? 0))
+    }
+
+    func pageJSON(_ p: ViewText.Page) -> JSONValue { .object(["msgs": .array(p.msgs.map { .string($0) }), "turnStart": .number(Double(p.turnStart))]) }
+
     func normalize(_ v: JSONValue) -> JSONValue {
         switch v {
         case .object(let o): return .object(o.filter { $0.value != .null }.mapValues(normalize))

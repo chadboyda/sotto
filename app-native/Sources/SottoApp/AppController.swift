@@ -83,6 +83,7 @@ final class AppController: NSObject, NSApplicationDelegate, PanelControllerDeleg
         log.log("launch", ["pid": Int(ProcessInfo.processInfo.processIdentifier), "version": AppController.appVersion,
                            "test": options.testMode, "bundle": orNull(Bundle.main.bundleIdentifier),
                            "os": ProcessInfo.processInfo.operatingSystemVersionString])
+        model.settingsModel = settings
         panel = PanelController(model: model, log: log)
         panel.delegate = self
         if !options.testMode || options.show {
@@ -319,6 +320,50 @@ final class AppController: NSObject, NSApplicationDelegate, PanelControllerDeleg
                 o["tag"] = obj["tag"] as? String ?? ""
                 o["panel_visible"] = model.panelVisible
                 log.log("panel_probe", o)
+            case "page_scroll":
+                // Scroll Claude's page as a reader would ("top", "up", "bottom", "latest").
+                guard let view = panel.panel.contentView else { continue }
+                var o = PanelTestSupport.scrollPage(in: view, to: obj["to"] as? String ?? "top")
+                o["action"] = action
+                log.log("test_action", o)
+            case "panel_size":
+                // Resize the panel (small-window captures); the frame rules still apply.
+                guard let w = obj["width"] as? Double, let h = obj["height"] as? Double else { continue }
+                panel.panel.setContentSize(NSSize(width: w, height: h))
+                log.log("test_action", ["action": action, "width": w, "height": h])
+            case "device_picker":
+                // Open ("input" / "output") or close (anything else) the footer's device picker.
+                let kind = obj["kind"] as? String
+                model.devicePicker = kind == "input" || kind == "output" ? kind : nil
+                log.log("test_action", ["action": action, "kind": orNull(model.devicePicker)])
+            case "fake_devices":
+                // Extra fake devices that come and go (the picker and its fallback); fake audio only.
+                guard let fake = audio as? FakeAudioIO else { continue }
+                func devs(_ key: String) -> [AudioDevice] {
+                    (obj[key] as? [[String: Any]] ?? []).compactMap { o in
+                        guard let id = o["id"] as? String, let name = o["name"] as? String else { return nil }
+                        let hp = o["headphones"] as? Bool ?? false
+                        return AudioDevice(id: id, name: name, bluetooth: o["bluetooth"] as? Bool ?? false, headphones: hp, transport: .virtual)
+                    }
+                }
+                fake.testDevices = (devs("inputs"), devs("outputs"))
+                devicesChanged()
+                log.log("test_action", ["action": action, "inputs": settings.inputDevices.count, "outputs": settings.outputDevices.count,
+                                        "input": orNull(settings.selectedInput), "output": orNull(settings.selectedOutput)])
+            case "choose_device":
+                // What a click in the picker does.
+                let id = obj["id"] as? String
+                if obj["kind"] as? String == "output" { settings.chooseOutput(id) } else { settings.chooseInput(id) }
+                model.devicePicker = nil
+                log.log("test_action", ["action": action, "input": orNull(settings.selectedInput), "output": orNull(settings.selectedOutput)])
+            case "snapshot":
+                // The live panel's own window content to a PNG (the real views, no screen capture).
+                guard let out = obj["path"] as? String, out.hasPrefix("/"), let view = panel.panel.contentView else { continue }
+                let data = PanelTestSupport.png(of: view)
+                let ok = data.map { (try? $0.write(to: URL(fileURLWithPath: out))) != nil } ?? false
+                var o = PanelTestSupport.pageState(in: view)
+                o["action"] = action; o["ok"] = ok; o["path"] = out
+                log.log("test_action", o)
             default:
                 log.log("test_action", ["action": action, "ok": false])
             }
@@ -483,6 +528,7 @@ final class AppController: NSObject, NSApplicationDelegate, PanelControllerDeleg
         model.micName = route.input?.name
         settings.activeInput = route.input.map(AppController.choice)
         settings.activeOutput = route.output.map(AppController.choice)
+        devicesChanged()
         log.log("route", ["mode": route.mode.rawValue, "input_bt": route.input?.bluetooth ?? false,
                           "capture_rate": route.captureRate, "device_rate": route.deviceRate,
                           "output_headphones": route.output?.headphones ?? false])
@@ -703,8 +749,29 @@ final class AppController: NSObject, NSApplicationDelegate, PanelControllerDeleg
 
     private func refreshDevices() {
         guard let io = audio else { return }
-        settings.inputDevices = io.inputDevices().map(AppController.choice)
-        settings.outputDevices = io.outputDevices().map(AppController.choice)
+        let ins = io.inputDevices(), outs = io.outputDevices()
+        settings.inputDevices = ins.map(AppController.choice)
+        settings.outputDevices = outs.map(AppController.choice)
+        let di = io.defaultDeviceID(input: true), dout = io.defaultDeviceID(input: false)
+        settings.defaultInputName = ins.first { $0.id == di }?.name
+        settings.defaultOutputName = outs.first { $0.id == dout }?.name
+    }
+
+    /// The device lists changed (a route change, a device plugged or unplugged): refresh the
+    /// footer picker, and when the device the user chose is gone, fall back to the macOS system
+    /// default (never another device) and flash its footer icon (SPEC-DEVIATIONS "Devices in the footer").
+    private func devicesChanged() {
+        refreshDevices()
+        if DeviceMenu.lost(selected: settings.selectedInput, devices: settings.inputDevices) {
+            log.log("device_lost", ["kind": "input"])
+            settings.chooseInput(nil)
+            model.flashDevice("input")
+        }
+        if DeviceMenu.lost(selected: settings.selectedOutput, devices: settings.outputDevices) {
+            log.log("device_lost", ["kind": "output"])
+            settings.chooseOutput(nil)
+            model.flashDevice("output")
+        }
     }
 
     /// Mic and login-item state. Test mode never reads TCC or SMAppService (no prompts, no side effects).
