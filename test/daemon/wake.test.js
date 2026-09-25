@@ -70,6 +70,10 @@ test("sleepDecision: idle, min awake, speaking grace, busy, disabled, false wake
   // session stays; it is false only after FALSE_WAKE_QUIET_MS of local quiet.
   assert.equal(sleepDecision({ ...fw, lastLocalSpeechAt: MIN_AWAKE_MS - 2000 }), null, "the user is still talking");
   assert.equal(sleepDecision({ ...fw, now: MIN_AWAKE_MS - 2000 + FALSE_WAKE_QUIET_MS, lastLocalSpeechAt: MIN_AWAKE_MS - 2000 }), "false_wake", "then 10 s of quiet");
+  // The model spoke (an announcement after an unintelligible wake): the quiet
+  // window starts when it stops, so the user can answer (2026-09-25 incident).
+  assert.equal(sleepDecision({ ...fw, now: 30_000, lastAssistantAt: 26_000 }), null, "model just spoke: user gets time to answer");
+  assert.equal(sleepDecision({ ...fw, now: 26_000 + FALSE_WAKE_QUIET_MS, lastAssistantAt: 26_000 }), "false_wake", "then 10 s of quiet after its words");
 });
 
 test("false-wake back-off is short (a missed real wake must not lock the user out)", () => {

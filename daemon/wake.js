@@ -69,8 +69,10 @@ export function sleepDecision({
   // Woken by "voice" but no words ever arrived and the mic has been quiet for
   // FALSE_WAKE_QUIET_MS: noise, music or a cough. Sleep as soon as the prepaid
   // 15 s are used instead of waiting a full idle period. While the local
-  // detector still hears speech the session stays (the normal idle rule).
-  if (wokeBy === "voice" && !heardUser && now - Math.max(liveStartedAt, lastLocalSpeechAt) >= FALSE_WAKE_QUIET_MS) return "false_wake";
+  // detector still hears speech the session stays (the normal idle rule), and
+  // the quiet is counted from the model's last words too: whatever it just said
+  // (a "Yes?", a finished-work announcement) the user gets time to answer.
+  if (wokeBy === "voice" && !heardUser && now - Math.max(liveStartedAt, lastLocalSpeechAt, lastAssistantAt) >= FALSE_WAKE_QUIET_MS) return "false_wake";
   const last = Math.max(lastUserAt, lastAssistantAt, lastPageActivityAt, liveStartedAt);
   return now - last >= idleMs ? "idle" : null;
 }
