@@ -348,13 +348,17 @@ html.host-app .top { height: calc(var(--header-h) + var(--host-inset-top, 28px))
 .status { flex: 0 1 auto; display: flex; align-items: center; min-width: 0; margin-right: auto; white-space: nowrap; }
 .glyph { display: none; }
 .status-text { display: flex; align-items: baseline; gap: 10px; min-width: 0; overflow: hidden; }
-.status-word { flex: none; color: var(--ink); font: 600 var(--text-meta)/16px var(--font-ui); letter-spacing: 0.005em; transition: color var(--dur-base) var(--ease-swap); }
+/* The word sits in a fixed 72 px slot (the app's HeaderContent.statusSlot), so "Live" turning
+   into "Needs you" or "Connecting" never nudges the project beside it. */
+.status-word { flex: none; min-width: 72px; color: var(--ink); font: 600 var(--text-meta)/16px var(--font-ui); letter-spacing: 0.005em; transition: color var(--dur-base) var(--ease-swap); }
 .status-sub { display: flex; gap: var(--space-1); min-width: 0; font-size: var(--text-meta); line-height: 16px; color: var(--ink2); }
 .status-sub:not(:has(> :not([hidden]))) { display: none; }
 .status-detail { flex: none; font-weight: 600; }
 .status-detail:not([hidden]) + .project:not([hidden])::before { content: "·"; margin-right: var(--space-1); color: var(--ink3); }
 .project { flex: 0 1 auto; min-width: 0; max-width: 24ch; overflow: hidden; text-overflow: ellipsis; }
-body[data-status="attention"] .status-word { color: var(--need-ink); }
+/* Gold is the approval's alone (the app's statusWord colour): the daily cap, the key and
+   the mic prompt are attention cards but read in ink, so gold never cries wolf. */
+body[data-view="live"][data-status="attention"] .status-word { color: var(--need-ink); }
 body[data-status="muted"] .status-word,
 body[data-status="muted"] .status-detail { color: var(--muted-ink); }
 body[data-status="error"] .status-word { color: var(--err); }
@@ -705,57 +709,54 @@ body[data-view="live"] .bottom:focus-within { opacity: 1 !important; transition-
 .banner-action::after { inset: calc((var(--control-sm) - var(--hit-min)) / 2) 0; }
 .banner-action:hover:not(:disabled) { background: var(--fill-hover); }
 
-/* ---------- banners: one at a time ----------
-   A raised neutral surface floating over the bottom of the page, above the footer: a
-   banner coming or going moves nothing. The tone is in the icon alone, never in a
-   tinted wash or a warm ring. */
-.banners { position: absolute; z-index: 5; left: var(--gutter); right: var(--gutter); bottom: 12px; }
+/* ---------- banners: one at a time, on the caption line ----------
+   A notice takes the line under the string (the readout's fixed box), like the app's
+   CaptionLine: its words, then its one action and a dismiss. No surface, no icon, no
+   floating card: a banner coming or going moves nothing, and the caption it covers
+   comes back when it goes. Errors are in the error ink; everything else is quiet. */
+.banners:not(:empty) { z-index: 2; }
 .banners:empty { display: none; }
+.banners:has(> .banner:not([data-leaving="true"])) ~ * { visibility: hidden; }
 .banner {
   display: flex;
   align-items: center;
   gap: var(--space-2);
-  min-height: 48px;
-  padding: var(--space-1) var(--space-1) var(--space-1) var(--space-3);
-  border-radius: var(--radius-xl);
-  background: var(--surface-1);
-  box-shadow: var(--shadow-raised);
-  font-size: var(--text-small);
-  line-height: 18px;
-  color: var(--fg);
+  height: 100%;
+  font-size: var(--cap-size);
+  line-height: var(--cap-h);
+  color: var(--ink2);
 }
-.banner > svg { width: 18px; height: 18px; flex: none; color: var(--fg-3); }
-.banner[data-level="warn"] > svg { color: var(--attn-icon); }
-.banner[data-level="error"] > svg { color: var(--err); }
-.banner-text { flex: 1; min-width: 0; padding-block: 7px; text-wrap: pretty; }
-.banner-more { color: var(--fg-2); white-space: nowrap; }
-/* 40 x 40 hit; the hover circle is the visible 32. */
-.banner .icon-btn { width: var(--hit-min); height: var(--hit-min); border-radius: 50%; color: var(--fg-3); }
-.banner .icon-btn::before { content: ""; position: absolute; inset: var(--space-1); border-radius: 50%; background: transparent; transition: background-color var(--dur-fast) var(--ease-out); }
-.banner .icon-btn:hover { background: transparent; }
-.banner .icon-btn:hover::before { background: var(--fill); }
-.banner .icon-btn svg { position: relative; width: 16px; height: 16px; }
-/* Enter: the surface, then the words, then the actions, ~80 ms apart. */
-html[data-motion="on"] .banner[data-enter="true"] { animation: rise var(--dur-slow) var(--ease-out); }
-html[data-motion="on"] .banner[data-enter="true"] > * { animation: item-in 280ms var(--ease-out) both; }
-html[data-motion="on"] .banner[data-enter="true"] > .banner-text { animation-delay: 80ms; }
+.banner[data-level="error"] .banner-text { color: var(--err); }
+.banner-text { flex: 1 1 auto; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.banner-more { flex: none; color: var(--ink3); white-space: nowrap; font-variant-numeric: tabular-nums; }
+/* The one action: the app's QuietCapsuleStyle (28 px, a hairline, ink), a 40 px hit. */
+.banner .banner-action { flex: none; min-height: 28px; padding: 0 12px; border-radius: 14px; background: transparent; box-shadow: inset 0 0 0 1px var(--hair2); color: var(--ink); font-size: 12px; font-weight: 500; }
+.banner .banner-action::after { inset: -6px 0; }
+.banner .banner-action:hover:not(:disabled) { background: var(--hair); }
+/* Dismiss: 28 px visible, 40 px hit. */
+.banner .icon-btn { flex: none; width: 28px; height: 28px; margin-right: -6px; border-radius: 50%; color: var(--ink3); }
+.banner .icon-btn::after { content: ""; position: absolute; inset: -6px; }
+.banner .icon-btn:hover { background: var(--hair); color: var(--ink); }
+.banner .icon-btn svg { position: relative; width: 12px; height: 12px; stroke-width: 2; }
+/* Enter: the words, then the actions, a short fade in place (no lift: it is a line). */
+html[data-motion="on"] .banner[data-enter="true"] > * { animation: fade-in 220ms var(--ease-out) both; }
 html[data-motion="on"] .banner[data-enter="true"] > .banner-more,
 html[data-motion="on"] .banner[data-enter="true"] > .btn,
-html[data-motion="on"] .banner[data-enter="true"] > .icon-btn { animation-delay: 160ms; }
-/* Exit: softer and shorter than the enter; a small lift, no height change. */
+html[data-motion="on"] .banner[data-enter="true"] > .icon-btn { animation-delay: 80ms; }
+/* Exit: softer and shorter than the enter; a fade in place. */
 .banner[data-leaving="true"] {
   opacity: 0;
-  translate: 0 -4px;
-    pointer-events: none;
-  transition-property: opacity, translate, filter;
-  transition-duration: var(--dur-fast);
-  transition-timing-function: var(--ease-in);
+  pointer-events: none;
+  transition: opacity var(--dur-fast) var(--ease-in);
 }
 
 /* ---------- card view (paused, errors, allow mic, off) ----------
    The card takes the Claude zone; the headline names the state in one word and the
    string stays above, dormant (slack and faint). */
-body[data-view="card"] .claude { display: none; }
+body[data-view="card"]:not([data-inline="true"]) .claude { display: none; }
+/* Asleep or paused (app.js inlineCard) there is no card: Claude's page stays, receded,
+   and the caption line says the state. Nothing moves when it wakes. */
+body[data-inline="true"] .claude-page { opacity: 0.55; transition: opacity var(--dur-slow) var(--ease-out); }
 body[data-dial="hidden"] .stage { display: none; }
 
 /* Only the middle of a card scrolls when the window is short; the title and the

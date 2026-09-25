@@ -115,3 +115,46 @@ export function paintChip(el, { name, voice, wave }) {
   if (wave && el.chipWave.getAttribute("d") !== wave) el.chipWave.setAttribute("d", wave);
   el.personaChip.setAttribute("aria-label", `Persona: ${name || "Sotto"}${voice ? `, voice ${voice}` : ""}. Opens Settings`);
 }
+
+/**
+ * A notice on the caption line (styles.css .banners): its words (the whole text in a
+ * tooltip when the line cuts it), "+N" when more wait, its one action and a dismiss. The
+ * app's CaptionLine .banner, the same order. `b` = {text, level, action?:{label}}.
+ */
+export function paintBanner(container, b, { more = 0, enter = true, onAction = null, onDismiss = null } = {}) {
+  const div = document.createElement("div");
+  div.className = "banner";
+  div.dataset.level = b.level || "info";
+  div.dataset.enter = String(!!enter);
+  div.setAttribute("role", b.level === "error" ? "alert" : "status");
+  const text = document.createElement("span");
+  text.className = "banner-text";
+  text.textContent = b.text;
+  text.title = b.text;
+  div.append(text);
+  if (more > 0) {
+    const m = document.createElement("span");
+    m.className = "banner-more";
+    m.textContent = `+${more}`;
+    m.title = `${more} more`;
+    div.append(m);
+  }
+  if (b.action) {
+    const act = document.createElement("button");
+    act.type = "button";
+    act.className = "btn banner-action";
+    act.textContent = b.action.label;
+    if (onAction) act.onclick = onAction;
+    div.append(act);
+  }
+  const close = document.createElement("button");
+  close.type = "button";
+  close.className = "icon-btn";
+  close.setAttribute("aria-label", "Dismiss");
+  close.title = "Dismiss";
+  close.innerHTML = '<svg aria-hidden="true"><use href="#i-close"/></svg>';
+  if (onDismiss) close.onclick = onDismiss;
+  div.append(close);
+  container.replaceChildren(div);
+  return div;
+}
