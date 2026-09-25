@@ -41,17 +41,24 @@ const MEASURE = `(async () => {
     finished: [{}, { busy: false, summary: "**Done.** The suite passes: 412 tests in 38 s." }],
     muted: [{ muted: true }, { busy: false, summary: "Done." }],
     approvalMuted: [{ muted: true, attention: true }, { busy: true, kind: "permission", text: "git push" }],
+    // Quiet states keep the page and speak on the caption line (lib.inlineCard): no card.
+    sleeping: [{ phase: "idle", state: "sleeping", sleep: { title: "Sleeping", body: "Voice wakes up when you speak.", listening: true } }, { busy: false, summary: "Done." }],
+    paused: [{ phase: "idle", state: "paused", pausedReason: "idle", idleMinutes: 5 }, { busy: false, summary: "Done." }],
+    // A notice takes the caption line (panel.paintBanner): nothing floats, nothing moves.
+    cantHear: [{ banner: { level: "warn", text: "I can't hear you \u2014 using OBSBOT Meet 2 Microphone.", action: { label: "Switch mic" } } }, { busy: false, summary: "Done." }],
   };
   const out = {};
   for (const [name, [p, c]] of Object.entries(states)) {
     const v = lib.pageView({ phase: "live", state: "live", ...p });
     const b = document.body.dataset;
-    b.view = v.view; b.dial = v.dial; b.floor = v.floor; b.card = ""; b.status = v.header.key;
+    b.view = v.view; b.dial = v.dial; b.floor = v.floor; b.card = v.card?.kind || ""; b.status = v.header.key; b.inline = String(lib.inlineCard(v));
+    $("status-label").textContent = lib.statusWord(v); $("project").textContent = "claude-live";
     const h = lib.headline(v, { attention: !!p.attention, busy: !!c.busy, tool: "Running the tests" });
     panel.paintHeadline($("stage-word"), h, { fade: false });
-    const note = lib.captionNote(v);
+    const note = lib.captionNote(v) || lib.inlineNote(v);
     $("stage-sub").hidden = !note; $("stage-sub").textContent = note || "";
-    $("overlay").hidden = true;
+    $("overlay").hidden = !v.card || lib.inlineCard(v);
+    if (p.banner) panel.paintBanner($("banners"), p.banner, { enter: false }); else $("banners").replaceChildren();
     const m = lib.claudeView(c);
     panel.paintClaude(el, { m, head: lib.claudeHead(m), history: ["I read the spec."], says: c.says || "", summary: m.summary || null, expanded: false,
       time: c.busy ? "4:12" : null, requestLine: m.request ? { tone: "", text: "Asked: " + m.request.text } : null });
@@ -60,6 +67,9 @@ const MEASURE = `(async () => {
       word: h.word, wordTop: top("stage-word"), wordH: $("stage-word").offsetHeight, peg: top("mute-btn"), caption: top("captions-panel"),
       head: top(document.querySelector(".claude-head")), page: top("claude-page"), pageH: $("claude-page").offsetHeight,
       footer: top(document.querySelector(".bottom")), chip: top("persona-chip"), gear: top("settings-btn"),
+      project: Math.round($("project").getBoundingClientRect().left * 10) / 10, overlay: !$("overlay").hidden,
+      note: $("stage-sub").hidden ? null : $("stage-sub").textContent,
+      banner: $("banners").firstElementChild ? [top($("banners").querySelector(".banner-text")), getComputedStyle($("captions-panel")).visibility] : null,
     };
   }
   return out;
@@ -72,14 +82,21 @@ test("live view: no zone moves across the states (listening to approval to muted
     await page.setSize(w, h);
     const m = await page.eval(MEASURE);
     const rows = Object.values(m);
-    assert.equal(rows.length, 8);
-    for (const key of ["wordTop", "wordH", "peg", "caption", "head", "page", "pageH", "footer", "chip", "gear"]) {
+    assert.equal(rows.length, 11);
+    for (const key of ["wordTop", "wordH", "peg", "caption", "head", "page", "pageH", "footer", "chip", "gear", "project"]) {
       const vals = new Set(rows.map((r) => r[key]));
       assert.equal(vals.size, 1, `${w}x${h}: ${key} moved across states: ${JSON.stringify(Object.fromEntries(Object.entries(m).map(([k, r]) => [k, r[key]])))}`);
     }
     assert.equal(m.working.word, "Claude is testing");
     assert.equal(m.approval.word, "Approve in the terminal");
     assert.equal(m.muted.word, "Muted");
+    // Asleep and paused: no card, the state on the caption line, the page in place.
+    assert.equal(m.sleeping.overlay, false);
+    assert.equal(m.sleeping.note, "Just start talking. Nothing is sent or billed until then.");
+    assert.equal(m.paused.overlay, false);
+    assert.equal(m.paused.note, "Paused after 5 minutes of silence. Press Space to resume.");
+    // The notice sits on the caption line and hides the caption under it.
+    assert.deepEqual(m.cantHear.banner, [m.cantHear.caption, "hidden"]);
   }
 });
 

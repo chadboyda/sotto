@@ -1501,6 +1501,26 @@ export function captionNote(v) {
 }
 
 /**
+ * Sleeping and paused are quiet states, not errors: like the app (PanelView CaptionLine),
+ * the page keeps Claude's page, says the state on the caption line under the string, and
+ * turns the footer's pause into play (Wake now / Resume). No card and no big pill. The
+ * daily cap, errors, the mic prompt and the key keep their card.
+ * @param {{card?:{kind:string}|null}} v  lib.pageView() output
+ */
+export function inlineCard(v) {
+  const k = v?.card?.kind;
+  return k === "sleeping" || k === "paused";
+}
+
+/** The caption line's words for an inline card: the app's CaptionLine.line, word for word. */
+export function inlineNote(v) {
+  const c = inlineCard(v) ? v.card : null;
+  if (!c) return null;
+  if (c.kind === "sleeping") return c.listening ? "Just start talking. Nothing is sent or billed until then." : c.body || null;
+  return `${c.title}. Press Space to resume.`;
+}
+
+/**
  * The Claude row's head (hybrid §3 MoonGlyph): a moon phase instead of a state dot,
  * "Claude · Working" instead of a title. `m` is lib.claudeView() output.
  * @returns {{phase:"new"|"waxing"|"eclipse"|"full", label:string, detail:string|null, need:boolean}}

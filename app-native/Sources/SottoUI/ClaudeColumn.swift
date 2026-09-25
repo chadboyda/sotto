@@ -12,6 +12,7 @@ struct ClaudeColumn: View {
     let layout: HybridLayout
     var stillAt: Double?
     @Environment(\.colorScheme) private var scheme
+    @Environment(\.colorSchemeContrast) private var contrast
     @Environment(\.accessibilityReduceMotion) private var reduceEnv
     @Environment(\.sottoStill) private var still
     private var reduce: Bool { reduceEnv || model.reducedMotion }
@@ -20,7 +21,7 @@ struct ClaudeColumn: View {
     static let rowHeight: CGFloat = 20
 
     var body: some View {
-        let t = HybridTheme.of(scheme)
+        let t = HybridTheme.of(scheme, increaseContrast: contrast == .increased)
         let v = model.pageView
         // The approval's opening runs on its own clock for its first 1.7 s (the page dims
         // while the moon crosses, then the question rises part by part).
@@ -150,7 +151,7 @@ struct ClaudeColumn: View {
         VStack(alignment: .leading, spacing: 10) {
             // "Asked: ..." while the request is in flight (a failed or held one says so), as on the page.
             if let r = model.requestLine {
-                Text(r.text).font(.system(size: 13)).foregroundStyle(r.tone == "error" ? t.err : r.tone == "warn" ? t.ink : t.ink3)
+                Text(r.text).font(.system(size: 13)).foregroundStyle(r.tone == "error" ? t.err : r.tone == "warn" ? t.ink : t.fg3)
                     .lineLimit(1).truncationMode(.tail)
             }
             if !msgs.isEmpty {
@@ -168,8 +169,9 @@ struct ClaudeTimer: View {
     var need = false
     static let width: CGFloat = 58
     @Environment(\.colorScheme) private var scheme
+    @Environment(\.colorSchemeContrast) private var contrast
     var body: some View {
-        let t = HybridTheme.of(scheme)
+        let t = HybridTheme.of(scheme, increaseContrast: contrast == .increased)
         HStack(spacing: 5) {
             Image(systemName: "timer").font(.system(size: 10.5)).foregroundStyle(need ? t.needInk : t.ink3)
             Text(text ?? "0:00").font(.system(size: 12.5, weight: need ? .semibold : .medium)).monospacedDigit()
@@ -192,12 +194,13 @@ struct ClaudePage: View {
     var expanded = false
     var toggle: () -> Void = {}
     @Environment(\.colorScheme) private var scheme
+    @Environment(\.colorSchemeContrast) private var contrast
     @Environment(\.sottoStill) private var still
 
     static let opacities: [Double] = [0.42, 0.5, 1]
 
     var body: some View {
-        let t = HybridTheme.of(scheme)
+        let t = HybridTheme.of(scheme, increaseContrast: contrast == .increased)
         let n = messages.count
         let latest = messages[n - 1]
         GeometryReader { geo in
@@ -313,9 +316,10 @@ struct MarkdownPage: View {
     let layout: HybridLayout
     var expanded = false
     @Environment(\.colorScheme) private var scheme
+    @Environment(\.colorSchemeContrast) private var contrast
 
     var body: some View {
-        let t = HybridTheme.of(scheme)
+        let t = HybridTheme.of(scheme, increaseContrast: contrast == .increased)
         let size = layout.serif
         let spacing = max(0, layout.lineHeight - size * 1.19)
         VStack(alignment: .leading, spacing: size * 0.55) {
@@ -325,7 +329,7 @@ struct MarkdownPage: View {
                 case .heading(let s): Text(MarkdownText.inline(s, size: size, hair: t.hair2)).fontWeight(.semibold).fixedSize(horizontal: false, vertical: true)
                 case .bullet(let s):
                     HStack(alignment: .firstTextBaseline, spacing: size * 0.6) {
-                        Text("\u{2013}").foregroundStyle(t.ink3)
+                        Text("\u{2013}").foregroundStyle(t.fg3)
                         Text(MarkdownText.inline(s, size: size, hair: t.hair2)).fixedSize(horizontal: false, vertical: true)
                     }
                 case .number(let n, let s):
@@ -337,7 +341,7 @@ struct MarkdownPage: View {
                     if expanded {
                         Text(c).font(.system(size: size * 0.72, design: .monospaced)).foregroundStyle(t.ink2).fixedSize(horizontal: false, vertical: true)
                     } else {
-                        Text("(code)").foregroundStyle(t.ink3)
+                        Text("(code)").foregroundStyle(t.fg3)
                     }
                 }
             }
@@ -429,6 +433,7 @@ struct ApprovalBody: View {
     /// Seconds into the eclipse (the rise starts at 1.0 s).
     let age: Double
     @Environment(\.colorScheme) private var scheme
+    @Environment(\.colorSchemeContrast) private var contrast
 
     /// "Bash: rm -rf x" -> "rm -rf x"; a sentence (a background agent's) is not a command.
     static func split(_ text: String?) -> (command: String?, sentence: String?) {
@@ -447,7 +452,7 @@ struct ApprovalBody: View {
     private func rise(_ i: Int) -> Double { Ease.out((age - 1.0 - Double(i) * 0.06) / 0.32) }
 
     var body: some View {
-        let t = HybridTheme.of(scheme)
+        let t = HybridTheme.of(scheme, increaseContrast: contrast == .increased)
         let card = model.claudeCard
         let parts = Self.split(card.command)
         let reason = parts.sentence ?? (model.claudeSays.isEmpty ? nil : ViewText.truncate(ViewText.stripMarkdown(model.claudeSays), 240))
@@ -523,12 +528,13 @@ struct StateBody: View {
     let layout: HybridLayout
     @Environment(\.sottoStill) private var still
     @Environment(\.colorScheme) private var scheme
+    @Environment(\.colorSchemeContrast) private var contrast
     @State private var keyText = ""
     @State private var keyError: String?
     @State private var saving = false
 
     var body: some View {
-        let t = HybridTheme.of(scheme)
+        let t = HybridTheme.of(scheme, increaseContrast: contrast == .increased)
         VStack(alignment: .leading, spacing: 12) {
             Text(card.title).font(.system(size: 15, weight: .semibold)).foregroundStyle(card.tone == "err" ? t.err : t.ink)
                 .fixedSize(horizontal: false, vertical: true)
@@ -538,7 +544,7 @@ struct StateBody: View {
                 VStack(alignment: .leading, spacing: 6) {
                     ForEach(Array(steps.enumerated()), id: \.offset) { i, s in
                         HStack(alignment: .firstTextBaseline, spacing: 8) {
-                            Text("\(i + 1).").monospacedDigit().foregroundStyle(t.ink3)
+                            Text("\(i + 1).").monospacedDigit().foregroundStyle(t.fg3)
                             Text(s).fixedSize(horizontal: false, vertical: true)
                         }
                     }
@@ -549,14 +555,14 @@ struct StateBody: View {
                 Button(link.label) { if let u = URL(string: link.href) { NSWorkspace.shared.open(u) } }
                     .buttonStyle(QuietCapsuleStyle(height: 32))
             }
-            if let note = card.note { Text(note).font(.system(size: 12)).foregroundStyle(t.ink3).fixedSize(horizontal: false, vertical: true) }
+            if let note = card.note { Text(note).font(.system(size: 12)).foregroundStyle(t.fg3).fixedSize(horizontal: false, vertical: true) }
             if card.keyInput { keyInput(t) }
             if let b = card.button {
                 HStack(spacing: 10) {
                     Button(b) { model.perform(card.action) }
                         .buttonStyle(QuietCapsuleStyle(height: 36))
                         .keyboardShortcut(card.kbd ? KeyboardShortcut(.space, modifiers: []) : nil)
-                    if card.kbd { Text("or press Space").font(.system(size: 12)).foregroundStyle(t.ink3) }
+                    if card.kbd { Text("or press Space").font(.system(size: 12)).foregroundStyle(t.fg3) }
                 }
             }
         }
@@ -570,7 +576,7 @@ struct StateBody: View {
                 Group {
                     if still {
                         // ImageRenderer cannot draw AppKit fields; a look-alike for the still frame.
-                        Text("Paste your key (sk-...)").font(.system(size: 13)).foregroundStyle(t.ink3)
+                        Text("Paste your key (sk-...)").font(.system(size: 13)).foregroundStyle(t.fg3)
                             .padding(.horizontal, 10).frame(maxWidth: .infinity, minHeight: 30, alignment: .leading)
                             .overlay(Capsule().strokeBorder(t.hair2))
                     } else {
@@ -607,8 +613,9 @@ struct StateBody: View {
 struct StepsView: View {
     let steps: [ViewText.Step]
     @Environment(\.colorScheme) private var scheme
+    @Environment(\.colorSchemeContrast) private var contrast
     var body: some View {
-        let t = HybridTheme.of(scheme)
+        let t = HybridTheme.of(scheme, increaseContrast: contrast == .increased)
         VStack(alignment: .leading, spacing: 8) {
             ForEach(steps, id: \.key) { s in
                 HStack(spacing: 10) {
@@ -620,7 +627,7 @@ struct StepsView: View {
                         }
                     }
                     .frame(width: 14, height: 14)
-                    Text(s.label).font(.system(size: 13)).foregroundStyle(s.state == "pending" ? t.ink3 : t.ink)
+                    Text(s.label).font(.system(size: 13)).foregroundStyle(s.state == "pending" ? t.fg3 : t.ink)
                 }
                 .accessibilityElement(children: .ignore)
                 .accessibilityLabel("\(s.label): \(s.state == "done" ? "done" : s.state == "active" ? "in progress" : "waiting")")

@@ -10,6 +10,7 @@ public struct MiniPanelView: View {
     var onExpand: () -> Void
     var stillAt: Double?
     @Environment(\.colorScheme) private var scheme
+    @Environment(\.colorSchemeContrast) private var contrast
 
     public init(model: StateModel, onExpand: @escaping () -> Void) { self.model = model; self.onExpand = onExpand }
     init(model: StateModel, stillAt: Double?) { self.model = model; self.onExpand = {}; self.stillAt = stillAt }
@@ -20,7 +21,7 @@ public struct MiniPanelView: View {
 
     public var body: some View {
         let L = HybridLayout.mini(Self.size)
-        let t = HybridTheme.of(scheme)
+        let t = HybridTheme.of(scheme, increaseContrast: contrast == .increased)
         let now = stillAt.map { Date(timeIntervalSinceReferenceDate: $0) } ?? Date()
         ZStack(alignment: .topLeading) {
             PanelBackground(layout: L)
@@ -39,7 +40,7 @@ public struct MiniPanelView: View {
             PegButton(model: model)
                 .scaleEffect(0.8)
                 .place(CGRect(x: L.pegX - 32, y: L.y - 32, width: 64, height: 64))
-            CaptionLine(model: model, layout: L, stillAt: stillAt)
+            CaptionLine(model: model, layout: L, stillAt: stillAt, mini: true)
                 .place(CGRect(x: L.textX, y: L.capY, width: L.x1 - L.textX, height: L.capH))
             Button(action: onExpand) {
                 Image(systemName: "arrow.up.left.and.arrow.down.right").font(.system(size: 10, weight: .semibold))

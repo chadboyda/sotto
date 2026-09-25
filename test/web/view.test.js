@@ -404,3 +404,21 @@ test("cardAnnouncement: title plus the first sentence; errors are assertive", ()
   assert.equal(err.text, "Voice could not start. The voice session did not start.");
   assert.equal(lib.cardAnnouncement(null), null);
 });
+
+// Design review (SPEC-DEVIATIONS "Design review of the Filament + Orrery panel" 3): sleeping
+// and paused keep the page and speak on the caption line, in the app's words; cards stay cards.
+test("inlineCard / inlineNote: sleeping and paused speak on the caption line, the cap keeps its card", () => {
+  const sleeping = lib.pageView({ phase: "idle", state: "sleeping", sleep: { title: "Sleeping", body: "Voice wakes up when you speak.", listening: true } });
+  assert.equal(lib.inlineCard(sleeping), true);
+  assert.equal(lib.inlineNote(sleeping), "Just start talking. Nothing is sent or billed until then.");
+  const deaf = lib.pageView({ phase: "idle", state: "sleeping", sleep: { title: "Sleeping", body: "Voice wake is off.", listening: false } });
+  assert.equal(lib.inlineNote(deaf), "Voice wake is off.");
+  const paused = lib.pageView({ phase: "idle", state: "paused", pausedReason: "idle", idleMinutes: 5 });
+  assert.equal(lib.inlineCard(paused), true);
+  assert.equal(lib.inlineNote(paused), "Paused after 5 minutes of silence. Press Space to resume.");
+  const cap = lib.pageView({ phase: "idle", state: "paused", lastError: { code: "daily_cap" } });
+  assert.equal(lib.inlineCard(cap), false);
+  assert.equal(lib.inlineNote(cap), null);
+  assert.equal(lib.inlineCard(lib.pageView({ phase: "live", state: "live" })), false);
+  assert.equal(lib.inlineCard(lib.pageView({ phase: "error", state: "paused", errorText: "x" })), false);
+});

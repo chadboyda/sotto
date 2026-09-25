@@ -33,8 +33,8 @@ public struct PanelView: View {
             }
             .frame(width: geo.size.width, height: geo.size.height, alignment: .topLeading)
         }
-        .background(HybridTheme.of(scheme).ground)
-        .foregroundStyle(HybridTheme.of(scheme).ink)
+        .background(HybridTheme.of(scheme, increaseContrast: contrast == .increased).ground)
+        .foregroundStyle(HybridTheme.of(scheme, increaseContrast: contrast == .increased).ink)
         .coordinateSpace(name: PanelFrames.space)
         // The root is focusable only to receive M / Space, and hides its own ring.
         // focusEffectDisabled propagates through the environment, so re-enable it for
@@ -104,10 +104,11 @@ extension View {
 struct PanelBackground: View {
     let layout: HybridLayout
     @Environment(\.colorScheme) private var scheme
+    @Environment(\.colorSchemeContrast) private var contrast
     @Environment(\.accessibilityReduceTransparency) private var flat
 
     var body: some View {
-        let t = HybridTheme.of(scheme)
+        let t = HybridTheme.of(scheme, increaseContrast: contrast == .increased)
         Canvas { g, size in
             g.fill(Path(CGRect(origin: .zero, size: size)), with: .color(t.ground))
             guard t.dark, !flat else { return }
@@ -191,6 +192,7 @@ struct HeaderContent: View {
     /// Settings moved to the footer (the hybrid header is status + usage only); kept for callers.
     var openSettings: (() -> Void)?
     @Environment(\.colorScheme) private var scheme
+    @Environment(\.colorSchemeContrast) private var contrast
     @Environment(\.sottoCapsuleDim) private var dim
     @Environment(\.accessibilityReduceMotion) private var reduce
 
@@ -209,7 +211,7 @@ struct HeaderContent: View {
     static let statusSlot: CGFloat = 72
 
     var body: some View {
-        let t = HybridTheme.of(scheme)
+        let t = HybridTheme.of(scheme, increaseContrast: contrast == .increased)
         ViewThatFits(in: .horizontal) {
             ForEach(Array(Self.candidates.enumerated()), id: \.offset) { _, c in row(t, c) }
         }
@@ -282,6 +284,7 @@ struct UsagePill: View {
     let kind: Kind
     var help: String = ""
     @Environment(\.colorScheme) private var scheme
+    @Environment(\.colorSchemeContrast) private var contrast
 
     /// Session: timer; Today: calendar; Cost: none ("$" names it).
     var symbol: String? {
@@ -312,7 +315,7 @@ struct UsagePill: View {
     }
 
     var body: some View {
-        let t = HybridTheme.of(scheme)
+        let t = HybridTheme.of(scheme, increaseContrast: contrast == .increased)
         HStack(alignment: .center, spacing: 6) {
             if let symbol {
                 Image(systemName: symbol).font(.system(size: 10.5, weight: .regular)).foregroundStyle(t.ink3)
@@ -343,6 +346,7 @@ struct HeadlineView: View {
     var stillAt: Double?
     var mini = false
     @Environment(\.colorScheme) private var scheme
+    @Environment(\.colorSchemeContrast) private var contrast
     @Environment(\.accessibilityReduceMotion) private var reduce
 
     var body: some View {
@@ -362,7 +366,7 @@ struct HeadlineView: View {
     }
 
     private func word(_ now: Date) -> some View {
-        let t = HybridTheme.of(scheme)
+        let t = HybridTheme.of(scheme, increaseContrast: contrast == .increased)
         let h = model.headline(at: now)
         // The strip has no room for a second line naming the terminal, so the word does.
         let word = mini && h.word == ViewText.approvalWord ? "Approve in \(model.terminalName ?? "the terminal")" : h.word
@@ -417,12 +421,17 @@ struct CaptionLine: View {
     let model: StateModel
     let layout: HybridLayout
     var stillAt: Double?
+    /// The compact strip: its word already names the terminal ("Approve in iTerm2"), so the
+    /// line shows what is being approved, the command in mono (IMPLEMENTATION.md §1 Mini).
+    var mini = false
     @Environment(\.colorScheme) private var scheme
+    @Environment(\.colorSchemeContrast) private var contrast
     @Environment(\.accessibilityReduceMotion) private var reduce
 
     enum Line: Equatable {
         case banner(StateModel.Banner, more: Int)
         case approval(terminal: String?, project: String?)
+        case command(String)
         case muted
         case hint(String)
         case said(role: String, who: String, text: String, id: Int)
@@ -432,6 +441,7 @@ struct CaptionLine: View {
             switch self {
             case .banner(let b, _): return "b:\(b.key):\(b.text)"
             case .approval: return "approval"
+            case .command(let c): return "cmd:\(c)"
             case .muted: return "muted"
             case .hint(let s): return "h:\(s)"
             case .said(_, _, _, let id): return "c:\(id)"
@@ -440,10 +450,14 @@ struct CaptionLine: View {
         }
     }
 
-    static func line(_ m: StateModel, at now: Date) -> Line {
+    static func line(_ m: StateModel, at now: Date, mini: Bool = false) -> Line {
         let v = m.pageView(at: now)
         if let b = m.topBanner { return .banner(b, more: max(0, m.banners.count - (m.banners.first?.key == b.key ? 1 : 0))) }
-        if m.attentionShown(at: now) && v.view == "live" { return .approval(terminal: m.terminalName, project: m.project) }
+        if m.attentionShown(at: now) && v.view == "live" {
+            let parts = ApprovalBody.split(m.claudeCard.command)
+            if mini, let c = parts.command ?? parts.sentence { return .command(c) }
+            return .approval(terminal: m.terminalName, project: m.project)
+        }
         if v.view == "live" && v.floor == "muted" { return .muted }
         if v.floor == "connecting" || v.floor == "reconnecting", let note = ViewText.captionNote(v) { return .hint(note) }
         if let name = m.switchingTo(at: now), v.view == "live" {
@@ -468,9 +482,9 @@ struct CaptionLine: View {
     }
 
     var body: some View {
-        let t = HybridTheme.of(scheme)
+        let t = HybridTheme.of(scheme, increaseContrast: contrast == .increased)
         let _ = model.redrawTick
-        let line = Self.line(model, at: stillAt.map { Date(timeIntervalSinceReferenceDate: $0) } ?? Date())
+        let line = Self.line(model, at: stillAt.map { Date(timeIntervalSinceReferenceDate: $0) } ?? Date(), mini: mini)
         ZStack(alignment: .leading) {
             row(t, line).id(line.key).transition(.opacity)
         }
@@ -483,11 +497,12 @@ struct CaptionLine: View {
         switch line {
         case .banner(let b, let more):
             HStack(spacing: 8) {
-                let text = b.key == "cant_hear" ? (model.micName.map { "Using \($0)." } ?? b.text) : b.text
-                Text(text).foregroundStyle(b.level == "error" ? t.err : t.ink2).lineLimit(1).truncationMode(.tail)
+                // The notice's own words ("I can't hear you — using …"): the headline stays
+                // "Listening", so this line is the only place that says why (web parity).
+                Text(b.text).foregroundStyle(b.level == "error" ? t.err : t.ink2).lineLimit(1).truncationMode(.tail)
                     .help(b.text).accessibilityLabel(b.text)
                 Spacer(minLength: 4)
-                if more > 0 { Text("+\(more)").foregroundStyle(t.ink3).help("\(more) more") }
+                if more > 0 { Text("+\(more)").foregroundStyle(t.fg3).help("\(more) more") }
                 if let a = b.action {
                     Button(Self.label(a)) { model.perform(a, banner: b.key) }.buttonStyle(QuietCapsuleStyle(height: 28))
                 }
@@ -504,6 +519,10 @@ struct CaptionLine: View {
             (Text("In ") + Text(terminal ?? "the terminal").fontWeight(.semibold).foregroundColor(t.ink)
                 + Text(project.map { " \u{00B7} \($0)" } ?? ""))
                 .foregroundStyle(t.ink2).lineLimit(1)
+        case .command(let c):
+            Text(verbatim: c).font(.system(size: layout.capSize, weight: .medium, design: .monospaced))
+                .foregroundStyle(t.ink).lineLimit(1).truncationMode(.tail).help(c)
+                .accessibilityLabel("Command: \(c)")
         case .muted:
             // lib.captionNote's words, the cause in the muted ink.
             (Text("Sotto can't hear you.").foregroundColor(t.mutedInk) + Text(" Still billing. Press M to listen."))
@@ -535,9 +554,10 @@ struct QuietCapsuleStyle: ButtonStyle {
     var tone: Color?
     var lineWidth: CGFloat = 1
     @Environment(\.colorScheme) private var scheme
+    @Environment(\.colorSchemeContrast) private var contrast
     @Environment(\.isEnabled) private var enabled
     func makeBody(configuration: Configuration) -> some View {
-        let t = HybridTheme.of(scheme)
+        let t = HybridTheme.of(scheme, increaseContrast: contrast == .increased)
         let c = tone ?? t.ink
         return configuration.label
             .font(.system(size: height >= 40 ? 14 : 12, weight: height >= 40 ? .semibold : .medium))
@@ -559,9 +579,10 @@ struct FooterView: View {
     let view: ViewText.PageView
     var stillAt: Double?
     @Environment(\.colorScheme) private var scheme
+    @Environment(\.colorSchemeContrast) private var contrast
 
     var body: some View {
-        let t = HybridTheme.of(scheme)
+        let t = HybridTheme.of(scheme, increaseContrast: contrast == .increased)
         let st = model.status?.state ?? "off"
         let linked = model.phase != "boot" && model.phase != "lost"
         let dim = model.attention && view.view == "live"
@@ -595,10 +616,11 @@ struct IconButton: View {
     let action: () -> Void
     @State private var hover = false
     @Environment(\.colorScheme) private var scheme
+    @Environment(\.colorSchemeContrast) private var contrast
     @Environment(\.isEnabled) private var enabled
 
     var body: some View {
-        let t = HybridTheme.of(scheme)
+        let t = HybridTheme.of(scheme, increaseContrast: contrast == .increased)
         Button(action: action) {
             Image(systemName: symbol).font(.system(size: 15, weight: .regular))
                 .frame(width: 40, height: 40)
@@ -626,9 +648,10 @@ struct PersonaChip: View {
     let model: StateModel
     @State private var hover = false
     @Environment(\.colorScheme) private var scheme
+    @Environment(\.colorSchemeContrast) private var contrast
 
     var body: some View {
-        let t = HybridTheme.of(scheme)
+        let t = HybridTheme.of(scheme, increaseContrast: contrast == .increased)
         let id = model.personaId
         Button { model.openSettings?() } label: {
             HStack(spacing: 9) {
