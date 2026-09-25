@@ -1647,3 +1647,44 @@ export function scrollThumb({ scrollTop = 0, scrollHeight = 0, clientHeight = 0 
   const f = Math.max(0, Math.min(1, scrollTop / over));
   return { top: Math.round((inset + (track - height) * f) * 10) / 10, height: Math.round(height * 10) / 10 };
 }
+
+// ---- Devices in the footer (SPEC-DEVIATIONS "Devices in the footer") ----
+// Native: SottoUI DeviceMenu (the same order, check and fallback).
+
+const HEADPHONES_RE = /airpods|headphone|headset|earbud|earphone|buds|beats/i;
+
+/** True if an output label looks like headphones (the speaker button shows headphones). */
+export function isHeadphonesLabel(label) {
+  return HEADPHONES_RE.test(String(label || ""));
+}
+
+/**
+ * The footer picker's rows: "System default (<name>)" first, then every real device of
+ * `kind` ("audioinput" | "audiooutput"); the check on the saved choice when it is there,
+ * else on System default. `id` "" = the system default.
+ */
+export function deviceMenu(devices, kind, savedId) {
+  const list = (Array.isArray(devices) ? devices : []).filter((d) => d && d.kind === kind);
+  const def = list.find((d) => d.deviceId === "default");
+  const real = list.filter((d) => d.deviceId && !PSEUDO_IDS.has(d.deviceId));
+  const saved = savedId && real.some((d) => d.deviceId === savedId) ? savedId : "";
+  const defName = def ? stripDefaultPrefix(def.label) : "";
+  return [
+    { id: "", label: defName ? `System default (${defName})` : "System default", checked: !saved },
+    ...real.map((d, i) => ({ id: d.deviceId, label: kind === "audioinput" ? inputOptionLabel(d, i) : deviceLabel(d, i), checked: d.deviceId === saved })),
+  ];
+}
+
+/** The chosen device is gone: fall back to the system default (never another device). An empty list loses nothing. */
+export function deviceLost(devices, kind, savedId) {
+  const list = (Array.isArray(devices) ? devices : []).filter((d) => d && d.kind === kind);
+  if (!savedId || !list.length) return false;
+  return !list.some((d) => d.deviceId === savedId);
+}
+
+/** The footer button's words: "Microphone: MacBook Pro Microphone". */
+export function deviceButtonLabel(kind, name) {
+  const what = kind === "audioinput" ? "Microphone" : "Speaker";
+  const n = stripDefaultPrefix(String(name || "")).trim();
+  return n ? `${what}: ${n}` : `${what}: none`;
+}

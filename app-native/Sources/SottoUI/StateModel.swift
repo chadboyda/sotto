@@ -142,6 +142,14 @@ public final class StateModel {
     /// Bumped at each turn_start: the page follows the latest words again.
     public private(set) var pageTurnSeq = 0
     public var pageMessages: [String] { page.msgs }
+    /// The footer's device picker, open over the panel: "input" | "output" | nil.
+    public var devicePicker: String?
+    /// A device the user chose went away and the system default took over: its footer icon
+    /// flashes once (the seq changes, the kind says which).
+    public private(set) var deviceFlash: (kind: String, seq: Int)?
+    /// The device lists and choices the footer picker shows (the Settings window's model).
+    @ObservationIgnored public weak var settingsModel: SettingsModel?
+    public func flashDevice(_ kind: String) { deviceFlash = (kind, (deviceFlash?.seq ?? 0) &+ 1) }
     @ObservationIgnored private var attentionWas = false
     /// Bumped to make time-based views re-read the clock once (the end of a one-shot).
     public private(set) var redrawTick = 0

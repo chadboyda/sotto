@@ -303,7 +303,12 @@ public final class FakeAudioIO: AudioIO, @unchecked Sendable {
     /// Mic frames emitted so far.
     public var micFrameCount: Int { emitter.frameCount }
 
-    public func inputDevices() -> [AudioDevice] { [FakeAudioIO.fakeInput] }
-    public func outputDevices() -> [AudioDevice] { [FakeAudioIO.fakeOutput] }
+    public func inputDevices() -> [AudioDevice] { [FakeAudioIO.fakeInput] + testDevices.inputs }
+    public func outputDevices() -> [AudioDevice] { [FakeAudioIO.fakeOutput] + testDevices.outputs }
+    public func defaultDeviceID(input: Bool) -> String? { input ? FakeAudioIO.fakeInput.id : FakeAudioIO.fakeOutput.id }
     public func setPreferredDevices(input: String?, output: String?) {}
+
+    /// Test mode: extra devices that come and go (the footer picker and its hot-swap);
+    /// never opened, the fake audio keeps running on the fixture.
+    public var testDevices: (inputs: [AudioDevice], outputs: [AudioDevice]) = ([], [])
 }

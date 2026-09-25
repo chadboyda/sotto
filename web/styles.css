@@ -725,7 +725,56 @@ body[data-view="live"] .bottom:focus-within { opacity: 1 !important; transition-
   padding: 0 10px 0 12px;
   transition: opacity 450ms var(--ease-swap);
 }
-.ctl { display: flex; gap: var(--space-2); }
+.ctl { display: flex; gap: 2px; }
+/* The footer's device buttons: the icon says what is in use; a gold flash when a chosen
+   device went away and the system default took over. */
+.icon-btn.dev[aria-expanded="true"] { background: var(--hair); color: var(--ink); }
+.icon-btn.dev[data-flash="true"] { color: var(--need-ink); animation: dev-flash 1.6s var(--ease-out) both; }
+@keyframes dev-flash { 0%, 30%, 60% { scale: 1.12; } 15%, 45%, 100% { scale: 1; } }
+/* The quick picker, over the panel above the footer. */
+.dev-picker {
+  position: fixed;
+  right: 10px;
+  bottom: calc(var(--footer-h) + 4px);
+  z-index: 30;
+  width: min(280px, calc(100vw - 24px));
+  max-height: calc(100vh - var(--footer-h) - var(--header-h) - 12px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 4px;
+  border: 1px solid var(--hair2);
+  border-radius: 12px;
+  background: var(--surface-1);
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.16);
+  font-size: 13px;
+}
+.dev-picker[hidden] { display: none; }
+html[data-motion="on"] .dev-picker:not([hidden]) { animation: fade-in 160ms var(--ease-out) both; }
+.dev-head { padding: 6px 10px 4px; font-size: 11px; font-weight: 600; color: var(--fg-3); }
+.dev-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  min-height: 32px;
+  padding: 0 8px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--ink);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.dev-item:hover, .dev-item:focus-visible { background: var(--hair); outline: none; }
+.dev-item svg { flex: none; width: 14px; height: 14px; stroke-width: 2; visibility: hidden; }
+.dev-item[aria-checked="true"] { font-weight: 600; }
+.dev-item[aria-checked="true"] svg { visibility: visible; }
+.dev-name { flex: 1 1 auto; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.dev-level { flex: none; width: 40px; height: 4px; border-radius: 2px; background: var(--hair); overflow: hidden; }
+.dev-level i { display: block; height: 100%; width: 0; background: var(--you); transition: width 80ms linear; }
+.dev-sep { height: 1px; margin: 4px 6px; background: var(--hair); }
+.dev-more { color: var(--ink2); font-weight: 400; }
 /* The persona chip: its tuning as a tiny string, the name and the voice. */
 .pchip {
   position: relative;

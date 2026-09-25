@@ -89,6 +89,8 @@ public protocol AudioIO: AnyObject {
     func stats() -> PlayoutStats
     func inputDevices() -> [AudioDevice]
     func outputDevices() -> [AudioDevice]
+    /// The macOS system default device's id (the footer picker's "System default (name)").
+    func defaultDeviceID(input: Bool) -> String?
     /// nil = automatic choice (docs/NATIVE.md §5 rules).
     func setPreferredDevices(input: String?, output: String?)
     var echoCancellation: EchoCancellation { get set }

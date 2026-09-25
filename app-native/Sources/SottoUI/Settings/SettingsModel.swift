@@ -90,6 +90,9 @@ public final class SettingsModel {
     /// The devices the engine is really using (AudioRouteInfo), for "Automatic (MacBook Pro Microphone)".
     public var activeInput: DeviceChoice?
     public var activeOutput: DeviceChoice?
+    /// The macOS system default devices' names ("System default (MacBook Pro Microphone)").
+    public var defaultInputName: String?
+    public var defaultOutputName: String?
     public var echoCancellation: String = "automatic"
     /// Per-device RMS 0...1 while "Compare microphones" is open.
     public var inputLevels: [String: Float] = [:]

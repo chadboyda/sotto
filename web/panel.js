@@ -242,3 +242,55 @@ export function paintBanner(container, b, { more = 0, enter = true, onAction = n
   container.replaceChildren(div);
   return div;
 }
+
+/**
+ * The footer's device picker (the app's DevicePicker): a heading, "System default (name)"
+ * first, every device, a check on the one in use, a live level on the microphone in use,
+ * then "Sound settings…". `items` from lib.deviceMenu. Returns the level bar (or null).
+ */
+export function paintDevicePicker(container, { kind, items }, { onChoose = null, onSettings = null } = {}) {
+  const input = kind === "audioinput";
+  const head = document.createElement("div");
+  head.className = "dev-head";
+  head.setAttribute("role", "presentation");
+  head.textContent = input ? "Microphone" : "Speaker";
+  const rows = [head];
+  let level = null;
+  for (const it of items) {
+    const b = document.createElement("button");
+    b.type = "button";
+    b.className = "dev-item";
+    b.setAttribute("role", "menuitemradio");
+    b.setAttribute("aria-checked", String(!!it.checked));
+    b.dataset.id = it.id;
+    b.innerHTML = '<svg aria-hidden="true"><use href="#i-check"/></svg>';
+    const name = document.createElement("span");
+    name.className = "dev-name";
+    name.textContent = it.label;
+    name.title = it.label;
+    b.append(name);
+    if (input && it.checked) {
+      const bar = document.createElement("span");
+      bar.className = "dev-level";
+      bar.setAttribute("aria-hidden", "true");
+      level = document.createElement("i");
+      bar.append(level);
+      b.append(bar);
+    }
+    if (onChoose) b.onclick = () => onChoose(it.id);
+    rows.push(b);
+  }
+  const sep = document.createElement("div");
+  sep.className = "dev-sep";
+  sep.setAttribute("role", "separator");
+  const more = document.createElement("button");
+  more.type = "button";
+  more.className = "dev-item dev-more";
+  more.setAttribute("role", "menuitem");
+  more.textContent = "Sound settings…";
+  if (onSettings) more.onclick = onSettings;
+  rows.push(sep, more);
+  container.setAttribute("aria-label", input ? "Microphones" : "Speakers");
+  container.replaceChildren(...rows);
+  return level;
+}

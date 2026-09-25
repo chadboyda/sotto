@@ -447,11 +447,16 @@ public enum PanelTestSupport {
                 "scroller_alpha": Double(s.verticalScroller?.alphaValue ?? -1), "scroller_hidden": s.verticalScroller?.isHidden ?? true]
     }
 
-    /// The view's own drawing, at the window's backing scale, as PNG data.
-    @MainActor public static func png(of view: NSView) -> Data? {
+    /// The view's own drawing at `scale` (2x by default, whatever the display), as PNG data.
+    @MainActor public static func png(of view: NSView, scale: CGFloat = 2) -> Data? {
         view.layoutSubtreeIfNeeded()
-        guard let rep = view.bitmapImageRepForCachingDisplay(in: view.bounds) else { return nil }
-        view.cacheDisplay(in: view.bounds, to: rep)
+        let b = view.bounds
+        guard b.width > 0, b.height > 0,
+              let rep = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: Int(b.width * scale), pixelsHigh: Int(b.height * scale),
+                                         bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
+                                         colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0) else { return nil }
+        rep.size = b.size
+        view.cacheDisplay(in: b, to: rep)
         return rep.representation(using: .png, properties: [:])
     }
 }

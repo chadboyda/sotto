@@ -2,7 +2,13 @@
 
 Talk to your running Claude Code session out loud, hands-free, in both directions at once.
 
-<p align="center"><img src="design/final/15-claude-finished--dark.png" alt="The Sotto voice window: a live session, listening, with Claude's finished answer summarized below the microphone dial" width="360"></p>
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/images/sotto-dark.png">
+    <source media="(prefers-color-scheme: light)" srcset="docs/images/sotto-light.png">
+    <img src="docs/images/sotto-light.png" alt="The Sotto desktop panel during a live session: the voice is speaking, so the lit string running from the microphone button across the panel ripples with it and the caption line shows its words; below, Claude is working and its messages fill a scrolling page, older ones dimmed above the newest; the footer holds the persona, microphone, speaker, pause, end-voice and settings buttons" width="360">
+  </picture>
+</p>
 
 Sotto is a Claude Code plugin. `/talk` opens a small voice window. The voice in that window is OpenAI's `gpt-live-1` (the Live API, not the older Realtime API). It handles the conversation itself: it listens, backchannels, lets you interrupt, and answers small talk. When you ask for something that needs the code, it hands the request to your Claude Code session as if you had typed it. When Claude finishes, the voice tells you the result in its own words. Claude keeps working in the terminal the whole time, and you can keep typing there too.
 
@@ -91,7 +97,7 @@ When voice is on:
 3. When Claude finishes, the voice summarizes the answer. Claude's reply is written voice-first: a short spoken summary, then the details, which stay on screen in the terminal.
 4. If Claude needs a permission, the voice tells you to approve it in the terminal. It cannot approve anything itself.
 
-In the voice window: **M** (or Space) mutes and unmutes, **Space** resumes after a pause, and there are microphone, speaker and wake-sensitivity pickers plus Pause and End voice buttons. Captions show both sides.
+In the voice window: one lit string runs from the microphone button (the peg; click it or press **M** or Space to mute) across the panel and moves with whoever is talking, and the line under it shows the latest words, yours or the voice's. Below that is Claude's page: its messages for this turn and the recent ones, in a region that scrolls and follows the newest words (scroll up to read back; "Jump to latest" brings you down again). When Claude needs an approval, the question takes that page inside a gold frame. The footer has the persona (it opens Settings), the microphone and speaker in use (click either to switch devices), Pause, End voice and Settings, where the voice, persona, wake sensitivity and echo tools live. **Space** resumes after a pause.
 
 **Sleep and wake.** After a minute with nobody talking (and nothing pending for Claude), the paid Live session closes and the window shows "Sleeping — just start talking". The mic stays open *locally*: a small voice detector in the page listens, nothing is sent and nothing is billed. When you speak again, a new session starts in about 1.2 s with the conversation so far; the words you said before it connected are transcribed and handed to the model, so it answers the whole sentence. When Claude finishes a voice request or needs your approval while voice sleeps, it wakes up to tell you. **M** while sleeping stops listening; the Wake picker sets sensitivity (Off = click or Space to resume).
 
@@ -107,7 +113,7 @@ On macOS the voice window is a small native app, **Sotto** (SwiftUI, native Core
   - **Where it goes.** The app lives in the plugin data directory (`app/Sotto.app`) and is replaced when the plugin's `app-native/` sources change. Every step is logged to `logs/app-build.log`.
   - **If it fails.** `/talk`, `/talk status` and the voice window say "Desktop app couldn't be installed: <reason>", and voice uses Chrome. `SOTTO_APP_DOWNLOAD=0` skips the download and always builds locally.
 - **First app launch:** macOS asks "Sotto would like to access the microphone". Click **Allow** once. If you clicked Don't Allow, turn it on in System Settings → Privacy & Security → Microphone → Sotto.
-- **Menu-bar icon:** shows off, connecting, paused, sleeping, listening, you speaking, Sotto speaking, Claude working, muted, or a warning. Its menu has Show/Hide Panel, Compact Panel (a small pill with a mute button), Mute, Voice Off, Open Logs, and Quit.
+- **Menu-bar icon:** a short string with Claude's moon phase (idle, working, done), gold when Claude needs you, and a warning symbol on errors. Its menu has Show/Hide Panel, Compact Panel (a small strip with the string, the headline and the caption line), Mute, Voice Off, Open Logs, and Quit.
 - **Hotkeys, anywhere:** **⌥⌘M** mute or unmute, **⌥⌘T** show or hide the panel. To change them: `defaults write com.chadboyda.sotto HotkeyMute "ctrl+opt+m"` (or `HotkeyShow`), then relaunch the app. Use `ctrl`, `opt`, `shift`, `cmd` plus a letter, digit, `space` or `f1`-`f12`.
 - **Hiding the panel does not stop voice** (the icon still shows it). Voice Off in the menu, End voice in the panel, or `/talk off` ends it. When voice goes off the app quits, unless you tick "Stay in Menu Bar When Voice Is Off".
 - **AirPods and other headphones:** when the sound goes to headphones, the app records the microphone itself: the MacBook microphone when your default input is the AirPods, so they never switch to their lower-quality headset mode, and other apps' audio is not lowered. Headphones need no echo cancellation. On speakers the app uses macOS's voice processing instead, which cancels the echo but lowers other apps' audio by about 15 dB while the mic is open (with voice wake, for as long as voice is on). With `window` = `auto` (the default) the plugin still uses Chrome when your default input is Bluetooth and the app cannot avoid it (no other microphone, or sound not going to headphones). Override the app's choice with `defaults write com.chadboyda.sotto MicCapture native` (always record natively, no echo cancellation), `webkit` (always voice processing) or `auto`, then relaunch the app.
@@ -159,7 +165,7 @@ What gets said, per event:
 | Answer to your voice request | spoken | spoken | spoken, longer |
 | Claude asks you a question (`AskUserQuestion`): "Claude's asking: which layout? Options: A, B, or C. Answer in the terminal." | spoken | spoken | spoken |
 | Plan ready for approval (`ExitPlanMode`) | spoken (title) | spoken (title) | spoken (title and gist) |
-| Tool approval (`PermissionRequest`; the later `permission_prompt` notification is not repeated). A background agent's approval says so. Every approval is spoken, and the card clears as soon as it is answered | spoken | spoken | spoken |
+| Tool approval (`PermissionRequest`; the later `permission_prompt` notification is not repeated). A background agent's approval says so. Every approval is spoken, and the question clears from the panel as soon as it is answered | spoken | spoken | spoken |
 | An approval still waiting after 2 and 5 minutes: "By the way, Claude's still waiting on your approval to run a shell command." (Claude Code never times one out) | spoken | spoken | spoken |
 | MCP server needs input (`Elicitation`), a background session needs input, usage limit reset and waiting for Enter | spoken | spoken | spoken |
 | Claude Code hit an API error (`StopFailure`) | spoken | spoken | spoken |

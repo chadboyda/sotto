@@ -767,3 +767,27 @@ test("Claude's page keeps this turn and the recent ones; follow rules (SPEC-DEVI
   assert.deepEqual(lib.scrollThumb({ scrollTop: 300, scrollHeight: 600, clientHeight: 300 }), { top: 150, height: 144 });
   assert.equal(lib.scrollThumb({ scrollTop: 0, scrollHeight: 100_000, clientHeight: 300 }).height, 24, "never thinner than 24 px");
 });
+
+test("footer devices: System default first, the check, the fallback, the labels (SPEC-DEVIATIONS Devices in the footer)", () => {
+  const devs = [
+    { kind: "audioinput", deviceId: "default", label: "Default - MacBook Pro Microphone" },
+    { kind: "audioinput", deviceId: "mbp", label: "MacBook Pro Microphone" },
+    { kind: "audioinput", deviceId: "usb", label: "USB Mic" },
+    { kind: "audiooutput", deviceId: "default", label: "Default - AirPods Pro" },
+    { kind: "audiooutput", deviceId: "pods", label: "AirPods Pro" },
+  ];
+  const m = lib.deviceMenu(devs, "audioinput", null);
+  assert.deepEqual(m.map((x) => x.label), ["System default (MacBook Pro Microphone)", "MacBook Pro Microphone", "USB Mic"]);
+  assert.deepEqual(m.map((x) => x.checked), [true, false, false]);
+  assert.deepEqual(lib.deviceMenu(devs, "audioinput", "usb").map((x) => x.checked), [false, false, true]);
+  assert.deepEqual(lib.deviceMenu(devs, "audioinput", "gone").map((x) => x.checked), [true, false, false], "a missing choice: System default is in use");
+  assert.equal(lib.deviceMenu(devs, "audiooutput", "")[0].label, "System default (AirPods Pro)");
+  assert.equal(lib.deviceLost(devs, "audioinput", "usb"), false);
+  assert.equal(lib.deviceLost(devs, "audioinput", "gone"), true);
+  assert.equal(lib.deviceLost(devs, "audioinput", ""), false, "System default is never lost");
+  assert.equal(lib.deviceLost([], "audioinput", "usb"), false, "an unread list loses nothing");
+  assert.equal(lib.deviceButtonLabel("audioinput", "Default - MacBook Pro Microphone"), "Microphone: MacBook Pro Microphone");
+  assert.equal(lib.deviceButtonLabel("audiooutput", ""), "Speaker: none");
+  assert.equal(lib.isHeadphonesLabel("AirPods Pro"), true);
+  assert.equal(lib.isHeadphonesLabel("MacBook Pro Speakers"), false);
+});

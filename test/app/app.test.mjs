@@ -529,6 +529,20 @@ describe("native desktop app", { skip: SKIP }, () => {
       await probeUntil((e) => /fake clock/.test(e.summary), 10_000, "Claude's summary");
       // Quiet and listening: the string breathes (alive at rest, not a 0 fps rule).
       await probeUntil((e) => e.breathing === true && e.string_mic === 0, 15_000, "the resting string breathes");
+      // The footer's device picker (SPEC-DEVIATIONS "Devices in the footer"): a chosen
+      // device that goes away falls back to the system default (never another device).
+      const acted = (pred, what) => waitFor(() => readLog(appLog).filter((e) => e.ev === "test_action").find(pred), 5000, what);
+      act({ action: "fake_devices", inputs: [{ id: "test-headset", name: "Test headset" }], outputs: [{ id: "test-phones", name: "Test headphones", headphones: true }] });
+      await acted((e) => e.action === "fake_devices" && e.outputs === 2, "the extra devices");
+      act({ action: "device_picker", kind: "output" });
+      await acted((e) => e.action === "device_picker" && e.kind === "output", "the picker opens");
+      act({ action: "choose_device", kind: "output", id: "test-phones" });
+      await acted((e) => e.action === "choose_device" && e.output === "test-phones", "the headphones chosen");
+      act({ action: "fake_devices", inputs: [], outputs: [] });
+      await waitFor(() => readLog(appLog).find((e) => e.ev === "device_lost" && e.kind === "output"), 5000, "the headphones went away");
+      const after = await acted((e) => e.action === "fake_devices" && e.outputs === 1, "the lists after");
+      assert.equal(after.output, null, "back to the system default");
+      assert.ok(!readLog(appLog).some((e) => e.ev === "device_lost" && e.kind === "input"), "an untouched choice is not lost");
     } finally {
       await ctl({ action: "off" }).catch(() => {});
       await sleep(500);

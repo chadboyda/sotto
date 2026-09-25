@@ -44,6 +44,11 @@ public struct PanelView: View {
         .focusable()
         .focusEffectDisabled()
         .focused($focused)
+        .onKeyPress(.escape) {
+            guard model.devicePicker != nil else { return .ignored }
+            model.devicePicker = nil
+            return .handled
+        }
         .onKeyPress(characters: CharacterSet(charactersIn: "mM "), phases: .down) { press in
             let mods = !press.modifiers.intersection([.command, .control, .option]).isEmpty
             return model.handleKey(String(press.characters.prefix(1)), repeat_: press.phase == .repeat, modifiers: mods) ? .handled : .ignored
@@ -75,6 +80,20 @@ public struct PanelView: View {
         FooterView(model: model, view: v, stillAt: stillAt)
             .padding(.leading, 12).padding(.trailing, 10)
             .place(CGRect(x: 0, y: L.footerTop, width: W, height: L.footerH), alignment: .center, reader: "footer")
+        if let kind = model.devicePicker, let s = model.settingsModel {
+            // A click anywhere else closes the picker.
+            Color.clear.contentShape(Rectangle())
+                .onTapGesture { model.devicePicker = nil }
+                .place(CGRect(x: 0, y: 0, width: W, height: L.size.height))
+                .accessibilityHidden(true)
+            let w = min(DevicePicker.width, W - 24)
+            DevicePicker(model: model, kind: kind, settings: s)
+                .frame(width: w)
+                .fixedSize(horizontal: false, vertical: true)
+                .frame(width: w, height: max(0, L.footerTop - 8 - L.headerH), alignment: .bottom)
+                .padding(.leading, W - 10 - w).padding(.top, L.headerH)
+                .transition(.opacity.combined(with: .offset(y: 6)))
+        }
     }
 
     /// VoiceOver announcement (the page's aria-live regions).
@@ -595,7 +614,12 @@ struct FooterView: View {
         let dim = model.attention && view.view == "live"
         HStack(spacing: 8) {
             PersonaChip(model: model)
-            Spacer(minLength: 8)
+                .background(PanelFrames.reader("persona-chip"))
+            Spacer(minLength: 4)
+            HStack(spacing: 2) {
+            // Which microphone and speaker are in use, one click from switching (FooterDevices.swift).
+            DeviceButton(model: model, kind: "input")
+            DeviceButton(model: model, kind: "output")
             if st == "paused" || st == "sleeping" {
                 IconButton(symbol: "play.fill", label: st == "sleeping" ? "Wake now" : "Resume") { model.resume() }
                     .disabled(view.card?.kind == "cap")
@@ -607,6 +631,8 @@ struct FooterView: View {
                 .disabled(st == "off" || st == "closing")
             IconButton(symbol: "gearshape", label: "Settings") { model.openSettings?() }
                 .disabled(model.openSettings == nil)
+            }
+            .fixedSize()
         }
         .foregroundStyle(t.ink2)
         .disabled(!linked)
@@ -620,6 +646,12 @@ struct IconButton: View {
     let symbol: String
     let label: String
     var help: String?
+    /// Its popover is open: the hover fill stays.
+    var selected = false
+    /// A passing tone (a device that went away flashes gold).
+    var tint: Color?
+    /// Bounces the symbol once each time it changes (0 = never).
+    var bounce = 0
     let action: () -> Void
     @State private var hover = false
     @Environment(\.colorScheme) private var scheme
@@ -630,9 +662,11 @@ struct IconButton: View {
         let t = HybridTheme.of(scheme, increaseContrast: contrast == .increased)
         Button(action: action) {
             Image(systemName: symbol).font(.system(size: 15, weight: .regular))
+                .symbolEffect(.bounce, value: bounce)
                 .frame(width: 40, height: 40)
-                .background(Circle().fill(hover && enabled ? t.hair : Color.clear))
-                .foregroundStyle(hover && enabled ? t.ink : t.ink2)
+                .background(Circle().fill((hover || selected) && enabled ? t.hair : Color.clear))
+                .foregroundStyle(tint ?? ((hover || selected) && enabled ? t.ink : t.ink2))
+                .animation(.easeOut(duration: 0.25), value: tint)
                 .contentShape(Circle())
         }
         .buttonStyle(PressScale())
@@ -664,8 +698,13 @@ struct PersonaChip: View {
             HStack(spacing: 9) {
                 TuningGlyph(tuning: .of(id)).frame(width: 30, height: 20).foregroundStyle(t.ink)
                 Text(model.personaName(id)).font(.system(size: 13, weight: .semibold)).foregroundStyle(t.ink).lineLimit(1)
+                    .layoutPriority(1)
                 if let voice = model.status?.voice, !voice.isEmpty {
-                    Text(voice).font(.system(size: 12)).foregroundStyle(t.ink2).lineLimit(1)
+                    // A narrow panel drops the voice first (the page's max-width: 380px rule).
+                    ViewThatFits(in: .horizontal) {
+                        Text(voice).font(.system(size: 12)).foregroundStyle(t.ink2).lineLimit(1).fixedSize()
+                        Color.clear.frame(width: 0, height: 0)
+                    }
                 }
                 Image(systemName: "chevron.down").font(.system(size: 9, weight: .semibold)).foregroundStyle(t.ink3)
             }

@@ -278,6 +278,7 @@ public final class RealAudioIO: AudioIO, @unchecked Sendable {
 
     public func inputDevices() -> [AudioDevice] { CoreAudioDevices.list(input: true).map(\.device) }
     public func outputDevices() -> [AudioDevice] { CoreAudioDevices.list(input: false).map(\.device) }
+    public func defaultDeviceID(input: Bool) -> String? { CoreAudioDevices.defaultUID(input: input) }
 
     public func setPreferredDevices(input: String?, output: String?) {
         preferredInput = input

@@ -264,3 +264,51 @@ test("Claude's page at 360 x 420: the approval fits, the page region shrinks fir
   assert.equal(a.scroll, "hidden", "the question takes the region");
   assert.equal(a.jump, "hidden");
 });
+
+// The footer's device buttons (SPEC-DEVIATIONS "Devices in the footer"): 40 px targets,
+// nothing overlapping or past the window at 360 px, and the picker opens over the panel,
+// above the footer, without moving any zone.
+const FOOTER = `(async () => {
+  ${SETUP}
+  const v = lib.pageView({ phase: "live", state: "live" });
+  const b = document.body.dataset;
+  b.view = v.view; b.dial = v.dial; b.floor = v.floor; b.card = ""; b.inline = "false";
+  $("overlay").hidden = true;
+  $("chip-name").textContent = "Sotto"; $("chip-voice").textContent = "marin";
+  const rect = (n) => { const r = (typeof n === "string" ? $(n) : n).getBoundingClientRect(); return { l: r.left, r: r.right, t: r.top, b: r.bottom, w: r.width, h: r.height }; };
+  const zones = () => ({ claude: rect("claude"), footer: rect(document.querySelector(".bottom")), chip: rect("persona-chip"), mic: rect("mic-btn"), spk: rect("speaker-btn") });
+  await frames();
+  const closed = zones();
+  const devs = [{ kind: "audioinput", deviceId: "default", label: "Default - MacBook Pro Microphone" }, { kind: "audioinput", deviceId: "mbp", label: "MacBook Pro Microphone" },
+    { kind: "audioinput", deviceId: "usb", label: "A USB microphone with a very long name that must not widen the picker" }];
+  panel.paintDevicePicker($("dev-picker"), { kind: "audioinput", items: lib.deviceMenu(devs, "audioinput", "usb") });
+  $("dev-picker").hidden = false;
+  await frames();
+  const open = zones();
+  const picker = rect("dev-picker");
+  const rows = [...$("dev-picker").querySelectorAll(".dev-item")].map((n) => [n.textContent, n.getAttribute("aria-checked")]);
+  $("dev-picker").hidden = true;
+  return { closed, open, picker, rows, vw: document.documentElement.clientWidth, vh: innerHeight, sw: document.documentElement.scrollWidth };
+})()`;
+
+test("footer devices: 40 px buttons fit at 360 px; the picker opens above the footer and moves nothing", { skip: fs.existsSync(CHROME) ? false : "Chrome not installed", timeout: 60000 }, async (t) => {
+  const page = await openPage(t, { width: 360, height: 640 });
+  for (const [w, h] of [[360, 420], [360, 640], [420, 640], [640, 900]]) {
+    await page.setSize(w, h);
+    const r = await page.eval(FOOTER);
+    const { chip, mic, spk, footer } = r.closed;
+    for (const [n, b] of [["mic", mic], ["speaker", spk]]) {
+      assert.equal(Math.round(b.w), 40, `${w}x${h}: ${n} is a 40 px target`);
+      assert.equal(Math.round(b.h), 40, `${w}x${h}: ${n} is a 40 px target`);
+      assert.ok(b.t >= footer.t - 0.5 && b.b <= footer.b + 0.5, `${w}x${h}: ${n} inside the footer`);
+    }
+    assert.ok(chip.r <= mic.l + 0.5, `${w}x${h}: the chip runs into the mic button ${JSON.stringify(r.closed)}`);
+    assert.ok(mic.r <= spk.l + 0.5);
+    assert.ok(r.sw <= r.vw, `${w}x${h}: horizontal scroll`);
+    assert.deepEqual(r.open, r.closed, `${w}x${h}: a zone moved when the picker opened`);
+    assert.ok(r.picker.l >= 0 && r.picker.r <= r.vw + 0.5 && r.picker.t >= 0, `${w}x${h}: the picker is inside the window ${JSON.stringify(r.picker)}`);
+    assert.ok(r.picker.b <= footer.t + 0.5, `${w}x${h}: the picker sits above the footer`);
+    assert.equal(r.rows[0][0], "System default (MacBook Pro Microphone)");
+    assert.deepEqual(r.rows.map((x) => x[1]), ["false", "false", "true", null], "the check on the chosen mic; Sound settings last");
+  }
+});

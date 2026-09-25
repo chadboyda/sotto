@@ -113,6 +113,9 @@ const el = {
   top: document.querySelector(".top"),
   settings: $("settings"),
   settingsBtn: $("settings-btn"),
+  micBtn: $("mic-btn"),
+  speakerBtn: $("speaker-btn"),
+  devPicker: $("dev-picker"),
   settingsClose: $("settings-close"),
   policy: $("policy"),
   policyHelp: $("policy-help"),
@@ -770,6 +773,19 @@ function fillDeviceSelects(devices) {
 
 async function refreshDevices() {
   const devices = await listDevices();
+  // A chosen device went away (headphones off, a mic unplugged): back to the system
+  // default, never another device, and its footer button flashes.
+  if (lib.deviceLost(devices, "audioinput", store.get(KEY_INPUT))) {
+    logRemote("info", "mic: the chosen microphone went away; using the system default");
+    store.set(KEY_INPUT, "");
+    flashDevice(el.micBtn);
+  }
+  if (lib.deviceLost(devices, "audiooutput", store.get(KEY_OUTPUT))) {
+    logRemote("info", "speaker: the chosen speaker went away; using the system default");
+    store.set(KEY_OUTPUT, "");
+    flashDevice(el.speakerBtn);
+  }
+  if (devPick.kind) closeDevicePicker();
   fillDeviceSelects(devices);
   await applySink();
   // If the device we are using disappeared (unplugged), move to the automatic choice.
@@ -958,6 +974,8 @@ const meter = {
     this.analyser.getFloatTimeDomainData(this.buf);
     const value = lib.rms(this.buf);
     const mic = lib.levelFromRms(value);
+    this.level = mic;
+    if (devPick.level) devPick.level.style.width = `${Math.round(Math.min(1, mic) * 100)}%`;
     let voice = 0;
     if (this.vAnalyser) {
       this.vAnalyser.getFloatTimeDomainData(this.vBuf);
@@ -2445,6 +2463,7 @@ function renderMic() {
   el.micHint.hidden = !text;
   el.micHint.textContent = text;
   el.muteBtn.title = S.inputLabel ? `Microphone: ${S.inputLabel}` : "";
+  renderDevices();
 }
 
 const REQUEST_ACTIVE = new Set(["collecting", "sent", "delivered", "held_suspected", "failed"]);
@@ -2973,15 +2992,20 @@ el.theme.addEventListener("keydown", (e) => {
   next.click();
 });
 
-el.inputSelect.addEventListener("change", () => {
-  store.set(KEY_INPUT, el.inputSelect.value);
-  if (S.pc) switchMic(el.inputSelect.value || null);
+/** The microphone choice (Settings' picker, the footer picker): saved, then used now. "" = system default. */
+function setInputChoice(id) {
+  store.set(KEY_INPUT, id || "");
+  el.inputSelect.value = id || "";
+  if (S.pc) switchMic(id || null);
   else if (wake.stream) {
     // Sleeping on the old device: reopen listening on the new one.
     wake.release();
     render();
   }
-});
+  renderDevices();
+}
+
+el.inputSelect.addEventListener("change", () => setInputChoice(el.inputSelect.value));
 
 el.wakeSelect?.addEventListener("change", () => {
   const v = el.wakeSelect.value;
@@ -2990,13 +3014,92 @@ el.wakeSelect?.addEventListener("change", () => {
   render();
 });
 
-el.outputSelect.addEventListener("change", async () => {
-  store.set(KEY_OUTPUT, el.outputSelect.value);
+/** The speaker choice (Settings' picker, the footer picker). "" = system default. */
+async function setOutputChoice(id) {
+  store.set(KEY_OUTPUT, id || "");
+  el.outputSelect.value = id || "";
   await applySink();
   // Another speaker: another echo path (§7.7). Headphones turn an auto guard off.
   echoTest.result = null;
   echo.apply();
   renderEcho();
+  renderDevices();
+}
+
+el.outputSelect.addEventListener("change", () => setOutputChoice(el.outputSelect.value));
+
+// ---------------------------------------------------------------------------
+// Devices in the footer (SPEC-DEVIATIONS "Devices in the footer"): two icon buttons say
+// which mic and speaker are in use; a click opens a quick picker over the panel. The
+// choice is Settings' own (the same keys, the same rules). Settings stays the full view.
+// ---------------------------------------------------------------------------
+const devPick = { kind: null, level: null, devices: [] };
+
+/** The footer buttons' icons, tooltips and labels. */
+function renderDevices() {
+  const inName = S.inputLabel || "";
+  const outName = el.outputSelect.value ? selectedText(el.outputSelect) : S.defaultOutputLabel || "";
+  const inLabel = lib.deviceButtonLabel("audioinput", inName);
+  const outLabel = lib.deviceButtonLabel("audiooutput", outName);
+  el.micBtn.title = inLabel;
+  el.micBtn.setAttribute("aria-label", inLabel);
+  el.speakerBtn.title = outLabel;
+  el.speakerBtn.setAttribute("aria-label", outLabel);
+  const icon = lib.isHeadphonesLabel(outName) ? "#i-headphones" : "#i-speaker";
+  const use = el.speakerBtn.querySelector("use");
+  if (use && use.getAttribute("href") !== icon) use.setAttribute("href", icon);
+}
+
+async function openDevicePicker(kind) {
+  if (devPick.kind === kind) return closeDevicePicker();
+  devPick.kind = kind;
+  devPick.devices = await listDevices();
+  if (devPick.kind !== kind) return;
+  const saved = store.get(kind === "audioinput" ? KEY_INPUT : KEY_OUTPUT);
+  devPick.level = panel.paintDevicePicker(el.devPicker, { kind, items: lib.deviceMenu(devPick.devices, kind, saved) }, {
+    onChoose: (id) => {
+      closeDevicePicker(true);
+      if (kind === "audioinput") setInputChoice(id);
+      else setOutputChoice(id);
+    },
+    onSettings: () => { closeDevicePicker(); openSettings(); },
+  });
+  el.devPicker.hidden = false;
+  el.micBtn.setAttribute("aria-expanded", String(kind === "audioinput"));
+  el.speakerBtn.setAttribute("aria-expanded", String(kind === "audiooutput"));
+  (el.devPicker.querySelector('[aria-checked="true"]') || el.devPicker.querySelector(".dev-item"))?.focus();
+}
+
+function closeDevicePicker(refocus = false) {
+  if (!devPick.kind) return;
+  const btn = devPick.kind === "audioinput" ? el.micBtn : el.speakerBtn;
+  devPick.kind = null;
+  devPick.level = null;
+  el.devPicker.hidden = true;
+  el.micBtn.setAttribute("aria-expanded", "false");
+  el.speakerBtn.setAttribute("aria-expanded", "false");
+  if (refocus) btn.focus();
+}
+
+/** A chosen device went away and the system default took over: its button flashes once. */
+function flashDevice(btn) {
+  btn.dataset.flash = "false";
+  requestAnimationFrame(() => (btn.dataset.flash = "true"));
+  setTimeout(() => (btn.dataset.flash = "false"), 1700);
+}
+
+el.micBtn.addEventListener("click", () => openDevicePicker("audioinput"));
+el.speakerBtn.addEventListener("click", () => openDevicePicker("audiooutput"));
+document.addEventListener("pointerdown", (e) => {
+  if (devPick.kind && !el.devPicker.contains(e.target) && !el.micBtn.contains(e.target) && !el.speakerBtn.contains(e.target)) closeDevicePicker();
+}, true);
+el.devPicker.addEventListener("keydown", (e) => {
+  if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); closeDevicePicker(true); return; }
+  if (e.key !== "ArrowDown" && e.key !== "ArrowUp") return;
+  e.preventDefault();
+  const items = [...el.devPicker.querySelectorAll(".dev-item")];
+  const i = items.indexOf(document.activeElement);
+  items[(i + (e.key === "ArrowUp" ? -1 : 1) + items.length) % items.length]?.focus();
 });
 
 el.echoTestBtn?.addEventListener("click", () => runEchoTest());
