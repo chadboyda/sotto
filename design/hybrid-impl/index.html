@@ -1,0 +1,337 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Sotto 0.4.0 panel</title>
+<meta name="description" content="Before and after: the 0.3.4 dial panel next to the 0.4.0 Filament + Orrery panel, native app and web page, light and dark.">
+<style>
+  :root {
+    color-scheme: light dark;
+    --bg: #f4f5f7;
+    --surface: #ffffff;
+    --ink: #14171c;
+    --ink-2: #4a505b;
+    --ink-3: #686b73;
+    --hair: #dfe2e7;
+    --gold: #a55200;
+    --teal: #0f7a74;
+    --shot: #ffffff;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #07090e;
+      --surface: #0e121b;
+      --ink: #e8ebf1;
+      --ink-2: #a9b0bd;
+      --ink-3: #8a91a0;
+      --hair: #1d2330;
+      --gold: #ffb547;
+      --teal: #4fd1c5;
+      --shot: #05070c;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #07090e;
+    --surface: #0e121b;
+    --ink: #e8ebf1;
+    --ink-2: #a9b0bd;
+    --ink-3: #8a91a0;
+    --hair: #1d2330;
+    --gold: #ffb547;
+    --teal: #4fd1c5;
+    --shot: #05070c;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; }
+  body {
+    background: var(--bg);
+    color: var(--ink);
+    font: 15px/1.55 -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+  .wrap { max-width: 1180px; margin: 0 auto; padding: 0 16px 96px; }
+  header.top {
+    position: sticky; top: 0; z-index: 5;
+    background: color-mix(in srgb, var(--bg) 88%, transparent);
+    backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px);
+    border-bottom: 1px solid var(--hair);
+  }
+  header.top .wrap { display: flex; align-items: center; gap: 16px; padding-top: 12px; padding-bottom: 12px; flex-wrap: wrap; }
+  header.top h1 { font-size: 15px; font-weight: 600; margin: 0; letter-spacing: 0; }
+  header.top .ver { color: var(--ink-3); font-variant-numeric: tabular-nums; }
+  nav { display: flex; gap: 14px; flex-wrap: wrap; font-size: 13px; }
+  nav a { color: var(--ink-2); text-decoration: none; }
+  nav a:hover { color: var(--ink); }
+  .seg { margin-left: auto; display: inline-flex; background: var(--surface); border: 1px solid var(--hair); border-radius: 999px; padding: 3px; }
+  .seg button {
+    font: inherit; font-size: 13px; color: var(--ink-2); background: none; border: 0;
+    padding: 6px 14px; border-radius: 999px; cursor: pointer; min-width: 64px;
+  }
+  .seg button[aria-pressed="true"] { background: var(--bg); color: var(--ink); box-shadow: 0 0 0 1px var(--hair); }
+  .seg button:focus-visible, nav a:focus-visible { outline: 2px solid var(--teal); outline-offset: 2px; }
+
+  .intro { padding: 48px 0 8px; max-width: 720px; }
+  .intro h2 { font-size: 30px; line-height: 1.2; margin: 0 0 12px; font-weight: 650; letter-spacing: -0.01em; }
+  .intro p { color: var(--ink-2); margin: 0 0 12px; }
+  ul.changes { margin: 20px 0 0; padding: 0; list-style: none; display: grid; gap: 10px; }
+  ul.changes li { padding-left: 18px; position: relative; color: var(--ink-2); }
+  ul.changes li::before { content: ""; position: absolute; left: 0; top: 0.72em; width: 8px; height: 1px; background: var(--ink-3); }
+  ul.changes b { color: var(--ink); font-weight: 600; }
+
+  section { padding-top: 56px; }
+  section > h3 { font-size: 20px; margin: 0 0 4px; font-weight: 620; }
+  section > p.lede { color: var(--ink-2); margin: 0 0 24px; max-width: 720px; }
+
+  .pairs { display: grid; gap: 40px 32px; grid-template-columns: repeat(auto-fill, minmax(min(100%, 520px), 1fr)); }
+  .pair { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 16px; align-items: start; }
+  .pair > h4 { grid-column: 1 / -1; margin: 0; font-size: 14px; font-weight: 600; }
+  .pair > h4 span { color: var(--ink-3); font-weight: 400; margin-left: 8px; }
+  figure { margin: 0; }
+  figure img {
+    display: block; width: 100%; height: auto;
+    border-radius: 12px; border: 1px solid var(--hair); background: var(--shot);
+  }
+  figcaption { font-size: 12px; color: var(--ink-3); margin-top: 6px; font-variant-numeric: tabular-nums; }
+  figcaption .tag { display: inline-block; min-width: 44px; font-weight: 600; color: var(--ink-2); }
+  figcaption .tag.after { color: var(--teal); }
+
+  .grid { display: grid; gap: 16px; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); }
+  .grid.wide { grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); }
+  .grid.strip { grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); }
+  .seq { display: grid; gap: 16px; grid-template-columns: repeat(4, minmax(0, 1fr)); }
+  .note { color: var(--ink-3); font-size: 13px; margin-top: 12px; max-width: 760px; }
+  .headers { display: grid; gap: 12px; }
+  .crop { border-radius: 12px; border: 1px solid var(--hair); overflow: hidden; background: var(--shot); aspect-ratio: 840 / 110; }
+  .crop img { width: 100%; height: auto; display: block; border: 0; border-radius: 0; }
+
+  @media (max-width: 720px) {
+    .pair { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 8px; }
+    .seq { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .intro h2 { font-size: 24px; }
+    .seg { margin-left: 0; }
+  }
+</style>
+</head>
+<body>
+<header class="top">
+  <div class="wrap">
+    <h1>Sotto panel <span class="ver">0.3.4 → 0.4.0</span></h1>
+    <nav aria-label="Sections">
+      <a href="#native">Native</a>
+      <a href="#web">Web</a>
+      <a href="#moments">Moments</a>
+      <a href="#sizes">Sizes</a>
+      <a href="#quiet">Quiet states</a>
+      <a href="#motion">Reduce Motion</a>
+    </nav>
+    <div class="seg" role="group" aria-label="Screenshot theme">
+      <button type="button" data-set="auto" aria-pressed="true">Auto</button>
+      <button type="button" data-set="light" aria-pressed="false">Light</button>
+      <button type="button" data-set="dark" aria-pressed="false">Dark</button>
+    </div>
+  </div>
+</header>
+
+<main class="wrap">
+  <div class="intro">
+    <h2>Filament, with the best of Orrery</h2>
+    <p>The 0.3.4 panel was a dial with a status word and a boxed Claude card. 0.4.0 keeps Filament's layout (one string across the panel, Claude's words on a serif page, fixed zones) and adds Orrery's moments on that string. The native app and the web page draw the same panel.</p>
+    <ul class="changes">
+      <li><b>One lit string instead of the dial.</b> Your peg on the left is the mute control. The string plucks when you talk and sheds tides when Sotto talks. At rest it draws nothing.</li>
+      <li><b>Claude gets a column, not a card.</b> Its words are set in the serif at reading size. The row above shows a moon-phase glyph and a fixed-width timer, and the headline is Claude's news ("Approve in the terminal", "Claude finished").</li>
+      <li><b>Approvals are an eclipse.</b> Claude's bead slides back into your peg, a gold corona comes up and the page frames the command in mono with the reason, the wait timer and Show terminal. Gold appears only while an approval is live.</li>
+      <li><b>Finished steps leave stars</b> on the string, and a sleeping peg shows its night side. Waking is a sunrise.</li>
+      <li><b>Nothing moves.</b> The header status sits in a fixed slot, the capsule is one flat pill with symbols, and every zone keeps its edges across states. Notices sit on the caption line instead of floating over Claude's page.</li>
+      <li><b>Quieter controls.</b> Pause and power are icon buttons in the footer next to the persona and voice, and the outlined Pause and End voice buttons are gone.</li>
+    </ul>
+  </div>
+
+  <section id="native">
+    <h3>Native app</h3>
+    <p class="lede">The Sotto macOS app, panel size (420 pt wide). Before is v0.3.4 rendered from its own source; after is the 0.4.0 panel. Both are offscreen renders of canned states (silent, no audio).</p>
+    <div class="pairs" data-pairs="native"></div>
+  </section>
+
+  <section id="web">
+    <h3>Web page</h3>
+    <p class="lede">The page in Chrome at 420 × 640. The newest full web captures before the hybrid are from 0.3.1; 0.3.3 then changed the header to the capsule shown in the first row. Everything else in the 0.3.x page matched these.</p>
+    <div class="headers">
+      <div class="pair">
+        <h4>Header <span>0.3.3 capsule vs 0.4.0</span></h4>
+        <figure><div class="crop" style="aspect-ratio:860/160"><img alt="0.3.3 web header" data-base="../pills-v2/web" data-sep="-" loading="lazy"></div><figcaption><span class="tag">0.3.3</span>header</figcaption></figure>
+        <figure><div class="crop"><img alt="0.4.0 web header" data-base="web/panel-01-idle" loading="lazy"></div><figcaption><span class="tag after">0.4.0</span>header, status word in a fixed slot</figcaption></figure>
+      </div>
+    </div>
+    <div class="pairs" data-pairs="web" style="margin-top:32px"></div>
+  </section>
+
+  <section id="moments">
+    <h3>Moments from Orrery</h3>
+    <p class="lede">The parts carried over from Orrery, captured at fixed instants.</p>
+    <h4>The eclipse (approval), native</h4>
+    <div class="seq" data-grid="eclipse-native"></div>
+    <h4 style="margin-top:28px">The eclipse (approval), web</h4>
+    <div class="seq" data-grid="eclipse-web"></div>
+    <h4 style="margin-top:28px">Stars, sunrise and persona switch</h4>
+    <div class="grid" data-grid="moments"></div>
+  </section>
+
+  <section id="sizes">
+    <h3>Sizes</h3>
+    <p class="lede">The compact strip (native, 320 × 96), the large panel and the small web window. Zones keep their order at every size.</p>
+    <div class="grid strip" data-grid="mini"></div>
+    <div class="grid wide" data-grid="large" style="margin-top:24px"></div>
+    <div class="grid" data-grid="small" style="margin-top:24px"></div>
+  </section>
+
+  <section id="quiet">
+    <h3>Quiet states</h3>
+    <p class="lede">States that must not look broken: sleeping, paused, the daily cap, setup and errors. Claude's page stays readable underneath and the state is written on the caption line.</p>
+    <div class="grid" data-grid="quiet"></div>
+  </section>
+
+  <section id="motion">
+    <h3>Reduce Motion</h3>
+    <p class="lede">With Reduce Motion on, the string holds still, the corona is a still ring and every state stays distinct.</p>
+    <div class="grid" data-grid="rm"></div>
+  </section>
+</main>
+
+<script>
+(() => {
+  const NATIVE = [
+    ["Listening", "05-listening", "panel-05-listening"],
+    ["You speaking", "06-you-speaking", "panel-06-you-speaking"],
+    ["Sotto speaking", "07-sotto-speaking", "panel-07-sotto-speaking"],
+    ["Claude working", "09-claude-working", "panel-09-claude-working"],
+    ["Claude needs approval", "10-claude-needs-approval", "panel-10-claude-needs-approval"],
+    ["Claude finished", "11-claude-finished", "panel-11-claude-finished"],
+    ["Muted", "08-muted", "panel-08-muted"],
+    ["Can't hear you", "13-cant-hear", "panel-13-cant-hear"],
+    ["Paused, result waiting", "16-paused-idle-pending", "panel-16-paused-idle-pending"],
+    ["Daily limit", "17-paused-daily-cap", "panel-17-paused-daily-cap"],
+    ["Sleeping", "18-sleeping", "panel-18-sleeping"],
+    ["Key needed", "03-api-key-needed", "panel-03-api-key-needed"],
+  ];
+  const WEB = [
+    ["Listening", "../polish/after--listening--420x640", "web/panel-01-idle"],
+    ["Claude working", "../polish/after--working--420x640", "web/panel-04-claude-working"],
+    ["Claude needs approval", "../polish/after--approval--420x640", "web/panel-05-needs-approval"],
+    ["A notice", "../polish/after--banner--420x640", "web/panel-09-cant-hear"],
+  ];
+  const GRIDS = {
+    "eclipse-native": [
+      ["native/panel-09-claude-working", "Working: the bead rides the string"],
+      ["native/panel-10a-approval-freeze", "Freeze"],
+      ["native/panel-10b-approval-moon-crossing", "The moon crosses back"],
+      ["native/panel-10c-approval-totality", "Totality: the corona"],
+    ],
+    "eclipse-web": [
+      ["web/panel-04-claude-working", "Working"],
+      ["web/panel-05a-approval-freeze", "Freeze"],
+      ["web/panel-05b-approval-moon-crossing", "The moon crosses back"],
+      ["web/panel-05c-approval-totality", "Totality"],
+    ],
+    moments: [
+      ["native/panel-11a-finished-stars-flash", "Native: a finished step leaves a star"],
+      ["web/panel-06-finished", "Web: finished"],
+      ["native/panel-18b-sunrise-wake", "Native: sunrise on wake"],
+      ["web/panel-08b-sunrise-wake", "Web: sunrise on wake"],
+      ["native/panel-28-persona-switch", "Native: persona switch (the old tuning lifts away)"],
+      ["web/panel-10-persona-switch", "Web: persona switch"],
+      ["native/panel-12-background-agents", "Native: background agents"],
+      ["native/panel-27-agent-approval-crowded", "Native: a crowded agent approval"],
+    ],
+    mini: [
+      ["native/mini-05-listening", "Strip: listening"],
+      ["native/mini-07-sotto-speaking", "Strip: Sotto speaking"],
+      ["native/mini-09-claude-working", "Strip: Claude working"],
+      ["native/mini-10-claude-needs-approval", "Strip: approval shows the command"],
+      ["native/mini-13-cant-hear", "Strip: can't hear"],
+      ["native/mini-18-sleeping", "Strip: sleeping"],
+    ],
+    large: [
+      ["native/large-09-claude-working", "Native large: working"],
+      ["native/large-10-claude-needs-approval", "Native large: approval"],
+      ["web/large-04-claude-working", "Web large: working"],
+      ["web/large-05-needs-approval", "Web large: approval"],
+    ],
+    small: [
+      ["web/small-01-idle", "Web small: idle"],
+      ["web/small-04-claude-working", "Web small: working"],
+      ["web/small-05-needs-approval", "Web small: approval"],
+    ],
+    quiet: [
+      ["web/panel-08a-sleeping", "Web: sleeping"],
+      ["web/panel-12-paused", "Web: paused"],
+      ["web/panel-13-daily-cap", "Web: daily limit"],
+      ["web/panel-07-muted", "Web: muted"],
+      ["web/panel-11-connecting", "Web: connecting"],
+      ["web/panel-14-key-setup", "Web: key setup"],
+      ["web/panel-15-no-mic", "Web: no microphone"],
+      ["native/panel-15-reconnecting", "Native: reconnecting"],
+      ["native/panel-14-echo-and-error", "Native: echo and an error"],
+      ["native/panel-19-sleeping-muted", "Native: sleeping, muted"],
+      ["native/panel-20-mic-blocked", "Native: mic blocked"],
+      ["native/panel-21-lost-daemon", "Native: lost the daemon"],
+    ],
+    rm: [
+      ["web/reduce-motion-03-sotto-speaking", "Web: Sotto speaking"],
+      ["web/reduce-motion-05-needs-approval", "Web: approval"],
+      ["web/reduce-motion-07-muted", "Web: muted"],
+      ["web/reduce-motion-08a-sleeping", "Web: sleeping"],
+      ["native/panel-29-reduce-motion-approval", "Native: approval"],
+      ["native/panel-30-reduce-motion-you-speaking", "Native: you speaking"],
+    ],
+  };
+
+  const fig = (base, tag, cap, after) => {
+    const f = document.createElement("figure");
+    const img = document.createElement("img");
+    img.loading = "lazy"; img.decoding = "async"; img.dataset.base = base; img.alt = `${tag ? tag + " " : ""}${cap}`;
+    const c = document.createElement("figcaption");
+    if (tag) { const t = document.createElement("span"); t.className = "tag" + (after ? " after" : ""); t.textContent = tag; c.append(t); }
+    c.append(cap);
+    f.append(img, c);
+    return f;
+  };
+  const pairs = (host, rows, beforeTag, beforeBase) => {
+    for (const [name, before, after] of rows) {
+      const p = document.createElement("div"); p.className = "pair";
+      const h = document.createElement("h4"); h.textContent = name; p.append(h);
+      p.append(fig(beforeBase + before, beforeTag, "", false), fig(after.includes("/") ? after : "native/" + after, "0.4.0", "", true));
+      host.append(p);
+    }
+  };
+  pairs(document.querySelector('[data-pairs="native"]'), NATIVE, "0.3.4", "before/native/");
+  pairs(document.querySelector('[data-pairs="web"]'), WEB, "0.3.1", "");
+  for (const [key, rows] of Object.entries(GRIDS)) {
+    const host = document.querySelector(`[data-grid="${key}"]`);
+    for (const [base, cap] of rows) host.append(fig(base, "", cap, true));
+  }
+
+  const root = document.documentElement;
+  const mq = matchMedia("(prefers-color-scheme: dark)");
+  let mode = "auto";
+  try { mode = localStorage.getItem("hybrid-gallery-theme") || "auto"; } catch {}
+  const apply = () => {
+    const t = mode === "auto" ? (mq.matches ? "dark" : "light") : mode;
+    if (mode === "auto") root.removeAttribute("data-theme"); else root.dataset.theme = mode;
+    for (const img of document.querySelectorAll("img[data-base]")) {
+      const src = `${img.dataset.base}${img.dataset.sep || "--"}${t}.png`;
+      if (img.getAttribute("src") !== src) img.src = src;
+    }
+    for (const b of document.querySelectorAll(".seg button")) b.setAttribute("aria-pressed", String(b.dataset.set === mode));
+  };
+  for (const b of document.querySelectorAll(".seg button")) b.addEventListener("click", () => {
+    mode = b.dataset.set;
+    try { localStorage.setItem("hybrid-gallery-theme", mode); } catch {}
+    apply();
+  });
+  mq.addEventListener("change", () => { if (mode === "auto") apply(); });
+  apply();
+})();
+</script>
+</body>
+</html>
