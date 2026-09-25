@@ -34,8 +34,16 @@ const RUN = `(async () => {
   out.afterSound = { draws, animating: s.animating };
   s.set({ attention: true, working: true, workSince: Date.now() - 60000 });
   await wait(2500);
+  // The frame cap is what string.js asks for (its tick's timer delay, no rAF), not the
+  // draws counted in a wall-clock second: a software-rendered canvas on a slow CI runner
+  // draws fewer frames than it schedules (9 in a second was seen on the macOS runner).
+  const st = window.setTimeout, raf = window.requestAnimationFrame;
+  const delays = []; let rafs = 0;
+  window.setTimeout = (fn, ms, ...rest) => { if (fn && fn.name === "tick") delays.push(ms); return st(fn, ms, ...rest); };
+  window.requestAnimationFrame = (fn) => { if (fn && fn.name === "tick") rafs++; return raf(fn); };
   draws = 0; await wait(1000);
-  out.approvalHeld = { draws, animating: s.animating };
+  window.setTimeout = st; window.requestAnimationFrame = raf;
+  out.approvalHeld = { draws, animating: s.animating, minDelay: Math.min(...delays), frames: delays.length, rafs };
   s.set({ attention: false, working: false });
   await wait(3500);
   draws = 0; await wait(800);
@@ -49,7 +57,12 @@ test("string: the idle panel draws nothing; sound and a held approval draw, then
   assert.deepEqual(m.idle, { draws: 0, animating: false }, JSON.stringify(m));
   assert.equal(m.speaking.animating, true, JSON.stringify(m));
   assert.deepEqual(m.afterSound, { draws: 0, animating: false }, JSON.stringify(m));
-  // The shimmer: about 24 fps, and no more than that.
-  assert.ok(m.approvalHeld.draws >= 10 && m.approvalHeld.draws <= 30, JSON.stringify(m));
+  // The shimmer: it keeps drawing, on a timer of about 24 fps (never display rate), and
+  // never more than 24 frames in a second.
+  const a = m.approvalHeld;
+  assert.equal(a.animating, true, JSON.stringify(m));
+  assert.ok(a.draws >= 3 && a.draws <= 30, JSON.stringify(m));
+  assert.equal(a.rafs, 0, `no display-rate frames: ${JSON.stringify(m)}`);
+  assert.ok(a.frames >= 3 && a.minDelay >= 40 && a.minDelay <= 45, `a ~24 fps timer: ${JSON.stringify(m)}`);
   assert.deepEqual(m.resolved, { draws: 0, animating: false }, JSON.stringify(m));
 });
