@@ -441,4 +441,99 @@ describe("native desktop app", { skip: SKIP }, () => {
       await d.close();
     }
   });
+
+  // v0.4.0 shipped a panel whose offscreen snapshots showed captions while the real app
+  // showed none: a persona-switch notice took the caption line and never expired, and the
+  // string read raw RMS as meter levels, so it stayed flat. This drives the REAL app's live
+  // message pipeline (fake Live -> daemon -> /api/native -> StateModel -> the views' own
+  // functions, read back through the test-mode `probe` action) instead of the renderer.
+  test("live panel: captions, the voice's words after a persona switch, Claude's text and a string that follows the levels", { timeout: 120_000 }, async (t) => {
+    if (!daemon.native) return t.skip("needs the daemon's /api/native endpoint");
+    const pcm = Buffer.alloc(24000 * 2 * 3);
+    for (let i = 0; i < pcm.length / 2; i++) pcm.writeInt16LE(Math.round(8000 * Math.sin((2 * Math.PI * 200 * i) / 24000)), i * 2);
+    const live = await startFakeLiveServer({ key: "sk-test-key", outputPcm: pcm, greetText: "Hi, I'm listening.", greetAfterMs: 200, userText: "What's failing in the auth tests?" });
+    t.after(() => live.close());
+    const D3 = path.join(tmp, "probe");
+    const p = appPaths(D3, ROOT);
+    const bundle = testCopy(p.bundle, { stampFrom: OUT });
+    registered.push(bundle);
+    const appLog = path.join(tmp, "probe.jsonl");
+    const actions = path.join(tmp, "probe-actions");
+    fs.mkdirSync(actions, { recursive: true });
+    let seq = 0;
+    const act = (obj) => { const n = `${String(++seq).padStart(4, "0")}`; fs.writeFileSync(path.join(actions, `${n}.tmp`), JSON.stringify(obj)); fs.renameSync(path.join(actions, `${n}.tmp`), path.join(actions, `${n}.json`)); };
+    const probes = () => readLog(appLog).filter((e) => e.ev === "panel_probe");
+    /** Probe every 150 ms until `ok(probe)`; returns that probe. */
+    const probeUntil = async (ok, ms, what) => {
+      const end = Date.now() + ms;
+      for (;;) {
+        act({ action: "probe" });
+        await sleep(150);
+        const hit = probes().find(ok);
+        if (hit) return hit;
+        if (Date.now() > end) throw new Error(`timed out waiting for ${what}; last probe: ${JSON.stringify(probes().at(-1))}`);
+      }
+    };
+    // The owner's socket must exist, or the daemon releases voice as "owner_gone".
+    const sock = path.join(tmp, "probe-owner.sock");
+    const conns = new Set();
+    const owner = net.createServer((c) => { conns.add(c); c.on("error", () => {}); c.on("close", () => conns.delete(c)); });
+    await new Promise((r) => owner.listen(sock, r));
+    // The daemon may hold its owner probe open: destroy it, or close() never finishes.
+    t.after(() => new Promise((r) => { for (const c of conns) c.destroy(); owner.close(() => r()); }));
+    const port3 = await freePort();
+    const d = createDaemon({
+      dataDir: D3, port: port3, pluginRoot: ROOT, daemonKey: "p".repeat(64),
+      env: {
+        SOTTO_BROWSER: "app", SOTTO_APP_TEST: "1", SOTTO_APP_DEBUG_LOG: appLog, SOTTO_APP_OUT_WAV: path.join(tmp, "probe-out.wav"),
+        SOTTO_APP_MIC_FIXTURE: path.join(ROOT, "test/fixtures/ask-files.wav"), SOTTO_APP_MIC_FIXTURE_LEAD_MS: "1500",
+        SOTTO_APP_DOWNLOAD: "0", SOTTO_VOCAB: "0", SOTTO_APP_TEST_ACTION_DIR: actions,
+        OPENAI_API_KEY: "sk-test-key", SOTTO_OPENAI_BASE: live.base, SOTTO_KEYCHAIN_SERVICE: `sotto-apptest-${process.pid}`,
+      },
+    });
+    await d.listen();
+    const ctl = (body) => fetch(`http://127.0.0.1:${port3}/control`, {
+      method: "POST", headers: { "Content-Type": "application/json", "X-Sotto-Key": d.daemonKey }, body: JSON.stringify(body),
+    }).then((r) => r.json());
+    const hook = (ev, b) => d.voice.handleHook(ev, { session_id: "probe", ...b }, sock);
+    let pid = null;
+    try {
+      const on = await ctl({ action: "on", session: { session_id: "probe", socket: sock, token: "t", cwd: ROOT, project_dir: ROOT }, config: { open_browser: true } });
+      assert.equal(on.ok, true, on.message);
+      pid = (await waitFor(() => readLog(appLog).find((e) => e.ev === "launch"), 20_000, "app launch")).pid;
+      await waitFor(() => d.voice.state === "live", 20_000, "live");
+      // The voice's greeting: its words on the caption line, the string ringing with it.
+      const greet = await probeUntil((e) => e.line === "said" && e.role === "assistant" && /listening/.test(e.text), 10_000, "the voice's caption");
+      assert.equal(greet.who, "Sotto");
+      await probeUntil((e) => e.string_voice > 0.2, 10_000, "the string hears the voice (meter scale, not raw RMS)");
+      // The mic fixture: the string and the headline follow you, then your words show.
+      const you = await probeUntil((e) => e.string_mic > 0.2 && e.floor === "you", 15_000, "the string follows your mic");
+      assert.equal(you.string_mode, "live");
+      await probeUntil((e) => e.headline === "Hearing you", 5_000, "the headline says Hearing you");
+      const said = await probeUntil((e) => e.line === "said" && e.role === "user", 15_000, "your caption");
+      assert.match(said.text, /auth tests/);
+      // A persona switch posts a notice; the next words must take the line back (v0.4.0
+      // pinned "Switching to Moss." there for the rest of the session).
+      act({ action: "persona", persona: "moss" });
+      await waitFor(() => live.sessions.length > 1 && live.last().started, 15_000, "the Moss session");
+      await probeUntil((e) => e.line === "banner" && /Moss/.test(e.text), 5_000, "the switch notice");
+      live.last().speak(pcm, "I'm Moss now.");
+      const back = await probeUntil((e) => e.line === "said" && e.role === "assistant" && /Moss now/.test(e.text), 10_000, "captions after the switch");
+      assert.equal(back.who, "Moss");
+      // Claude's words reach the page.
+      hook("UserPromptSubmit", { prompt: "What's failing in the auth tests?", prompt_id: "p1" });
+      hook("MessageDisplay", { message_id: "m1", index: 0, delta: "I read auth.spec.ts. The refresh timer fires during the assertion.", final: true });
+      const c = await probeUntil((e) => (e.claude_page || []).some((x) => /refresh timer/.test(x)), 10_000, "Claude's words on the page");
+      assert.match(c.claude_says, /refresh timer/);
+      hook("Stop", { last_assistant_message: "Fixed: the refresh timer now uses the fake clock." });
+      await probeUntil((e) => /fake clock/.test(e.summary), 10_000, "Claude's summary");
+      // Quiet and listening: the string breathes (alive at rest, not a 0 fps rule).
+      await probeUntil((e) => e.breathing === true && e.string_mic === 0, 15_000, "the resting string breathes");
+    } finally {
+      await ctl({ action: "off" }).catch(() => {});
+      await sleep(500);
+      if (pid && pidAlive(pid)) process.kill(pid, "SIGTERM");
+      await d.close();
+    }
+  });
 });

@@ -234,8 +234,9 @@ public enum UISnapshot {
         s.build(m)
         // The session and Claude started a little before the frame (fixed, so snapshots are stable).
         m.now = { t0.addingTimeInterval(s.elapsed) }
-        m.micLevel = s.mic
-        m.speakerLevel = s.speaker
+        // Scenario levels are on the meter scale; the model holds raw RMS like the audio layer.
+        m.micLevel = Float(ViewText.rmsFromLevel(Double(s.mic)))
+        m.speakerLevel = Float(ViewText.rmsFromLevel(Double(s.speaker)))
         m.setFloorForPreview(s.floor)
         m.reducedMotion = s.reduced
         s.after?(m, t0.addingTimeInterval(s.elapsed))

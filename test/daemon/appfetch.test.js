@@ -65,6 +65,11 @@ function startServer() {
   const s = { assets: {}, hits: [], redirect: false };
   s.server = http.createServer((req, res) => {
     s.hits.push(req.url);
+    // No keep-alive: the server drops an idle socket after 5 s, and a test that spends
+    // longer than that between requests (python3 building a zip under a loaded
+    // `npm test`) raced fetch reusing the closing socket and got "network" (seen in the
+    // pre-commit hook: 6.1 s, reason network instead of bad_zip).
+    res.shouldKeepAlive = false;
     if (s.redirect && !req.url.startsWith("/cdn/")) {
       res.writeHead(302, { Location: `/cdn${req.url}` });
       return res.end();
@@ -231,7 +236,7 @@ z.close()`, craft, pl.hash], { encoding: "utf8" });
     srv.publish("4.1.0", fs.readFileSync(craft));
     let verifyCalls = 0;
     const r = await installRelease({ outDir: out, version: "4.1.0", hash: pl.hash, base: srv.base, verify: async () => { verifyCalls++; return { ok: true }; } });
-    assert.equal(r.reason, "bad_zip");
+    assert.equal(r.reason, "bad_zip", r.message);
     assert.match(r.message, /bad path/);
     assert.equal(verifyCalls, 0);
     assert.ok(!fs.existsSync(path.join(data, "escaped.txt")) && !fs.existsSync(path.join(out, "escaped.txt")));

@@ -23,6 +23,8 @@ struct RGBA: Equatable {
 struct Palette {
     var ground, ink, string, bead, you, voice, need, muted, star, night, pale, dawn: RGBA
     var glow: Double
+    /// The live string's opacity at rest (its colour is you -> voice).
+    var restAlpha: Double
     var dark: Bool
     var increaseContrast: Bool
 
@@ -38,7 +40,7 @@ struct Palette {
         ground = RGBA(t.ground); ink = RGBA(t.ink); string = RGBA(t.string); bead = RGBA(t.bead); you = RGBA(t.you)
         voice = RGBA(t.voice); need = RGBA(t.need); muted = RGBA(t.muted); star = RGBA(t.star); night = RGBA(t.night)
         pale = RGBA(HybridTheme.coronaPale); dawn = RGBA(HybridTheme.dawn)
-        glow = t.glow; dark = t.dark; increaseContrast = t.increaseContrast
+        glow = t.glow; restAlpha = t.restAlpha; dark = t.dark; increaseContrast = t.increaseContrast
     }
 }
 
@@ -95,6 +97,12 @@ enum FilamentPainter {
         let slackOn = i.mode == .sleeping || i.mode == .paused || i.mode == .off || m.slackFront != nil
         let A = e.voice * 34 * sc * tn.amp
         let voiceNow = i.floor == "voice" || i.voice > 0.05
+        // Listening at rest: the string breathes (FilamentEngine.breathing). A slow standing
+        // wave in the persona's own shape plus a faint travelling ripple, under 2 pt: calm,
+        // but plainly a live line and not a rule. Never under Reduce Motion.
+        let breathing = FilamentEngine.breathing(i, now: now)
+        let breathA = breathing ? 1.6 * sc * sin(2 * .pi * FilamentEngine.breathHz * now) : 0
+        let shapeMax = max(0.001, (1..<24).map { abs(tn.shape(Double($0) / 24)) }.max() ?? 1)
         var xs = [Double](repeating: 0, count: n), ys = xs, wy = xs, wv = xs, hh = xs
         for k in 0..<n {
             let s = Double(k) / Double(n - 1)
@@ -106,6 +114,10 @@ enum FilamentPainter {
                 h = voiceNow ? tn.shape(s) * 14 * sc * tn.amp : 0
             }
             if muted { h *= s }
+            if breathing {
+                h += breathA * tn.shape(s) / shapeMax
+                h += 0.55 * sc * sin(2 * .pi * (2.2 * s - 0.11 * now)) * sin(.pi * s)
+            }
             h += m.ring * sin(m.ringK * .pi * s)
             var b = 0.0
             if let bd = m.bead, bd.peg == 0, bd.s > 0, bd.s < 1 {
@@ -137,9 +149,23 @@ enum FilamentPainter {
         // ---- the string, coloured toward you or the voice where it moves, gold at totality.
         let alpha = m.alpha
         var stops: [Gradient.Stop] = []
+        // Colour-coded while live: the string runs from you (teal, at the peg) to the voice
+        // (periwinkle, at the bridge); whoever holds the floor pulls the whole line to their
+        // hue. Muted, asleep, paused and connecting keep the neutral line, so colour means
+        // "live and listening".
+        let liveColour = i.mode == .live && !muted
+        let youFull = RGBA(P.you.r, P.you.g, P.you.b, 1), voiceFull = RGBA(P.voice.r, P.voice.g, P.voice.b, 1)
+        let floorPull = i.floor == "you" ? -0.75 : i.floor == "voice" ? 0.75 : 0
+        func restColour(_ s: Double) -> RGBA {
+            guard liveColour else { return P.string }
+            let base = s * s * (3 - 2 * s)
+            let t = floorPull < 0 ? base * (1 + floorPull) : base + (1 - base) * floorPull
+            let c = RGBA.mix(youFull, voiceFull, t)
+            return RGBA(c.r, c.g, c.b, P.restAlpha)
+        }
         for j in 0...16 {
             let k = Int((Double(j) / 16 * Double(n - 1)).rounded())
-            var c = RGBA.mix(P.string, RGBA(P.you.r, P.you.g, P.you.b, 1), wy[k])
+            var c = RGBA.mix(restColour(Double(j) / 16), youFull, wy[k])
             c = RGBA.mix(c, RGBA(P.voice.r, P.voice.g, P.voice.b, 1), wv[k])
             c = RGBA.mix(c, RGBA(P.need.r, P.need.g, P.need.b, 1), m.need)
             stops.append(.init(color: c.color(alpha), location: Double(j) / 16))
@@ -149,13 +175,16 @@ enum FilamentPainter {
         var style = StrokeStyle(lineWidth: lw, lineCap: .round, lineJoin: .round)
         if i.cantHear && i.mode == .live && !muted { style.dash = [2 * sc8, 6 * sc8] }
         let energy = max(e.you * 1.2, e.voice, m.need, i.busy ? 0.35 : 0)
-        let bloom: RGBA = m.need > 0.5 ? P.need : e.voice > e.you ? P.voice : e.you > 0.05 ? P.you : P.ink
+        let restBloom = liveColour ? restColour(i.floor == "you" ? 0 : i.floor == "voice" ? 1 : 0.5) : P.ink
+        let bloom: RGBA = m.need > 0.5 ? P.need : e.voice > e.you ? P.voice : e.you > 0.05 ? P.you : restBloom
         let body = path()
-        let bloomA = (0.25 + 0.6 * energy) * P.glow * alpha * tn.bloom
+        // The resting glow breathes with the line (0.8...1).
+        let breathGlow = breathing ? 0.9 + 0.1 * sin(2 * .pi * FilamentEngine.breathHz * now) : 1
+        let bloomA = ((liveColour ? 0.34 : 0.25) + 0.6 * energy) * P.glow * alpha * tn.bloom * breathGlow
         if bloomA > 0.01 {
             g.drawLayer { l in
                 l.clip(to: Path(CGRect(x: 0, y: y - 60 * sc7, width: Double(L.size.width), height: 120 * sc7)))
-                l.addFilter(.shadow(color: bloom.color(bloomA), radius: (6 + 14 * energy) * sc7 / 2))
+                l.addFilter(.shadow(color: bloom.color(bloomA), radius: (8 + 14 * energy) * sc7 / 2))
                 l.stroke(body, with: shading, style: style)
             }
         }

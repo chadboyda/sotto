@@ -310,9 +310,20 @@ public final class FilamentEngine {
 
     /// How often the hero must redraw (IMPLEMENTATION.md §5).
     public enum Rate: Equatable, Sendable {
-        case paused, sleep, work, full
+        case paused, breathe, sleep, work, full
         /// TimelineView's minimum interval (nil: every display frame).
-        public var interval: Double? { switch self { case .paused, .full: return nil; case .sleep: return 1.0 / 15; case .work: return 0.1 } }
+        public var interval: Double? { switch self { case .paused, .full: return nil; case .breathe: return 1.0 / 12; case .sleep: return 1.0 / 15; case .work: return 0.1 } }
+    }
+
+    /// The listening breath: 0.16 Hz, under 2 pt. At 12 fps it moves at most 0.2 pt a frame,
+    /// so it reads as smooth; the whole-panel cost is one 96-point path a frame.
+    static let breathHz = 0.16
+
+    /// The string breathes while it is live and listening with nothing else going on: not
+    /// muted, not deaf, no approval, not under Reduce Motion (v0.4.1: the 0 fps idle line
+    /// read as a dead rule; the user asked for a line that is alive but calm).
+    static func breathing(_ i: FilamentInput, now: Double) -> Bool {
+        i.mode == .live && !i.muted && !i.cantHear && !i.reduced && !i.attention && i.resolveAge(now) == nil
     }
 
     public func rate(_ i: FilamentInput, now: Double) -> Rate {
@@ -327,6 +338,7 @@ public final class FilamentEngine {
         if i.mic > 0.02 && !i.muted && i.mode != .sleeping { return .full }
         if i.voice > 0.02 || !waveAtRest || tides.contains(where: { now - $0.t < Self.tideLife }) { return .full }
         if i.busy && !i.attention { return .work }
+        if Self.breathing(i, now: now) { return .breathe }
         if i.mode == .sleeping && i.wake > 0.02 { return .sleep }
         return .paused
     }

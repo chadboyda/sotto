@@ -408,7 +408,7 @@ struct PegButton: View {
         .disabled(!(model.isLive || model.isSleeping))
         .accessibilityLabel(label)
         .accessibilityAddTraits(muted || (model.isSleeping && model.wakeMuted) ? .isSelected : [])
-        .accessibilityValue(muted ? "Muted. Sotto can't hear you. Still billing." : model.isLive ? "Level \(Int((model.micLevel * 100).rounded()))%" : "")
+        .accessibilityValue(muted ? "Muted. Sotto can't hear you. Still billing." : model.isLive ? "Level \(Int((model.micMeter * 100).rounded()))%" : "")
         .help(model.isSleeping ? label + " (M)" : (muted ? "Unmute (M)" : "Mute (M)"))
     }
 }
@@ -452,7 +452,9 @@ struct CaptionLine: View {
 
     static func line(_ m: StateModel, at now: Date, mini: Bool = false) -> Line {
         let v = m.pageView(at: now)
-        if let b = m.topBanner { return .banner(b, more: max(0, m.banners.count - (m.banners.first?.key == b.key ? 1 : 0))) }
+        if let b = m.topBanner, !(m.bannerYieldsToCaption(b) && !m.captions.isEmpty && (v.view == "live" || v.card?.kind == "sleeping")) {
+            return .banner(b, more: max(0, m.banners.count - (m.banners.first?.key == b.key ? 1 : 0)))
+        }
         if m.attentionShown(at: now) && v.view == "live" {
             let parts = ApprovalBody.split(m.claudeCard.command)
             if mini, let c = parts.command ?? parts.sentence { return .command(c) }
@@ -530,10 +532,15 @@ struct CaptionLine: View {
         case .hint(let s):
             Text(s).foregroundStyle(t.ink2).lineLimit(1).minimumScaleFactor(0.85).truncationMode(.tail).help(s)
         case .said(let role, let who, let text, _):
-            (Text(who).font(.system(size: layout.capSize * 0.88, weight: .semibold)).foregroundColor(role == "assistant" ? t.voiceInk : t.youInk)
-                + Text("  ") + Text(text).foregroundColor(t.ink))
-                .lineLimit(1).truncationMode(.tail)
-                .accessibilityLabel("\(who) said: \(text)")
+            // Live captions stream in: when a line outgrows the zone, keep the newest words
+            // (head truncation) and the speaker's name fixed on the left.
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                Text(who).font(.system(size: layout.capSize * 0.88, weight: .semibold)).foregroundStyle(role == "assistant" ? t.voiceInk : t.youInk)
+                    .fixedSize()
+                Text(text).foregroundStyle(t.ink).lineLimit(1).truncationMode(.head)
+            }
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel("\(who) said: \(text)")
         case .empty:
             Color.clear.frame(height: 1).accessibilityHidden(true)
         }
@@ -734,5 +741,38 @@ extension EnvironmentValues {
     var sottoStill: Bool {
         get { self[StillKey.self] }
         set { self[StillKey.self] = newValue }
+    }
+}
+
+// MARK: - Probe (test mode)
+
+/// What the live panel is showing right now, read from the same functions its views call.
+/// Test mode logs this on request (SOTTO_APP_TEST_ACTION_DIR `probe`), so an end-to-end test
+/// can check the real app's message pipeline (daemon -> link -> StateModel -> views), not
+/// the offscreen renderer: v0.4.0 rendered captions in its snapshots but never on screen.
+@MainActor
+public enum PanelProbe {
+    public static func describe(_ m: StateModel, at now: Date = Date()) -> [String: Any] {
+        var o: [String: Any] = [:]
+        switch CaptionLine.line(m, at: now) {
+        case .said(let role, let who, let text, _): o["line"] = "said"; o["role"] = role; o["who"] = who; o["text"] = text
+        case .banner(let b, _): o["line"] = "banner"; o["text"] = b.text
+        case .approval(let term, _): o["line"] = "approval"; o["text"] = term ?? ""
+        case .command(let c): o["line"] = "command"; o["text"] = c
+        case .muted: o["line"] = "muted"
+        case .hint(let s): o["line"] = "hint"; o["text"] = s
+        case .empty: o["line"] = "empty"
+        }
+        o["headline"] = m.headline(at: now).word
+        o["claude_page"] = m.pageMessages
+        o["claude_says"] = m.claudeSays
+        o["summary"] = m.summary ?? ""
+        o["floor"] = m.floor ?? ""
+        let i = FilamentInput.from(m, reduced: false)
+        o["string_mic"] = i.mic
+        o["string_voice"] = i.voice
+        o["string_mode"] = i.mode.rawValue
+        o["breathing"] = FilamentEngine.breathing(i, now: now.timeIntervalSinceReferenceDate)
+        return o
     }
 }

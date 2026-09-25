@@ -312,6 +312,13 @@ final class AppController: NSObject, NSApplicationDelegate, PanelControllerDeleg
                 // What AppKit resolved, so a test can see the choice took effect.
                 log.log("appearance_applied", ["app": NSApp.appearance?.name.rawValue ?? "system",
                                                "effective": NSApp.effectiveAppearance.bestMatch(from: [.aqua, .darkAqua])?.rawValue ?? ""])
+            case "probe":
+                // What the live panel shows now (captions, headline, Claude's words, the
+                // string's levels), from the model the daemon link feeds (PanelProbe).
+                var o = PanelProbe.describe(model)
+                o["tag"] = obj["tag"] as? String ?? ""
+                o["panel_visible"] = model.panelVisible
+                log.log("panel_probe", o)
             default:
                 log.log("test_action", ["action": action, "ok": false])
             }
