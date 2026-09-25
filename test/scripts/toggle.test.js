@@ -771,7 +771,12 @@ describe("bin/sotto (SPEC §5.9)", () => {
     assert.equal(r.code, 0);
     assert.deepEqual(JSON.parse(readFileSync(join(D, "prefs.json"), "utf8")), { voice: "verse" });
     r = await run(CLI, { args: ["voice"], env: cliEnv });
-    assert.match(r.stdout, /^sotto: voice is verse\. Voices: .*verse \(current\)/);
+    // One voice per line with what it sounds like (daemon/config.js VOICE_INFO).
+    assert.match(r.stdout, /^sotto: voice is verse\. Voices:\n  alloy     Smooth, clear, even · androgynous · American\n/);
+    assert.match(r.stdout, /\n  verse     Clear, relaxed, a little gravel · masculine · American \(current\)\n/);
+    assert.equal(r.stdout.trim().split("\n").length, 24, "header, 22 voices, footer");
+    assert.match(r.stdout, /Change it with sotto voice <name>\.\n$/);
+    assert.equal(r.code, 0);
     r = await run(CLI, { args: ["voice", "nope"], env: cliEnv });
     assert.equal(r.code, 1);
     assert.match(r.stdout, /^sotto: unknown voice "nope"/);

@@ -147,7 +147,8 @@ audio_client     "app"|"page"|null      (NEW, added by B2)
 
 **Settings**:
 ```
-{ "voices": {voices:[...], current, live, live_voice}      // voice.voices()
+{ "voices": {voices:[...], current, live, live_voice, info} // voice.voices(); info = {<voice>: {description, tone,
+                                                            // presentation, accent}} (VOICE_INFO, SPEC §6.4; added in 0.4.5)
   "personas": {personas:[{id, name, description, voice|null, source}], current, use_voice, live, live_persona}
                                                             // voice.personas(): summaries, never a persona's text;
                                                             // source "builtin"|"user"|"project"; use_voice = the

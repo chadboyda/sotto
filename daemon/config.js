@@ -3,7 +3,7 @@
 import fs from "node:fs";
 import path from "node:path";
 
-export const VERSION = "0.4.4";
+export const VERSION = "0.4.5";
 export const NAME = "sotto";
 export const LIVE_MODEL = "gpt-live-1";
 export const DEFAULT_PORT = 47821;
@@ -22,6 +22,46 @@ export const VOICES = Object.freeze([
   "marin", "meridian", "quartz", "ripple", "sage", "shimmer", "stone", "tempo", "verse", "vesper", "willow",
 ]);
 export const POLICIES = Object.freeze(["quiet", "milestones", "walkthrough"]);
+
+/**
+ * What each voice sounds like, for the pickers (page, app), `sotto voice` and the
+ * README. `tone` is its character, `presentation` feminine | masculine | androgynous,
+ * `accent` its regional influence. Presentation and accent follow OpenAI's voice
+ * table where it lists the voice (12 of 22); the rest were judged by ear and by
+ * measured pitch, and a voice pitched in between is called androgynous rather
+ * than guessed. `description` = "<tone> · <presentation> · <accent>", at most 60
+ * characters; bin/sotto mirrors it (test/daemon/voice-info.test.js pins both).
+ */
+const vi = (tone, presentation, accent, lower = false) => Object.freeze({
+  tone, presentation, accent,
+  description: `${tone} · ${lower ? "lower, " : ""}${presentation} · ${accent}`,
+});
+export const VOICE_INFO = Object.freeze({
+  alloy: vi("Smooth, clear, even", "androgynous", "American"),
+  ash: vi("Clear, crisp, steady", "masculine", "American"),
+  ballad: vi("Warm, easygoing, lightly breathy", "masculine", "American"),
+  beacon: vi("Clean, crisp, articulate", "masculine", "Filipino"),
+  bossa: vi("Soft, breathy, gentle", "feminine", "Brazilian"),
+  cedar: vi("Relaxed, textured, casual", "masculine", "American"),
+  cinder: vi("Deep, calm, grounded", "masculine", "Southern US"),
+  coral: vi("Bright, lively, upbeat", "feminine", "American"),
+  delta: vi("Bright, crisp, friendly", "feminine", "Southern US"),
+  echo: vi("Smooth, warm, low", "masculine", "American"),
+  gleam: vi("Cheerful, smooth, warm", "feminine", "North American"),
+  marin: vi("Bright, clear, polished", "feminine", "American"),
+  meridian: vi("Deep, clear, easygoing", "masculine", "North American"),
+  quartz: vi("Bright, airy, buoyant", "feminine", "Australian"),
+  ripple: vi("Smooth, dry, relaxed", "masculine", "Australian"),
+  sage: vi("Bright, clear, measured", "feminine", "American"),
+  shimmer: vi("Crisp, smooth, calm", "androgynous", "American", true),
+  stone: vi("Deep, relaxed, grounded", "masculine", "Irish"),
+  tempo: vi("Easygoing, smooth, low", "masculine", "Brazilian"),
+  verse: vi("Clear, relaxed, a little gravel", "masculine", "American"),
+  vesper: vi("Dry, low-key, grounded", "masculine", "British"),
+  willow: vi("Bright, crisp, warm", "feminine", "Irish"),
+});
+/** The pickers' group order (web/app.js, the app's Settings). */
+export const VOICE_PRESENTATIONS = Object.freeze(["feminine", "masculine", "androgynous"]);
 
 export const WAKE_SENSITIVITIES = Object.freeze(["off", "low", "medium", "high"]);
 

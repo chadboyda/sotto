@@ -12,8 +12,10 @@ import SottoClient
 public struct NativeSettings: Codable, Equatable, Sendable {
     public struct Voices: Codable, Equatable, Sendable {
         public var voices: [String]; public var current: String?; public var live: Bool?; public var live_voice: String?
-        public init(voices: [String], current: String? = nil, live: Bool? = nil, live_voice: String? = nil) {
-            self.voices = voices; self.current = current; self.live = live; self.live_voice = live_voice
+        /// What each voice sounds like (daemon/config.js VOICE_INFO); nil from older daemons.
+        public var info: [String: VoiceInfo]?
+        public init(voices: [String], current: String? = nil, live: Bool? = nil, live_voice: String? = nil, info: [String: VoiceInfo]? = nil) {
+            self.voices = voices; self.current = current; self.live = live; self.live_voice = live_voice; self.info = info
         }
     }
     /// The persona picker: SottoClient's decoded form (docs/NATIVE.md §3.1).
@@ -143,6 +145,9 @@ public final class SettingsModel {
     public var wakeLevels: [String] { settings?.wake_sensitivities ?? ["off", "low", "medium", "high"] }
     public var windowModes: [String] { ["auto", "app", "chrome", "default"] }
     public var voices: [String] { settings?.voices?.voices ?? [] }
+    public var voiceInfo: [String: VoiceInfo] { settings?.voices?.info ?? [:] }
+    /// The picker's groups: Feminine, Masculine, Androgynous (SettingsText.voiceGroups).
+    public var voiceGroups: [SettingsText.VoiceGroup] { SettingsText.voiceGroups(voices, info: voiceInfo) }
 
     public var policy: String { pending["policy"] ?? status?.speaking_policy ?? "milestones" }
     public var voice: String { pending["voice"] ?? settings?.voices?.current ?? status?.voice ?? "marin" }

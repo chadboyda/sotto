@@ -192,12 +192,234 @@ export function pageFollow(el) {
   return ctl;
 }
 
-/** The footer's persona chip: the tuning's tiny string, the name and the voice. */
-export function paintChip(el, { name, voice, wave }) {
+/**
+ * The footer's persona chip: the tuning's tiny string, the name and the voice.
+ * `voiceDesc` (VOICE_INFO description) goes in the tooltip and the label.
+ */
+export function paintChip(el, { name, voice, wave, voiceDesc = "" }) {
   setText(el.chipName, name || "Sotto");
   setText(el.chipVoice, voice || "");
   if (wave && el.chipWave.getAttribute("d") !== wave) el.chipWave.setAttribute("d", wave);
-  el.personaChip.setAttribute("aria-label", `Persona: ${name || "Sotto"}${voice ? `, voice ${voice}` : ""}. Opens Settings`);
+  const title = voice && voiceDesc ? `${voice}: ${voiceDesc}` : "";
+  if (el.chipVoice.title !== title) el.chipVoice.title = title;
+  el.personaChip.setAttribute("aria-label", `Persona: ${name || "Sotto"}${voice ? `, voice ${voice}${voiceDesc ? ` (${voiceDesc})` : ""}` : ""}. Opens Settings`);
+}
+
+/**
+ * The Settings voice picker (GET /api/voices): a <select> grouped by presentation
+ * (<optgroup> Feminine, Masculine, Androgynous), each option saying what the voice
+ * sounds like (lib.voiceGroups). Rebuilt only when the list or info changes.
+ */
+export function paintVoiceSelect(select, voices) {
+  const groups = lib.voiceGroups(voices);
+  const key = JSON.stringify(groups);
+  if (select.dataset.groups !== key) {
+    select.dataset.groups = key;
+    select.replaceChildren(...groups.flatMap((g) => {
+      const opts = g.items.map((it) => {
+        const o = document.createElement("option");
+        o.value = it.id;
+        o.textContent = it.label;
+        if (it.description) o.title = it.description;
+        return o;
+      });
+      if (!g.title) return opts;
+      const og = document.createElement("optgroup");
+      og.label = g.title;
+      og.append(...opts);
+      return [og];
+    }));
+  }
+  const cur = voices?.current;
+  select.value = Array.isArray(voices?.voices) && voices.voices.includes(cur) ? cur : "";
+}
+
+/**
+ * The Settings voice list for paintListPicker: groups by presentation, each row the
+ * name over what the voice sounds like (tone · accent).
+ */
+export function voicePickerModel(voices) {
+  return lib.voiceGroups(voices).map((g) => ({
+    title: g.title,
+    items: g.items.map((it) => ({ id: it.id, name: it.name, desc: it.tone ? it.label.slice(it.name.length + 3) : "", title: it.description })),
+  }));
+}
+
+/**
+ * The Settings persona list for paintListPicker (GET /api/personas): each row the
+ * name over its description and voice; the button's second line is just the voice
+ * (the help line under the picker has the full description).
+ */
+export function personaPickerModel(personas, label = (p) => p.name) {
+  const cap = (s) => s.charAt(0).toUpperCase() + s.slice(1);
+  const list = Array.isArray(personas?.personas) ? personas.personas : [];
+  return [{ title: "", items: list.map((p) => {
+    const desc = String(p.description || "").replace(/\.$/, "");
+    const voice = p.voice ? `${cap(p.voice)} voice` : "";
+    return { id: p.id, name: label(p), desc: [desc, voice].filter(Boolean).join(" · "), short: voice, title: p.description || "" };
+  }) }];
+}
+
+/**
+ * A picker whose open list shows every option's description under its name while
+ * you browse (a <select> can show one line only). `root` is an empty container: it
+ * gets a button (the current option's name over its description, two fixed lines)
+ * and a listbox popover laid over what follows, so opening it moves nothing.
+ * Keyboard: Enter, Space or the arrows open it; Up/Down/Home/End move; Enter or
+ * Space chooses; Escape or Tab closes. `m` = {groups:[{title, items:[{id, name,
+ * desc, short?, title?}]}], value, disabled, label}; `short`, when set, is the button's line instead of `desc`. `onChoose(id)` runs for a new choice.
+ */
+export function paintListPicker(root, m, { onChoose = null } = {}) {
+  let st = root._lp;
+  if (!st) {
+    st = root._lp = { open: false, active: null, onChoose };
+    root.classList.add("lp");
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "lp-button";
+    btn.id = `${root.id || "lp"}-button`;
+    btn.setAttribute("aria-haspopup", "listbox");
+    btn.setAttribute("aria-expanded", "false");
+    btn.innerHTML = '<span class="lp-text"><span class="lp-name"></span><span class="lp-desc"></span></span><span class="lp-chev" aria-hidden="true"></span>';
+    const list = document.createElement("div");
+    list.className = "lp-list";
+    list.id = `${root.id || "lp"}-list`;
+    list.setAttribute("role", "listbox");
+    list.tabIndex = -1;
+    list.hidden = true;
+    btn.setAttribute("aria-controls", list.id);
+    root.append(btn, list);
+    st.btn = btn;
+    st.list = list;
+    const options = () => [...list.querySelectorAll('[role="option"]')];
+    const setActive = (o) => {
+      for (const x of options()) x.dataset.active = String(x === o);
+      st.active = o || null;
+      if (o) { list.setAttribute("aria-activedescendant", o.id); o.scrollIntoView({ block: "nearest" }); }
+      else list.removeAttribute("aria-activedescendant");
+    };
+    const close = (focusBtn = true) => {
+      if (!st.open) return;
+      st.open = false;
+      list.hidden = true;
+      btn.setAttribute("aria-expanded", "false");
+      document.removeEventListener("pointerdown", st.outside, true);
+      if (focusBtn) btn.focus();
+    };
+    const open = () => {
+      if (st.open || btn.disabled) return;
+      st.open = true;
+      list.hidden = false;
+      btn.setAttribute("aria-expanded", "true");
+      // Below the button, or above it when the window has no room below.
+      const r = btn.getBoundingClientRect();
+      const h = Math.min(list.scrollHeight, 360);
+      root.dataset.side = window.innerHeight - r.bottom < h + 12 && r.top > window.innerHeight - r.bottom ? "up" : "down";
+      setActive(options().find((o) => o.getAttribute("aria-selected") === "true") || options()[0]);
+      list.focus({ preventScroll: true });
+      document.addEventListener("pointerdown", st.outside, true);
+    };
+    const choose = (o) => {
+      if (!o) return;
+      const id = o.dataset.id;
+      close();
+      if (id !== st.value && st.onChoose) st.onChoose(id);
+    };
+    st.outside = (e) => { if (!root.contains(e.target)) close(false); };
+    st.close = close;
+    btn.addEventListener("click", () => (st.open ? close() : open()));
+    btn.addEventListener("keydown", (e) => {
+      if (["ArrowDown", "ArrowUp"].includes(e.key)) { e.preventDefault(); open(); }
+    });
+    list.addEventListener("keydown", (e) => {
+      const opts = options();
+      const i = opts.indexOf(st.active);
+      const go = (j) => { e.preventDefault(); setActive(opts[Math.max(0, Math.min(opts.length - 1, j))]); };
+      if (e.key === "ArrowDown") go(i + 1);
+      else if (e.key === "ArrowUp") go(i - 1);
+      else if (e.key === "Home") go(0);
+      else if (e.key === "End") go(opts.length - 1);
+      else if (e.key === "Enter" || e.key === " ") { e.preventDefault(); choose(st.active); }
+      // Escape closes the list, not the drawer around it.
+      else if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); close(); }
+      else if (e.key === "Tab") close(false);
+    });
+    list.addEventListener("click", (e) => choose(e.target.closest('[role="option"]')));
+    list.addEventListener("pointermove", (e) => { const o = e.target.closest('[role="option"]'); if (o && o !== st.active) setActive(o); });
+  }
+  st.onChoose = onChoose || st.onChoose;
+  st.value = m.value;
+  const { btn, list } = st;
+  const key = JSON.stringify(m.groups);
+  if (list.dataset.groups !== key) {
+    list.dataset.groups = key;
+    let n = 0;
+    list.replaceChildren(...m.groups.flatMap((g) => {
+      const rows = g.items.map((it) => {
+        const o = document.createElement("div");
+        o.className = "lp-option";
+        o.id = `${list.id}-${n++}`;
+        o.setAttribute("role", "option");
+        o.dataset.id = it.id;
+        o.innerHTML = '<svg class="lp-check" aria-hidden="true"><use href="#i-check"/></svg><span class="lp-text"><span class="lp-name"></span><span class="lp-desc"></span></span>';
+        o.querySelector(".lp-name").textContent = it.name;
+        o.querySelector(".lp-desc").textContent = it.desc || "";
+        if (it.title) o.title = it.title;
+        return o;
+      });
+      if (!g.title) return rows;
+      const h = document.createElement("div");
+      h.className = "lp-group";
+      h.setAttribute("role", "presentation");
+      h.textContent = g.title;
+      return [h, ...rows];
+    }));
+  }
+  const all = m.groups.flatMap((g) => g.items);
+  const cur = all.find((it) => it.id === m.value);
+  for (const o of list.querySelectorAll('[role="option"]')) o.setAttribute("aria-selected", String(o.dataset.id === m.value));
+  setText(btn.querySelector(".lp-name"), cur?.name || m.value || "");
+  setText(btn.querySelector(".lp-desc"), cur?.short ?? cur?.desc ?? "");
+  if (cur?.title) btn.title = cur.title; else btn.removeAttribute("title");
+  if (m.label) { list.setAttribute("aria-label", m.label); btn.setAttribute("aria-label", `${m.label}: ${cur?.name || m.value || "none"}${cur?.desc ? `, ${cur.desc}` : ""}`); }
+  btn.disabled = !!m.disabled;
+  if (btn.disabled && st.open) st.close(false);
+  return st;
+}
+
+/**
+ * "Hear the voices": a heading per presentation group, then one play chip per voice
+ * with its name and, under it, its tone in calm secondary text. Every chip reserves
+ * two description lines (styles.css .chip-desc), so nothing moves as samples play.
+ * `onPlay(id)` runs on a click. Returns the chips (state is set by the caller).
+ */
+export function paintVoiceGrid(grid, voices, { onPlay = null } = {}) {
+  const groups = lib.voiceGroups(voices);
+  const key = JSON.stringify(groups);
+  if (grid.dataset.groups !== key) {
+    grid.dataset.groups = key;
+    grid.replaceChildren(...groups.flatMap((g) => {
+      const chips = g.items.map((it) => {
+        const b = document.createElement("button");
+        b.type = "button";
+        b.className = "voice-chip";
+        b.dataset.voice = it.id;
+        // Play and stop both stay in the DOM and crossfade on data-state (styles.css).
+        b.innerHTML = '<span class="chip-icons" aria-hidden="true"><svg class="chip-play"><use href="#i-play"/></svg><svg class="chip-stop"><use href="#i-stop"/></svg></span><span class="chip-text"><span class="chip-name"></span><span class="chip-desc"></span></span>';
+        b.querySelector(".chip-name").textContent = it.name;
+        b.querySelector(".chip-desc").textContent = it.tone;
+        if (it.description) b.title = it.description;
+        if (onPlay) b.addEventListener("click", () => onPlay(it.id));
+        return b;
+      });
+      if (!g.title) return chips;
+      const h = document.createElement("p");
+      h.className = "voice-group";
+      h.textContent = g.title;
+      return [h, ...chips];
+    }));
+  }
+  return [...grid.querySelectorAll(".voice-chip")];
 }
 
 /**

@@ -35,10 +35,13 @@ public struct SettingsView: View {
             if !model.personas.isEmpty { personaRow }
 
             VStack(alignment: .leading, spacing: 6) {
-                Picker("Voice", selection: Binding(get: { model.voice }, set: { model.setVoice($0) })) {
-                    if model.voices.isEmpty { Text(SettingsText.voiceLabel(model.voice)).tag(model.voice) }
-                    ForEach(model.voices, id: \.self) { Text(SettingsText.voiceLabel($0)).tag($0) }
-                }
+                // Grouped by presentation; every row says what the voice sounds like
+                // (daemon VOICE_INFO) while you browse, as the page's list picker does.
+                DescribedPicker(title: "Voice",
+                                groups: model.voices.isEmpty
+                                    ? [DescribedGroup(id: "current", title: "", options: [DescribedOption(id: model.voice, name: SettingsText.voiceLabel(model.voice), desc: "")])]
+                                    : SettingsText.voicePickerGroups(model.voices, info: model.voiceInfo),
+                                selection: model.voice) { model.setVoice($0) }
                 FieldHelp(model.voiceMessage ?? SettingsText.voiceHelp, error: model.error("voice"))
             }
 
@@ -62,13 +65,11 @@ public struct SettingsView: View {
     /// the chosen one's one-line description and voice under it, and the voice toggle.
     private var personaRow: some View {
         VStack(alignment: .leading, spacing: 6) {
-            Picker("Persona", selection: Binding(get: { model.persona }, set: { model.setPersona($0) })) {
-                if model.currentPersona == nil { Text(model.persona).tag(model.persona) }
-                ForEach(model.personas) { p in
-                    Text(SettingsText.personaLabel(p)).tag(p.id)
-                }
-            }
-            .accessibilityHint(model.personaHelp)
+            // Every row shows the persona's description and voice while you browse.
+            DescribedPicker(title: "Persona",
+                            groups: SettingsText.personaPickerGroups(model.personas)
+                                + (model.currentPersona == nil ? [DescribedGroup(id: "current", title: "", options: [DescribedOption(id: model.persona, name: model.persona, desc: "")])] : []),
+                            selection: model.persona) { model.setPersona($0) }
             FieldHelp(model.personaHelp, error: model.error("persona"))
             Toggle(SettingsText.personaVoiceToggle, isOn: Binding(get: { model.personaUseVoice }, set: { model.setPersonaUseVoice($0) }))
                 .toggleStyle(.checkbox)
@@ -279,23 +280,51 @@ struct MicCompareRow: View {
 struct VoiceGrid: View {
     let model: SettingsModel
     var body: some View {
-        LazyVGrid(columns: [GridItem(.adaptive(minimum: 96), spacing: 6)], alignment: .leading, spacing: 6) {
-            ForEach(model.voices, id: \.self) { v in
-                let playing = model.previewing == v
-                Button { model.togglePreview(v) } label: {
-                    HStack(spacing: 5) {
-                        Image(systemName: playing ? "stop.fill" : "play.fill").font(.caption2).frame(width: 10)
-                        Text(SettingsText.voiceLabel(v)).lineLimit(1)
-                        if v == model.voice { Spacer(minLength: 0); Image(systemName: "checkmark").font(.caption2).foregroundStyle(.secondary) }
-                    }
-                    .frame(maxWidth: .infinity, alignment: .leading)
+        VStack(alignment: .leading, spacing: 8) {
+            ForEach(model.voiceGroups) { g in
+                if !g.title.isEmpty {
+                    Text(g.title).font(.caption).fontWeight(.medium).foregroundStyle(.secondary)
                 }
-                .buttonStyle(.bordered)
-                .controlSize(.small)
-                .accessibilityLabel(playing ? "Stop \(SettingsText.voiceLabel(v)) sample" : "Play \(SettingsText.voiceLabel(v)) sample")
+                LazyVGrid(columns: [GridItem(.adaptive(minimum: 132), spacing: 6)], alignment: .leading, spacing: 6) {
+                    ForEach(g.voices, id: \.self) { v in chip(v) }
+                }
             }
         }
         .padding(.vertical, 2)
+    }
+
+    /// The name over what the voice sounds like (calm secondary text). Two lines are
+    /// reserved for the description, so every chip has the same height.
+    private func chip(_ v: String) -> some View {
+        let playing = model.previewing == v
+        let info = model.voiceInfo[v]
+        let tone = info?.tone ?? ""
+        return Button { model.togglePreview(v) } label: {
+            HStack(alignment: .firstTextBaseline, spacing: 6) {
+                Image(systemName: playing ? "stop.fill" : "play.fill").font(.caption2).frame(width: 10)
+                VStack(alignment: .leading, spacing: 1) {
+                    HStack(spacing: 4) {
+                        Text(SettingsText.voiceLabel(v)).lineLimit(1)
+                        if v == model.voice { Spacer(minLength: 0); Image(systemName: "checkmark").font(.caption2).foregroundStyle(.secondary) }
+                    }
+                    if !tone.isEmpty {
+                        Text(tone)
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(2, reservesSpace: true)
+                            .multilineTextAlignment(.leading)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+            }
+            .padding(.vertical, tone.isEmpty ? 0 : 3)
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .buttonStyle(.bordered)
+        .controlSize(.small)
+        .help(info?.description ?? "")
+        .accessibilityLabel(playing ? "Stop \(SettingsText.voiceLabel(v)) sample"
+                            : "Play \(SettingsText.voiceLabel(v)) sample\(info?.description.map { ": \($0)" } ?? "")")
     }
 }
 

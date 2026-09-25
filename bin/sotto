@@ -21,7 +21,8 @@
 # CLAUDE_PLUGIN_DATA, so the data dir is found here: the dir whose `active`
 # file names this session's inbox socket, else any dir with voice active,
 # else one with a running daemon, else $CLAUDE_PLUGIN_DATA / the newest
-# sotto data dir. Prints one plain line; exits 1 on an error.
+# sotto data dir. Prints one plain line (`sotto voice` alone: one line per voice
+# with what it sounds like); exits 1 on an error.
 # Never touches OPENAI_API_KEY. macOS /bin/bash 3.2 compatible.
 
 SELF="${BASH_SOURCE[0]}"
@@ -137,6 +138,46 @@ if [[ "$OUT" =~ $re ]]; then
   MSG="${MSG//\\\\/\\}"
 else
   MSG="sotto: ERROR no answer from the /talk handler."
+fi
+# `sotto voice` with no name: the list, one voice per line with what it sounds
+# like, so Claude can pick one from a spoken description ("something warmer").
+voice_info() { # daemon/config.js VOICE_INFO descriptions, pinned by test/daemon/voice-info.test.js
+  case "$1" in
+    alloy)    printf '%s' "Smooth, clear, even · androgynous · American" ;;
+    ash)      printf '%s' "Clear, crisp, steady · masculine · American" ;;
+    ballad)   printf '%s' "Warm, easygoing, lightly breathy · masculine · American" ;;
+    beacon)   printf '%s' "Clean, crisp, articulate · masculine · Filipino" ;;
+    bossa)    printf '%s' "Soft, breathy, gentle · feminine · Brazilian" ;;
+    cedar)    printf '%s' "Relaxed, textured, casual · masculine · American" ;;
+    cinder)   printf '%s' "Deep, calm, grounded · masculine · Southern US" ;;
+    coral)    printf '%s' "Bright, lively, upbeat · feminine · American" ;;
+    delta)    printf '%s' "Bright, crisp, friendly · feminine · Southern US" ;;
+    echo)     printf '%s' "Smooth, warm, low · masculine · American" ;;
+    gleam)    printf '%s' "Cheerful, smooth, warm · feminine · North American" ;;
+    marin)    printf '%s' "Bright, clear, polished · feminine · American" ;;
+    meridian) printf '%s' "Deep, clear, easygoing · masculine · North American" ;;
+    quartz)   printf '%s' "Bright, airy, buoyant · feminine · Australian" ;;
+    ripple)   printf '%s' "Smooth, dry, relaxed · masculine · Australian" ;;
+    sage)     printf '%s' "Bright, clear, measured · feminine · American" ;;
+    shimmer)  printf '%s' "Crisp, smooth, calm · lower, androgynous · American" ;;
+    stone)    printf '%s' "Deep, relaxed, grounded · masculine · Irish" ;;
+    tempo)    printf '%s' "Easygoing, smooth, low · masculine · Brazilian" ;;
+    verse)    printf '%s' "Clear, relaxed, a little gravel · masculine · American" ;;
+    vesper)   printf '%s' "Dry, low-key, grounded · masculine · British" ;;
+    willow)   printf '%s' "Bright, crisp, warm · feminine · Irish" ;;
+  esac
+}
+re_list='^sotto: voice is ([a-z]+)\. Voices: (.*)\. Change it with /talk voice <name>\.$'
+if [[ "$ARGS" == voice && "$MSG" =~ $re_list ]]; then
+  CUR="${BASH_REMATCH[1]}"; LIST="${BASH_REMATCH[2]}"
+  printf 'sotto: voice is %s. Voices:\n' "$CUR"
+  LIST="${LIST// (current)/}"
+  for v in ${LIST//,/ }; do
+    mark=""; [[ "$v" == "$CUR" ]] && mark=" (current)"
+    printf '  %-9s %s%s\n' "$v" "$(voice_info "$v")" "$mark"
+  done
+  printf 'Change it with sotto voice <name>.\n'
+  exit 0
 fi
 printf '%s\n' "$MSG"
 [[ "$MSG" == *"ERROR"* || "$MSG" == *"unknown voice"* || "$MSG" == *"unknown persona"* || "$MSG" == *"usage:"* ]] && exit 1

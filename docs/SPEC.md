@@ -512,7 +512,7 @@ Claude Code adds a plugin's `bin/` to the Bash tool's `PATH` (plugins-reference.
 | `sotto restart` | Same as `/talk restart` (§6.17) | 0 |
 | anything else | usage on stderr | 2 |
 
-- **Implementation:** it runs `scripts/toggle.sh` with a synthesized UserPromptExpansion input (`{"command_args":"voice <name>","cwd":"<$PWD>"}`; the cwd lets `persona` find the project's personas), so the CLI and `/talk voice` share one code path. It prints the `stopReason` as one plain line.
+- **Implementation:** it runs `scripts/toggle.sh` with a synthesized UserPromptExpansion input (`{"command_args":"voice <name>","cwd":"<$PWD>"}`; the cwd lets `persona` find the project's personas), so the CLI and `/talk voice` share one code path. It prints the `stopReason` as one plain line, except `sotto voice` with no name, which prints the list one voice per line with its `VOICE_INFO` description (`  <name>  <tone> · <presentation> · <accent>`, the current one marked `(current)`), between a `sotto: voice is <v>. Voices:` header and `Change it with sotto voice <name>.`
 - **Data dir discovery** (the Bash tool gets no `CLAUDE_PLUGIN_DATA`). Candidates: `$CLAUDE_PLUGIN_DATA` if set, `~/.claude/plugins/data/sotto*`, `~/.sotto`. Pick the first dir whose `active` owner socket equals `$CLAUDE_CODE_MESSAGING_SOCKET` (Claude Code exports it to Bash commands); else any dir with `active`; else one with a live `daemon.pid`; else `$CLAUDE_PLUGIN_DATA`; else the candidate whose `logs/` is newest. The port comes from `active` (field 2) or `daemon.port`.
 - It never touches the API key and never starts a daemon.
 
@@ -709,9 +709,11 @@ Messages are in §9.2.
 **`GET /api/voices`** (page auth: `X-Sotto-Page` header or `?token=`) → 200:
 ```json
 {"voices":["alloy","ash","ballad","beacon","bossa","cedar","cinder","coral","delta","echo","gleam","marin","meridian","quartz","ripple","sage","shimmer","stone","tempo","verse","vesper","willow"],
- "current":"marin","live":true,"live_voice":"marin"}
+ "current":"marin","live":true,"live_voice":"marin",
+ "info":{"marin":{"tone":"Bright, clear, polished","presentation":"feminine","accent":"American","description":"Bright, clear, polished · feminine · American"}, …}}
 ```
 - `voices`: the 22 built-in voices, in this order (stable; use it for the picker).
+- `info`: what each voice sounds like (`daemon/config.js` `VOICE_INFO`): `tone`, `presentation` (`feminine` | `masculine` | `androgynous`), `accent`, and `description` (`<tone> · <presentation> · <accent>`, at most 60 characters). The pickers group by `presentation` (Feminine, Masculine, Androgynous) and show the tone under each name; `sotto voice` lists the descriptions. Presentation and accent follow OpenAI's voice table where it lists the voice. Older daemons omit `info`; clients then show plain names.
 - `current`: the voice new sessions use (§4.5). It changes as soon as a voice is set.
 - `live`: a Live session is attached right now. `live_voice`: that session's voice, else `null`. While a switch is in progress `live` is `false` and `current` already names the new voice.
 - The current voice is also in every `PageStatus` (`status.voice`, §6.12), so a picker can follow changes made from the terminal or by Claude without polling: listen to SSE `status`.

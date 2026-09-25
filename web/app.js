@@ -122,6 +122,8 @@ const el = {
   voiceSelect: $("voice-select"),
   voiceHelp: $("voice-help"),
   personaSelect: $("persona-select"),
+  personaPicker: $("persona-picker"),
+  voicePicker: $("voice-picker"),
   personaHelp: $("persona-help"),
   personaVoice: $("persona-voice"),
   voiceGrid: $("voice-grid"),
@@ -2606,7 +2608,8 @@ function personaName() {
 
 const PAUSE_TITLE = "Pause the paid voice session; resume any time";
 function renderFooter(v = S.view || computeView()) {
-  panel.paintChip(el, { name: personaName(), voice: S.voices?.current || S.status?.voice || "", wave: chipWavePath(currentPersona()) });
+  const chipVoice = S.voices?.current || S.status?.voice || "";
+  panel.paintChip(el, { name: personaName(), voice: chipVoice, wave: chipWavePath(currentPersona()), voiceDesc: S.voices?.info?.[chipVoice]?.description || "" });
   const policy = S.status?.speaking_policy || "milestones";
   for (const b of el.policy.querySelectorAll("button[data-policy]")) {
     const on = b.dataset.policy === policy;
@@ -2620,6 +2623,7 @@ function renderFooter(v = S.view || computeView()) {
   el.voiceSelect.disabled = !S.voices || !S.sseUp;
   el.personaSelect.disabled = !S.personas || !S.sseUp;
   el.personaVoice.disabled = !S.personas || !S.sseUp;
+  renderPickers();
   const pausable = S.phase === "live" || S.phase === "connecting" || st === "live" || st === "connecting";
   // Card views have their own primary action; Pause would be the wrong one there.
   // Asleep or paused (no card: inlineCard), the same button is play: Wake now / Resume.
@@ -2762,7 +2766,10 @@ const capName = (name) => name.charAt(0).toUpperCase() + name.slice(1);
 function renderVoices() {
   const v = S.voices;
   if (!v) return;
-  fillSelect(el.voiceSelect, v.voices.map((name) => [name, capName(name)]), v.current);
+  // Grouped by presentation, each option saying what the voice sounds like
+  // (daemon/config.js VOICE_INFO via GET /api/voices `info`; panel.paintVoiceSelect).
+  panel.paintVoiceSelect(el.voiceSelect, v);
+  renderPickers();
   renderSamples();
 }
 
@@ -2776,25 +2783,14 @@ function renderSamples() {
   const grid = el.voiceGrid;
   const v = S.voices;
   if (!grid || !v) return;
-  if (grid.childElementCount !== v.voices.length) {
-    grid.replaceChildren(...v.voices.map((name) => {
-      const b = document.createElement("button");
-      b.type = "button";
-      b.className = "voice-chip";
-      b.dataset.voice = name;
-      // Play and stop both stay in the DOM and crossfade on data-state (styles.css).
-      b.innerHTML = '<span class="chip-icons" aria-hidden="true"><svg class="chip-play"><use href="#i-play"/></svg><svg class="chip-stop"><use href="#i-stop"/></svg></span><span class="chip-name"></span>';
-      b.querySelector(".chip-name").textContent = capName(name);
-      b.addEventListener("click", () => playSample(name));
-      return b;
-    }));
-  }
-  for (const b of grid.children) {
+  const info = v.info || {};
+  for (const b of panel.paintVoiceGrid(grid, v, { onPlay: playSample })) {
     const name = b.dataset.voice;
     const state = sample.voice === name ? sample.state : "idle";
     b.dataset.state = state;
     b.setAttribute("aria-current", String(name === v.current));
-    b.setAttribute("aria-label", state === "playing" ? `Stop the ${capName(name)} sample` : state === "loading" ? `Loading the ${capName(name)} sample` : `Play a sample of ${capName(name)}${name === v.current ? " (current voice)" : ""}`);
+    const desc = info[name]?.description ? `: ${info[name].description}` : "";
+    b.setAttribute("aria-label", state === "playing" ? `Stop the ${capName(name)} sample` : state === "loading" ? `Loading the ${capName(name)} sample` : `Play a sample of ${capName(name)}${desc}${name === v.current ? " (current voice)" : ""}`);
     b.setAttribute("aria-busy", String(state === "loading"));
     b.disabled = !S.token;
   }
@@ -2896,6 +2892,19 @@ function renderPersonas() {
   el.personaVoice.checked = v.use_voice !== false;
   const cur = v.personas.find((p) => p.id === v.current);
   if (!S.personaBusy) el.personaHelp.textContent = cur?.description ? `${cur.description}${cur.voice ? ` Voice: ${capName(cur.voice)}.` : ""}` : PERSONA_HELP;
+  renderPickers();
+}
+
+/** The Settings voice and persona pickers (panel.paintListPicker), mirroring the hidden selects. */
+function renderPickers() {
+  if (S.voices) {
+    panel.paintListPicker(el.voicePicker, { groups: panel.voicePickerModel(S.voices), value: S.voices.current, disabled: el.voiceSelect.disabled, label: "Voice" },
+      { onChoose: (id) => { el.voiceSelect.value = id; chooseVoice(id); } });
+  }
+  if (S.personas) {
+    panel.paintListPicker(el.personaPicker, { groups: panel.personaPickerModel(S.personas, personaLabel), value: S.personas.current, disabled: el.personaSelect.disabled, label: "Persona" },
+      { onChoose: (id) => { el.personaSelect.value = id; choosePersona(id); } });
+  }
 }
 
 async function choosePersona(id) {
@@ -3277,7 +3286,7 @@ function openSettings() {
 el.settingsBtn.addEventListener("click", openSettings);
 // The persona chip opens Settings at the persona picker.
 el.personaChip.addEventListener("click", () => {
-  if (openSettings()) requestAnimationFrame(() => el.personaSelect.focus());
+  if (openSettings()) requestAnimationFrame(() => (el.personaPicker.querySelector(".lp-button") || el.personaSelect).focus());
 });
 el.settingsClose.addEventListener("click", () => el.settings.close());
 el.settings.addEventListener("close", () => {

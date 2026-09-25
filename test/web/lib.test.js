@@ -782,3 +782,21 @@ test("footer devices: System default first, the check, the fallback, the labels 
   assert.equal(lib.isHeadphonesLabel("AirPods Pro"), true);
   assert.equal(lib.isHeadphonesLabel("MacBook Pro Speakers"), false);
 });
+
+test("voiceGroups: Feminine, Masculine, Androgynous from the daemon's info; plain names without it", async () => {
+  const { VOICES, VOICE_INFO } = await import("../../daemon/config.js");
+  const g = lib.voiceGroups({ voices: [...VOICES], info: JSON.parse(JSON.stringify(VOICE_INFO)) });
+  assert.deepEqual(g.map((x) => x.title), ["Feminine", "Masculine", "Androgynous"]);
+  assert.equal(g.flatMap((x) => x.items).length, VOICES.length, "every voice once");
+  const coral = g[0].items.find((i) => i.id === "coral");
+  assert.equal(coral.label, `Coral · ${VOICE_INFO.coral.tone} · ${VOICE_INFO.coral.accent}`);
+  assert.equal(coral.description, VOICE_INFO.coral.description);
+  // An older daemon: no info, one untitled group of names.
+  assert.deepEqual(lib.voiceGroups({ voices: ["ash", "marin"] }), [{ key: "other", title: "", items: [
+    { id: "ash", name: "Ash", tone: "", description: "", label: "Ash" },
+    { id: "marin", name: "Marin", tone: "", description: "", label: "Marin" }] }]);
+  // A voice the table lacks goes last, under "Other".
+  const p = lib.voiceGroups({ voices: ["ash", "newvoice"], info: { ash: { tone: "Clear", presentation: "masculine", accent: "American" } } });
+  assert.deepEqual(p.map((x) => [x.title, x.items.map((i) => i.id)]), [["Masculine", ["ash"]], ["Other", ["newvoice"]]]);
+  assert.deepEqual(lib.voiceGroups(null), []);
+});

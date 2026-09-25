@@ -7,7 +7,7 @@ import path from "node:path";
 import http from "node:http";
 import { readPrefs, writePrefs, resolveVoice, normalizeVoice, voiceListMessage, unknownVoiceMessage } from "../../daemon/prefs.js";
 import { dataPaths } from "../../daemon/paths.js";
-import { VOICES } from "../../daemon/config.js";
+import { VOICES, VOICE_INFO } from "../../daemon/config.js";
 import { voiceSwitchGreeting, TEMPLATE, VOICE_HISTORY_END } from "../../daemon/prompt.js";
 import { makeHarness, SESSION } from "../helpers/daemon-harness.js";
 
@@ -254,7 +254,7 @@ test("GET /api/voices and POST /api/voice: page-token auth, validation, live swi
   assert.equal((await request(h.port, { path: "/api/voices", headers: { "X-Sotto-Key": h.d.daemonKey } })).status, 403, "the daemon key is not a page token");
   let r = await request(h.port, { path: "/api/voices", headers: page });
   assert.equal(r.status, 200);
-  assert.deepEqual(r.json, { voices: [...VOICES], current: "marin", live: false, live_voice: null });
+  assert.deepEqual(r.json, { voices: [...VOICES], current: "marin", live: false, live_voice: null, info: JSON.parse(JSON.stringify(VOICE_INFO)) });
   r = await request(h.port, { path: `/api/voices?token=${h.d.pageToken}` });
   assert.equal(r.status, 200);
 

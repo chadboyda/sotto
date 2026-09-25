@@ -379,7 +379,7 @@ test("commands: each gets exactly one result; errors use the HTTP codes; key_sav
   assert.equal((await send("set_persona", { persona: 7 })).error.code, "bad_persona");
   assert.deepEqual((await send("set_persona", { use_voice: false })).data, { use_voice: false });
   assert.deepEqual((await send("set_persona", { use_voice: true })).data, { use_voice: true });
-  assert.deepEqual(Object.keys((await send("get_voices", {})).data), ["voices", "current", "live", "live_voice"]);
+  assert.deepEqual(Object.keys((await send("get_voices", {})).data), ["voices", "current", "live", "live_voice", "info"]);
   assert.equal((await send("set_window", { mode: "chrome" })).data.window, "chrome");
   assert.equal((await send("set_window", { mode: "tv" })).error.code, "bad_window");
   const ks = await send("key_save", { key: "not-a-key" });
