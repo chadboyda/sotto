@@ -3,7 +3,7 @@
 import fs from "node:fs";
 import path from "node:path";
 
-export const VERSION = "0.4.6";
+export const VERSION = "0.4.7";
 export const NAME = "sotto";
 export const LIVE_MODEL = "gpt-live-1";
 export const DEFAULT_PORT = 47821;

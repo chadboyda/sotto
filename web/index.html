@@ -292,6 +292,17 @@
       <p class="field-help">How readily your voice wakes a sleeping session. Nothing is sent or billed until it wakes.</p>
     </div>
     <div class="field">
+      <label class="field-label" for="cap-select">Daily limit</label>
+      <select id="cap-select">
+        <option value="0">Unlimited</option>
+        <option value="60">1 hour</option>
+        <option value="120" selected>2 hours</option>
+        <option value="240">4 hours</option>
+        <option value="480">8 hours</option>
+      </select>
+      <p class="field-help">Voice time allowed per day. At the limit the voice pauses; you get a spoken heads-up at 80 %.</p>
+    </div>
+    <div class="field">
       <span class="field-label" id="theme-label">Appearance</span>
       <div class="segmented" role="radiogroup" aria-labelledby="theme-label" id="theme">
         <button type="button" role="radio" data-theme-choice="system" aria-checked="true">System</button>

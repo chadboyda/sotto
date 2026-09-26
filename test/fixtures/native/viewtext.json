@@ -5172,7 +5172,7 @@
     "secondary": false,
     "kind": "cap",
     "title": "Paused: today's voice limit is reached",
-    "body": "You've used today's 2 hours of voice. Raise daily_cap_minutes in /config (sotto) to continue today."
+    "body": "You've used today's 2 hours of voice. Set Daily limit to Unlimited in Settings (or run sotto cap off) to continue today."
    },
    "header": {
     "detail": null,
@@ -5196,7 +5196,7 @@
     "secondary": false,
     "kind": "cap",
     "title": "Paused: today's voice limit is reached",
-    "body": "You've used today's 2 hours of voice. Raise daily_cap_minutes in /config (sotto) to continue today."
+    "body": "You've used today's 2 hours of voice. Set Daily limit to Unlimited in Settings (or run sotto cap off) to continue today."
    }
   ],
   "out": {

@@ -261,9 +261,9 @@ test("pageView: paused keeps the SPEC strings; daily cap has no Resume", () => {
   assert.equal(cap.card.title, "Paused: today's voice limit is reached");
   assert.equal(cap.card.button, null);
   assert.equal(cap.header.label, "Limit reached");
-  assert.equal(cap.card.body, "Raise daily_cap_minutes in /config (sotto) to continue today.");
+  assert.equal(cap.card.body, "Set Daily limit to Unlimited in Settings (or run sotto cap off) to continue today.");
   const cap2 = lib.pageView({ phase: "idle", state: "paused", lastError: { code: "daily_cap" }, capMinutes: 120 });
-  assert.equal(cap2.card.body, "You've used today's 2 hours of voice. Raise daily_cap_minutes in /config (sotto) to continue today.");
+  assert.equal(cap2.card.body, "You've used today's 2 hours of voice. Set Daily limit to Unlimited in Settings (or run sotto cap off) to continue today.");
   const sleeping = lib.pageView({ phase: "idle", state: "sleeping" });
   assert.equal(sleeping.floor, "sleeping");
 });

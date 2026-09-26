@@ -144,6 +144,7 @@ export class Mirror {
    *   send({content, msgId}) → Promise<{ok, code?}>   inbox write, priority "later"
    *   sent({text, content, lines, dropped, ok})      after the write (log, note to the model)
    *   vocabularyHint(text) → one-line note or null    (optional)
+   *   micCheck({text, at}) a mic check was heard (not mirrored); `at` = wall time of its last words (optional)
    * @param {object} [o.log]
    */
   constructor({ clock, transcript, delegation, effects, log }) {
@@ -201,6 +202,7 @@ export class Mirror {
     const awaiting = !!this.fx.awaiting?.();
     const kept = [];
     const dropped = {};
+    let mic = null; // the latest mic check: the voice answers it (voice.js answerMicCheck)
     for (const line of groupFragments(frags)) {
       const members = frags.filter((f) => f.start_ms >= line.start_ms && f.end_ms <= line.end_ms);
       // Echo of the assistant (§6.8.1): a line that is all echo is dropped;
@@ -211,8 +213,12 @@ export class Mirror {
       if (e.verdict === "partial") dropped.echo_words = (dropped.echo_words || 0) + e.echoWords + e.phraseWords;
       if (mirrorWants(cls, mode)) kept.push({ text, line });
       else dropped[cls] = (dropped[cls] || 0) + 1;
+      if (cls === "mic_check") mic = { text, at: members.reduce((m, f) => Math.max(m, f.at || 0), 0) };
     }
     this.checkedMs = endMs;
+    // Never silently: a mic check is not Claude's business, but the user must get
+    // an answer (live 2026-09-25: "I'm here / Do you hear me? / Hello?" got 30 s of silence).
+    if (mic) { try { this.fx.micCheck?.(mic); } catch { /* ignore */ } }
     if (!kept.length) {
       // Nothing worth a Claude turn. The words stay unconsumed, so a later
       // delegation still carries them as context (its 90 s lookback).

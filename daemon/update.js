@@ -102,7 +102,7 @@ export function updateTimings(env = {}) {
  * @param {string} o.root
  * @param {object} o.clock
  * @param {object} o.log
- * @param {(quietMs:number) => string|null} o.isQuiet   null = quiet now, else the reason not to
+ * @param {(quietMs:number, o:{manual:boolean}) => string|null} o.isQuiet   null = quiet now, else the reason not to
  * @param {(r:{reason:string, from:object, to:object}) => Promise<{ok:boolean, code?:string}>} o.restart
  */
 export class Updater {
@@ -174,7 +174,7 @@ export class Updater {
   /** `/talk restart`. Returns "now" when it is quiet right away, else the reason it waits. */
   requestManual() {
     this.manual = true;
-    const why = this.isQuiet(MANUAL_QUIET_MS);
+    const why = this.isQuiet(MANUAL_QUIET_MS, { manual: true });
     this.startQuietPoll();
     if (!why) { this.clock.setTimeout(() => this.tryRestart(), 0); return "now"; }
     return why;
@@ -195,7 +195,7 @@ export class Updater {
     const auto = !!this.pending?.due;
     if (!auto && !this.manual) { this.stopQuietPoll(); return false; }
     const quietMs = this.manual ? MANUAL_QUIET_MS : this.quietMs;
-    const why = this.isQuiet(quietMs);
+    const why = this.isQuiet(quietMs, { manual: this.manual });
     if (why) {
       if (why !== this.lastBlock) this.log?.info("update.waiting", { why, manual: this.manual });
       this.lastBlock = why;

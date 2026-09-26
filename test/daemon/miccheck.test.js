@@ -112,3 +112,24 @@ test("daemon: cant_hear while not live is only logged", async (t) => {
   h.voice.handlePage({ type: "cant_hear", kind: "silent", input_label: "x" });
   assert.equal(h.log.find("page.cant_hear").length, 1);
 });
+
+// Live 2026-09-25: after the can't-hear line, "I'm here. Do you hear me? Hello? I see
+// you hearing me. Why aren't you responding" was transcribed, not mirrored (a mic
+// check) and not answered for 30 s. A mic check the voice leaves unanswered is answered.
+test("an unanswered mic check gets a spoken answer; an answered one does not", async (t) => {
+  const h = await makeHarness();
+  t.after(() => h.cleanup());
+  const ws = await h.goLive();
+  const before = appends(ws, "commentary").length;
+  ws.receive({ type: "session.input_transcript.delta", delta: " Do you hear me? Hello?", start_ms: 1000, end_ms: 2200 });
+  await h.clock.advance(7000);
+  const said = appends(ws, "commentary").slice(before);
+  assert.deepEqual(said.map((e) => e.content), ["Yes, I can hear you."]);
+  assert.ok(h.log.entries.some((e) => e.ev === "mic_check.answer"));
+  // Answered by the model itself: nothing more.
+  ws.receive({ type: "session.input_transcript.delta", delta: " Can you hear me?", start_ms: 20000, end_ms: 21000 });
+  await h.clock.advance(500);
+  ws.receive({ type: "session.output_transcript.delta", delta: "Yes, loud and clear.", start_ms: 21500, end_ms: 22500 });
+  await h.clock.advance(7000);
+  assert.equal(appends(ws, "commentary").slice(before).length, 1);
+});

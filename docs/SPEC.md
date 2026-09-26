@@ -247,6 +247,8 @@ The settings drawer shows `Key ending in <hint>` with its source, **Change** (wh
 | `SOTTO_DAEMON_ENTRY` | toggle.sh | Daemon entry file (default `$ROOT/daemon/index.js`); tests point it at a stub |
 
 ### 4.5 Voice preference (`D/prefs.json`)
+**Daily limit:** `D/prefs.json` `daily_cap_minutes` (0 = unlimited, 1-1440), set by `sotto cap` / `/talk cap` and the window's Settings "Daily limit", beats the `daily_cap_minutes` userConfig (default 120) and applies at once (`voice.capMinutes()`); `/status` `today.cap_minutes` is the limit in effect. The cap messages point to Settings and `sotto cap off`, and the voice delegates "turn off the limit" to Claude, who runs it.
+
 The user can change the voice without `/config`: `/talk voice <name>` (§5.7), the CLI `sotto voice <name>` (§5.9, which Claude runs when the user asks by voice), or the page (`POST /api/voice`, §6.4). All three persist the choice in `D/prefs.json`.
 
 **Precedence** for the voice of every new Live session: `D/prefs.json` > userConfig `voice` (`CLAUDE_PLUGIN_OPTION_VOICE`, sent by toggle.sh as `config.voice`) > `marin`. Invalid values at any level are skipped. The daemon re-reads `prefs.json` on every `/control on`/`toggle`, so an edit made while no daemon ran is picked up. Implemented by `resolveVoice()` in `daemon/prefs.js` and mirrored in toggle.sh.
@@ -510,6 +512,8 @@ Claude Code adds a plugin's `bin/` to the Bash tool's `PATH` (plugins-reference.
 | `sotto persona <name>` | Set the persona (§4.6); if a Live session is running, switch it now. Confirmed like `sotto voice`; the daemon logs `persona.set` with `via: "cli"` | 0, or 1 for an unknown persona or any `ERROR` |
 | `sotto status` | Same as `/talk status` | 0 |
 | `sotto restart` | Same as `/talk restart` (§6.17) | 0 |
+| `sotto cap` | Print the daily voice limit and today's use | 0 |
+| `sotto cap off\|unlimited\|<minutes>\|<hours>h` | Set the daily voice limit (`D/prefs.json` `daily_cap_minutes`, 0 = unlimited, 1-1440; beats the `daily_cap_minutes` userConfig). A running daemon applies it at once (`/control {"action":"cap","cap":…}`); a voice paused on the limit resumes when it no longer applies. Same as `/talk cap …` | 0, or 1 for an invalid value |
 | anything else | usage on stderr | 2 |
 
 - **Implementation:** it runs `scripts/toggle.sh` with a synthesized UserPromptExpansion input (`{"command_args":"voice <name>","cwd":"<$PWD>"}`; the cwd lets `persona` find the project's personas), so the CLI and `/talk voice` share one code path. It prints the `stopReason` as one plain line, except `sotto voice` with no name, which prints the list one voice per line with its `VOICE_INFO` description (`  <name>  <tone> · <presentation> · <accent>`, the current one marked `(current)`), between a `sotto: voice is <v>. Voices:` header and `Change it with sotto voice <name>.`
@@ -698,6 +702,7 @@ Messages are in §9.2.
 | `stop` | | Same as `/control off` |
 | `set_policy` | `policy` | Same as `/control policy` |
 | `set_wake` | `sensitivity` | Runtime wake sensitivity (`off|low|medium|high`); `off` while `sleeping` → `paused` (§6.15) |
+| `set_cap` | `minutes` | The daily voice limit (`voice.setCap`, as `sotto cap`; 0 = unlimited). Settings' "Daily limit" (Unlimited, 1, 2, 4, 8 hours) |
 | `wake_audio` | `session_id`, `audio` (base64 16 kHz PCM16 mono WAV), `clip_ms` | The words spoken before a `wake` session was live: transcribe and inject (§6.15). Sent without `keepalive` (clips exceed its 64 KB limit). |
 | `wake_timing` | numeric `*_ms` fields | Wake latency report; logged as `wake.timing` |
 | `echo` | `kind` (`leak`/`guard`/`test`), `level`, `leak_db`, `corr`, `lag_ms`, `speech_s`, `engaged`, `reason`, `mode`, `output`, `aec`, `attenuated_pct`, `results` | Echo measurement, guard changes and echo-test results (§7.7): logged as `echo.<kind>` (numbers rounded, strings clipped), the latest of each kept as `/status` `echo` |
@@ -1235,7 +1240,7 @@ The daemon picks up new code on its own, at a moment the user will not notice, a
 
 **Quiet moment** (`Voice.restartBlocker(quietMs)`, null = go). Required: an owner is bound; the state is `sleeping` or `paused` (quiet at once), or `live` with nobody speaking for 45 s: the last user and assistant transcript, the page's local voice activity, our last append and the session start all count; no delegation collecting or with Claude (`pendingWork`), Claude not mid-turn (`claudeBusy`), nothing in the speech queue or the wake queue, no API key check (`POST /api/key`) and no voice sample recording (`GET /api/voice-preview`) in flight (the page waits on those answers, and a sample's billed seconds are booked when it closes). Other states (`waiting_page`, `connecting`, `reconnecting`, `closing`, `off`) never restart. While due, quiet is re-checked every 2 s (no file access); each new reason to wait is logged once (`update.waiting`). With the default 60 s idle sleep, a quiet live session restarts between 45 and 60 s of silence, otherwise right after it falls asleep.
 
-**`/talk restart`** (`/control {"action":"restart"}`, `sotto restart`): the same swap, whether or not the code changed, once there are 3 s of quiet (same other conditions). Messages in §9.2.
+**`/talk restart`** (`/control {"action":"restart"}`, `sotto restart`): the same swap, whether or not the code changed, once there are 3 s of quiet (same other conditions, except that a voice request already with Claude and Claude working do not hold it: only one the model is still collecting does; Claude's answer reaches the successor as a normal turn result). Messages in §9.2.
 
 **The swap** (`performRestart`):
 1. **Preflight:** `<runtime> daemon/index.js --preflight` must exit 0 (every module is a static import, so this proves the new code parses and links; ~50 ms). A failure is logged with the error line (`update.preflight`, `update.failed`) and that hash is not tried again until the sources change. Voice is never touched.
@@ -1256,7 +1261,7 @@ The daemon picks up new code on its own, at a moment the user will not notice, a
 **Rule.** `MIRROR_QUIET_MS` = 6000 ms after the user's last input-transcript delta (re-armed by every delta), while a Live session is attached:
 1. If a delegation is `collecting`, look again in 1 s (the delegation takes the words).
 2. Take the user fragments after `max(consumedThroughMs, checkedMs)`, grouped into lines (1500 ms). Classify each line (`classifyLine`): `noise` (no letters, or ≤ 3 words with no Latin letter or digit), `filler` (≤ 8 words, all backchannels or function words: "okay, cool", "thanks", "what was"), `mic_check` (≤ 24 words with a mic-check anchor, "hello", "testing", "can you hear", "is this working", "are you there", "hearing my voice", and every word from the mic-check vocabulary or filler: "Hello? Hello? Wow, it's like barely working"; "the build is barely working" stays a decision), `voice_only` (≤ 12 words starting with a request about the voice itself: "slow down", "repeat that", "can you say something", "be quiet"), `fragment` (≤ 3 words and no decision word: a thought cut by a pause), `decision` (decisions, preferences, approvals, corrections, feedback and requests, by keyword: "agree", "pick", "let's", "we should", "I'm fine", "bug", "cut off", "let me know", "can you", "name", …), else `other`. A line of ≥ 3 words that is an echo of the assistant is `echo`. While Claude awaits an answer (§6.10.3), a line of ≤ 4 words with yes/no/okay/sure/fine is a `decision`.
-3. Mode `all` keeps `decision` and `other`; `decisions` keeps `decision`; `off` never runs. `checkedMs` advances to the newest fragment either way.
+3. Mode `all` keeps `decision` and `other`; `decisions` keeps `decision`; `off` never runs. A `mic_check` is never mirrored but never ignored either: if the voice has said nothing since it (`transcript.lastAssistantSpeechAt`) and is not speaking, `voice.answerMicCheck` sends `commentary.append(null, "Yes, I can hear you.")` (log `mic_check.answer`). `checkedMs` advances to the newest fragment either way.
 4. Nothing kept: nothing is sent and the words stay unconsumed (a later request still carries them within its 90 s lookback).
 5. Otherwise: `consumedThroughMs` advances to the newest fragment **before** the write (a delegation settling meanwhile cannot re-send them), and one inbox message goes out with `priority:"later"` and `msg_id` `clv-mirror-<n>`:
    ```
@@ -1439,6 +1444,7 @@ Delegate to the backend when:
 - A correction or addition changes a request already handed off.
 - The user asks how the work is going and the latest update you have does not answer it.
 - The user asks you to switch to a different voice or persona, for example "use the cedar voice" or "switch to the Moss persona".
+- The user asks to change or turn off the daily voice limit, for example "turn off the limit" or "make it unlimited" (Claude Code sets it with its sotto cap command).
 - You are not sure whether it is for Claude Code. When in doubt, delegate. Greetings and mic checks are never in doubt: answer them yourself.
 
 Do not delegate to the backend when:
@@ -1539,7 +1545,7 @@ The earlier voice conversation follows as user and assistant messages, oldest fi
 | key, have one | `sotto: using the OpenAI API key ending in <hint> from <the macOS Keychain | the plugin settings | the OPENAI_API_KEY environment variable | <.env path>>.` + ` Change or remove it in the voice window settings.` / ` Change it where OPENAI_API_KEY is exported.` / ` Change it in that file.` |
 | key, none | `sotto: no OpenAI API key found.` + the window sentence above |
 | key, `setup` | `sotto: API keys are never read from /talk arguments (what you typed stays in your prompt history; rotate the key if it was real).` + the window sentence |
-| on, cap reached | `sotto: daily voice cap reached (<N> min). Raise daily_cap_minutes in /config to continue.` |
+| on, cap reached | `sotto: daily voice cap reached (<N> min). Run \`sotto cap off\` (or pick Daily limit: Unlimited in the voice window) to continue.` |
 | off | `sotto: voice OFF. <m> min today ($<$>).` |
 | off, already off | `sotto: voice is already off.` |
 | status, off | `sotto: voice is off. <m> min today ($<$>).` |

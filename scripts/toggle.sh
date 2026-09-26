@@ -95,6 +95,9 @@ case "$ARG" in
   app)                          ACTION=app ;;
   window|windows)               ACTION=window
                                 WINDOW_ARG="$(printf '%s' "$ARG2" | tr '[:upper:]' '[:lower:]')" ;;
+  # /talk cap [off|unlimited|<minutes>|<hours>h]: the daily voice limit (prefs.json).
+  cap|limit)                    ACTION=cap
+                                CAP_ARG="$(printf '%s' "$ARG2" | tr '[:upper:]' '[:lower:]')" ;;
   # /talk key shows where the API key comes from. Anything typed after it
   # (or a bare /talk sk-...) is never read: it opens the setup window instead.
   key|keys|apikey|api-key|api_key)
@@ -106,7 +109,7 @@ esac
 shopt -u nocasematch
 
 if [[ "$ACTION" == usage ]]; then
-  finish "sotto: usage: /talk [on|off|status|restart|quiet|milestones|walkthrough|voice [name]|persona [name]|app|window [auto|app|chrome]|key]"
+  finish "sotto: usage: /talk [on|off|status|restart|quiet|milestones|walkthrough|voice [name]|persona [name]|app|window [auto|app|chrome]|cap [off|<minutes>]|key]"
 fi
 
 # --- config (SPEC §4.1/§4.2); unset, empty or invalid -> default ---------------
@@ -195,6 +198,11 @@ pref_persona_voice() { # prints true/false when prefs.json sets persona_voice, e
   [[ -r "$PREFS" ]] && p="$(<"$PREFS")"
   if [[ "$p" =~ $re ]]; then printf '%s' "${BASH_REMATCH[1]}"; fi
 }
+pref_cap() { # prints the daily limit (minutes, 0 = unlimited) from prefs.json, or nothing
+  local p="" re='"daily_cap_minutes"[[:space:]]*:[[:space:]]*([0-9]+)'
+  [[ -r "$PREFS" ]] && p="$(<"$PREFS")"
+  if [[ "$p" =~ $re ]] && (( 10#${BASH_REMATCH[1]} <= 1440 )); then printf '%s' "$((10#${BASH_REMATCH[1]}))"; fi
+}
 pref_window() { # prints the valid window mode from prefs.json, or nothing
   local p="" re='"window"[[:space:]]*:[[:space:]]*"([a-z]+)"'
   [[ -r "$PREFS" ]] && p="$(<"$PREFS")"
@@ -202,7 +210,8 @@ pref_window() { # prints the valid window mode from prefs.json, or nothing
 }
 # write_prefs VOICE WINDOW [PERSONA [PERSONA_VOICE]]: rewrite prefs.json (any may be empty).
 # Without a PERSONA argument the saved persona is kept; persona_voice is kept
-# unless PERSONA_VOICE (true/false) is given.
+# unless PERSONA_VOICE (true/false) is given; the daily limit is kept unless
+# CAP_NEW is set.
 write_prefs() {
   local body="" persona pv
   if (( $# >= 3 )); then persona=$3; else persona="$(pref_persona)"; fi
@@ -211,6 +220,8 @@ write_prefs() {
   [[ -n "$2" ]] && body="${body:+$body,}\"window\":\"$2\""
   [[ -n "$persona" ]] && body="${body:+$body,}\"persona\":\"$persona\""
   [[ -n "$pv" ]] && body="${body:+$body,}\"persona_voice\":$pv"
+  local cap="${CAP_NEW:-$(pref_cap)}"
+  [[ -n "$cap" ]] && body="${body:+$body,}\"daily_cap_minutes\":$cap"
   printf '{%s}\n' "$body" > "$PREFS.tmp" && chmod 600 "$PREFS.tmp" && mv -f "$PREFS.tmp" "$PREFS"
 }
 
@@ -338,6 +349,28 @@ persona_local() {
   finish "sotto: persona set to $PERSONA_ARG${v:+ with the $v voice}. It applies to the next voice session."
 }
 # voice_local: /talk voice with no daemon of ours to ask (exits).
+# cap_minutes WORD: prints the limit in minutes (0 = unlimited), fails when invalid (daemon/prefs.js normalizeCap).
+cap_minutes() {
+  local s=$1 n
+  case "$s" in off|unlimited|none|no|never) printf '0'; return 0 ;; esac
+  if [[ "$s" =~ ^([0-9]{1,4})(h|hr|hrs|hour|hours)$ ]]; then n=$((10#${BASH_REMATCH[1]} * 60))
+  elif [[ "$s" =~ ^([0-9]{1,4})(m|min|mins|minute|minutes)?$ ]]; then n=$((10#${BASH_REMATCH[1]}))
+  else return 1; fi
+  (( n <= 1440 )) || return 1
+  printf '%s' "$n"
+}
+cap_label() { if [[ "$1" == 0 ]]; then printf 'unlimited'; elif (( $1 % 60 == 0 )); then printf '%s h' "$(( $1 / 60 ))"; else printf '%s min' "$1"; fi; }
+# cap_local: /talk cap with no daemon of ours to ask (exits).
+cap_local() {
+  local cur n
+  cur="$(pref_cap)"; [[ -n "$cur" ]] || cur="$CFG_CAP"
+  [[ -z "$CAP_ARG" ]] && finish "sotto: daily voice limit $(cap_label "$cur"). Set it with \`sotto cap off|<minutes>|<hours>h\`."
+  n="$(cap_minutes "$CAP_ARG")" || finish "sotto: ERROR the daily limit is off (unlimited), or minutes from 1 to 1440 (e.g. \`sotto cap 240\` or \`sotto cap 4h\`)."
+  CAP_NEW="$n" write_prefs "$(pref_voice)" "$(pref_window)" \
+    || fail prefs_write "sotto: ERROR could not save the daily limit to $PREFS."
+  if [[ "$n" == 0 ]]; then finish "sotto: daily voice limit off (unlimited)."; fi
+  finish "sotto: daily voice limit set to $(cap_label "$n") a day."
+}
 voice_local() {
   local cur own pv=""
   cur="$(effective_voice)"
@@ -442,6 +475,7 @@ if [[ -n "$H" ]]; then
     fi
     [[ "$ACTION" == persona ]] && persona_local
     [[ "$ACTION" == window ]] && window_local
+    [[ "$ACTION" == cap ]] && cap_local
     if [[ "$ACTION" == on || "$ACTION" == toggle || "$ACTION" == app ]]; then
       # Replace it with ours: ask it to shut down, wait for the port, then spawn.
       OKEY=""; [[ -r "$KEYFILE" ]] && OKEY="$(<"$KEYFILE")"
@@ -486,6 +520,7 @@ daemon_down() {
     voice)      voice_local ;;
     persona)    persona_local ;;
     window)     window_local ;;
+    cap)        cap_local ;;
   esac
   # on/toggle/app/key continue: key needs a daemon to serve the setup window.
 }
@@ -614,6 +649,11 @@ if [[ ( "$ACTION" == voice && -n "$VOICE_ARG" ) || ( "$ACTION" == persona && -n 
   CTL_MAX_S=8
 fi
 [[ "$ACTION" == window && -n "$WINDOW_ARG" ]] && BODY+=",\"window\":\"$WINDOW_ARG\""
+if [[ "$ACTION" == cap && -n "$CAP_ARG" ]]; then
+  [[ "$CAP_ARG" =~ ^[a-z0-9]{1,12}$ ]] || finish "sotto: ERROR the daily limit is off (unlimited), or minutes from 1 to 1440 (e.g. \`sotto cap 240\` or \`sotto cap 4h\`)."
+  BODY+=",\"cap\":\"$CAP_ARG\""
+  [[ "$SOTTO_VIA" == cli ]] && BODY+=",\"via\":\"cli\""
+fi
 [[ "$ACTION" == key && -n "$KEY_SETUP" ]] && BODY+=",\"setup\":true"
 BODY+=",\"session\":{$SESSION}"
 IDLE_JSON=""

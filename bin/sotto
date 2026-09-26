@@ -11,6 +11,8 @@
 #   sotto restart          same as /talk restart (reload the daemon's code)
 #   sotto window [mode]    same as /talk window (auto, app or chrome)
 #   sotto app              same as /talk app (install and use the desktop app)
+#   sotto cap              the daily voice limit and today's use
+#   sotto cap off|<min>|<h>h  set it (off = unlimited; applies at once)
 #   sotto debug capture on|off|status
 #                          record the app mic's raw and uplink audio as WAVs
 #                          in <data dir>/debug for 10 minutes at most (off
@@ -33,7 +35,7 @@ done
 ROOT="$(cd "${SELF%/*}/.." && pwd)"
 
 usage() {
-  printf 'usage: sotto voice [name] | sotto persona [name] | sotto status | sotto restart | sotto window [auto|app|chrome] | sotto app | sotto debug capture on|off|status\n' >&2
+  printf 'usage: sotto voice [name] | sotto persona [name] | sotto status | sotto restart | sotto window [auto|app|chrome] | sotto app | sotto cap [off|<minutes>|<hours>h] | sotto debug capture on|off|status\n' >&2
   exit 2
 }
 
@@ -44,6 +46,7 @@ case "$1" in
   restart)      ARGS="restart" ;;
   window|windows) ARGS="window${2:+ $2}" ;;
   app)          ARGS="app" ;;
+  cap|limit)    ARGS="cap${2:+ $2}" ;;
   debug)        [[ "$2" == capture && "$3" =~ ^(on|off|status)$ ]] || usage; ARGS="debug" ;;
   -h|--help|help|"") usage ;;
   *) usage ;;

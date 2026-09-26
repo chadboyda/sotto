@@ -16,7 +16,7 @@ import { Narrator, elicitationSpeech, serverName, ToolLine, AgentTracker, TopLev
 import { Approvals, commandFingerprint, findRunning } from "./approvals.js";
 import { SpeechQueue, COMMENTARY_PREROLL_MS } from "./speaker.js";
 import { renderForPolicy, buildSeedInput, greeting, ownerSwitchInstruction, voiceSwitchGreeting, personaSwitchGreeting, vocabularyUpdateInstruction, updateGreeting, cantHearInstruction, RECENT_GREETING_MS } from "./prompt.js";
-import { readPrefs, writePrefs, resolveVoice, normalizeVoice, voiceListMessage, unknownVoiceMessage, normalizeWindow, resolveWindowPref, personaVoiceOn } from "./prefs.js";
+import { readPrefs, writePrefs, normalizeCap, resolveCap, capLabel, resolveVoice, normalizeVoice, voiceListMessage, unknownVoiceMessage, normalizeWindow, resolveWindowPref, personaVoiceOn } from "./prefs.js";
 import { loadPersonas, findPersona, resolvePersona, personaSummary, personaListMessage, unknownPersonaMessage } from "./personas.js";
 import { collectVocabulary, renderVocabulary, vocabularyHint, TIER } from "./vocabulary.js";
 import { buildSessionBody, createLiveSession, Sideband } from "./live.js";
@@ -310,6 +310,7 @@ export class Voice {
         send: ({ content, msgId }) => this.inboxSend(content, msgId, "later"),
         sent: (r) => this.onMirrorSent(r),
         vocabularyHint: (text) => vocabularyHint(text, this.vocab.terms),
+        micCheck: (m) => this.answerMicCheck(m),
       },
     });
     this.statusFile = new StatusFileWriter({ paths: this.paths, clock: this.clock, get: () => this.status() });
@@ -343,10 +344,10 @@ export class Voice {
         session_id: this.live.id, started_at: iso(this.live.started_at), expires_at: this.live.expires_at,
         usage_seconds: this.live.usage_seconds, muted: this.live.muted,
       } : null,
-      today: { date: today, seconds: Math.round(this.todaySeconds() * 10) / 10, cap_minutes: this.config.daily_cap_minutes },
+      today: { date: today, seconds: Math.round(this.todaySeconds() * 10) / 10, cap_minutes: this.capMinutes() },
       config: {
         voice: this.config.voice, persona: this.personaIdForStatus(), idle_minutes: this.config.idle_minutes, idle_seconds: idleSecondsOf(this.config), speaking_policy: this.policy,
-        daily_cap_minutes: this.config.daily_cap_minutes, wake_sensitivity: this.config.wake_sensitivity, mirror: this.mirrorMode(),
+        daily_cap_minutes: this.capMinutes(), wake_sensitivity: this.config.wake_sensitivity, mirror: this.mirrorMode(),
         echo_guard: this.echoGuardMode(),
       },
       claude: { busy: this.delegation.claudeBusy, last_event_at: iso(this.lastClaudeEventAt), awaiting_input: !!this.awaiting, approval: this.approvalStatus() },
@@ -381,7 +382,7 @@ export class Voice {
       echo_heard_ms_ago: this.selfEchoAt ? this.clock.now() - this.selfEchoAt : null,
       wake: this.governor.pageConfig(this.config.wake_sensitivity, true),
       live: this.live ? { session_id: this.live.id, expires_at: this.live.expires_at, usage_seconds: this.live.usage_seconds, muted: this.live.muted } : null,
-      today: { seconds: Math.round(this.todaySeconds() * 10) / 10, cap_minutes: this.config.daily_cap_minutes },
+      today: { seconds: Math.round(this.todaySeconds() * 10) / 10, cap_minutes: this.capMinutes() },
       claude: { busy: this.delegation.claudeBusy, approval: this.approvalStatus() },
       last_error: this.lastError ? { code: this.lastError.code, message: this.lastError.message } : null,
       key: { ...this.keyInfo(), setup: this.keySetup },
@@ -466,6 +467,20 @@ export class Voice {
 
   // ---- outbound appends ------------------------------------------------------------
   /** Sink for every append: commentary is queued (§6.10.2), the rest goes out now. */
+  /**
+   * The mirror heard a mic check ("can you hear me?", "hello?") and did not
+   * pass it to Claude. If the voice has said nothing since, it answers now
+   * (a spoken commentary, never a silent drop; SPEC §6.18).
+   */
+  answerMicCheck({ text = "", at = 0 } = {}) {
+    if (!this.sideband || this.state !== "live") return;
+    const now = this.clock.now();
+    if ((this.transcript.lastAssistantSpeechAt || 0) >= at) return; // it answered
+    if (this.speech.isSpeaking(now)) return;
+    this.log.info("mic_check.answer", { chars: text.length, quiet_ms: now - at });
+    this.deliver({ kind: "commentary", content: "Yes, I can hear you.", delegationId: null });
+  }
+
   deliver(action) {
     if (action.kind === "commentary") { this.speech.enqueue(action); return; }
     this.sendAppend(action);
@@ -685,6 +700,7 @@ export class Voice {
       case "restart": r = this.manualRestart(); break;
       case "key": r = this.keyControl(req); break;
       case "window": r = this.setWindow(req.window); break;
+      case "cap": r = req.cap == null || req.cap === "" ? { ok: true, message: this.capMessage() } : this.setCap(req.cap, via); break;
       case "app": r = this.appControl(req); break;
       case "shutdown": {
         this.gracefulOff("shutdown");
@@ -737,6 +753,40 @@ export class Voice {
     out.state = this.state;
     out.message = ok ? c.done : `sotto: ERROR ${c.what} is saved, but the live session did not switch to it within ${CONFIRM_MS / 1000} s (state ${this.state}). See the daemon log.`;
     return out;
+  }
+
+  capMessage() {
+    const cap = this.capMinutes();
+    return `sotto: daily voice limit ${capLabel(cap)}; ${fmtUsage(this.todaySeconds())}. Set it with \`sotto cap off|<minutes>|<hours>h\`.`;
+  }
+
+  /**
+   * The daily limit (SPEC §4.5): saved in prefs.json (beats userConfig) and in
+   * effect at once. A voice paused on the limit resumes when it no longer applies.
+   */
+  setCap(value, via = "control") {
+    const cap = normalizeCap(value);
+    if (cap === null) return { ok: false, message: "sotto: ERROR the daily limit is off (unlimited), or minutes from 1 to 1440 (e.g. `sotto cap 240` or `sotto cap 4h`)." };
+    try { writePrefs(this.paths, { daily_cap_minutes: cap }); } catch (e) {
+      this.log.error("prefs.write_error", { message: e.message });
+      return { ok: false, message: `sotto: ERROR could not save the daily limit to ${this.paths.prefs}.` };
+    }
+    this.log.info("cap.set", { cap_minutes: cap, via });
+    this.capWarnedDate = null;
+    let resumed = false;
+    if (this.lastError?.code === "daily_cap" && !this.capReached()) {
+      this.lastError = null;
+      if (this.owner && (this.state === "paused" || this.state === "waiting_page")) {
+        this.setState("waiting_page");
+        if (this.appAttached()) this.startNativeSession("start");
+        else this.command("connect", "cap");
+        this.timer("waitingPage", () => this.onPageTimeout(), WAITING_PAGE_MS);
+        resumed = true;
+      }
+    }
+    this.changed();
+    const what = cap ? `set to ${capLabel(cap)} a day` : "off (unlimited)";
+    return { ok: true, cap, message: `sotto: daily voice limit ${what}; ${fmtUsage(this.todaySeconds())}.${resumed ? " Voice resumes." : ""}` };
   }
 
   statusMessage() {
@@ -885,7 +935,7 @@ export class Voice {
     if (this.capReached()) {
       this.setLastError("daily_cap", "Daily voice cap reached");
       if (!hasLive) this.setState("paused");
-      return { ok: false, message: `sotto: daily voice cap reached (${this.config.daily_cap_minutes} min). Raise daily_cap_minutes in /config to continue.` };
+      return { ok: false, message: `sotto: daily voice cap reached (${this.capMinutes()} min). Run \`sotto cap off\` (or pick Daily limit: Unlimited in the voice window) to continue.` };
     }
     if (this.lastError && (this.lastError.code === "no_api_key" || this.lastError.code === "daily_cap")) this.lastError = null;
 
@@ -1107,7 +1157,7 @@ export class Voice {
     if (cachedOnly && !this.previews.has(v)) return { status: 404, body: { error: { code: "not_cached", message: "No sample of this voice has been recorded yet." } } };
     if (!this.previews.has(v)) {
       if (!this.getApiKey()) return { status: 503, body: { error: { code: "no_api_key", message: "OPENAI_API_KEY was not found." } } };
-      if (this.capReached()) return { status: 429, body: { error: { code: "daily_cap", message: `Daily voice cap reached (${this.config.daily_cap_minutes} min).` } } };
+      if (this.capReached()) return { status: 429, body: { error: { code: "daily_cap", message: `Daily voice cap reached (${this.capMinutes()} min).` } } };
     }
     const r = await this.previews.get(v);
     this.log.info("preview.serve", { voice: v, ok: r.ok, cached: !!r.cached, bytes: r.wav ? r.wav.length : 0 });
@@ -1679,6 +1729,7 @@ export class Voice {
       case "stop": this.off("user"); break;
       case "set_policy": this.setPolicy(msg.policy); break;
       case "set_wake": this.setWakeSensitivity(msg.sensitivity); break;
+      case "set_cap": this.setCap(msg.minutes, "page"); break;
       case "wake_audio": this.onWakeAudio(msg).catch((e) => this.log.error("wake.error", { message: String(e && e.message) })); break;
       case "wake_timing": this.onWakeTiming(msg); break;
       case "echo": this.onPageEcho(msg); break;
@@ -1818,8 +1869,13 @@ export class Voice {
   }
 
   // ---- Live session creation (/api/session) --------------------------------------------
+  /** The daily limit in effect (minutes, 0 = unlimited): prefs.json (`sotto cap`, the window) > userConfig. */
+  capMinutes() {
+    return resolveCap({ prefs: readPrefs(this.paths), configCap: this.config.daily_cap_minutes });
+  }
+
   capReached() {
-    const cap = this.config.daily_cap_minutes;
+    const cap = this.capMinutes();
     return cap > 0 && this.todaySeconds() >= cap * 60;
   }
 
@@ -1864,7 +1920,7 @@ export class Voice {
    */
   async prepareSession(reason, wake, { gen = null } = {}) {
     if (!this.owner) return { ok: false, status: 409, body: { error: { code: "not_active", message: "Voice is not on. Run /talk on in Claude Code." } } };
-    if (this.capReached()) return { ok: false, status: 429, body: { error: { code: "daily_cap", message: `Daily voice cap reached (${this.config.daily_cap_minutes} min).` } } };
+    if (this.capReached()) return { ok: false, status: 429, body: { error: { code: "daily_cap", message: `Daily voice cap reached (${this.capMinutes()} min).` } } };
     const apiKey = this.getApiKey();
     if (!apiKey) {
       this.setLastError("no_api_key", "OPENAI_API_KEY was not found");
@@ -1952,7 +2008,7 @@ export class Voice {
       const code = p.body?.error?.code;
       this.log.info("session.native_skip", { reason, code });
       if (code === "daily_cap") {
-        this.setLastError("daily_cap", `Daily voice cap reached (${this.config.daily_cap_minutes} min)`);
+        this.setLastError("daily_cap", `Daily voice cap reached (${this.capMinutes()} min)`);
         if (this.owner && this.state !== "off" && this.state !== "closing") this.setState("paused");
       } else if (code === "no_api_key" && this.owner && this.state !== "off" && this.state !== "closing") {
         this.setState("paused");
@@ -2068,7 +2124,7 @@ export class Voice {
   /** cmd resume / wake (a user tap) from the app. */
   resumeFromApp(reason = "resume") {
     if (!this.owner || this.state === "off" || this.state === "closing") return { ok: false, code: "not_active", message: "Voice is not on. Run /talk on in Claude Code." };
-    if (this.capReached()) return { ok: false, code: "daily_cap", message: `Daily voice cap reached (${this.config.daily_cap_minutes} min).` };
+    if (this.capReached()) return { ok: false, code: "daily_cap", message: `Daily voice cap reached (${this.capMinutes()} min).` };
     if (this.sideband || this.state === "connecting" || this.state === "live") return { ok: true };
     this.startNativeSession(reason);
     return { ok: true };
@@ -2260,7 +2316,7 @@ export class Voice {
   }
 
   checkCap() {
-    const cap = this.config.daily_cap_minutes;
+    const cap = this.capMinutes();
     if (!cap) return;
     const used = this.todaySeconds();
     const date = localDate(this.clock.now());
@@ -2269,7 +2325,7 @@ export class Voice {
         this.capClosing = true;
         this.log.info("cap", { reached: true, seconds: used, cap_minutes: cap });
         this.setLastError("daily_cap", `Daily voice cap reached (${cap} min)`);
-        this.notice("warn", "daily_cap", `Daily voice cap reached (${cap} min). Raise daily_cap_minutes in /config to continue.`);
+        this.notice("warn", "daily_cap", `Daily voice cap reached (${cap} min). Run \`sotto cap off\` (or pick Daily limit: Unlimited in the voice window) to continue.`);
         this.pause("daily_cap").finally(() => { this.capClosing = false; });
       }
       return;
@@ -2625,14 +2681,21 @@ export class Voice {
    * appends count); no voice request with Claude, Claude not mid-turn, nothing
    * queued to be spoken, no key check or voice sample in flight. Never
    * mid-speech, never mid-delegation.
+   *
+   * `manual` (`sotto restart`): a request already with Claude does not hold it
+   * up, nor does Claude working: the user asked for the restart, often while
+   * talking to Claude about the voice, and the answer only arrives when that
+   * turn ends (live 2026-09-25: a restart waited 8 minutes on "delegation").
+   * Claude's answer reaches the successor as a normal turn result. Only a
+   * request the model is still putting together (collecting) holds it.
    */
-  restartBlocker(quietMs) {
+  restartBlocker(quietMs, { manual = false } = {}) {
     if (this.restarting) return "restarting";
     if (!this.owner) return "no_owner";
     const st = this.state;
     if (st !== "live" && st !== "sleeping" && st !== "paused") return `state_${st}`;
-    if (this.delegation.hasCollecting() || this.delegation.pendingWork().length > 0) return "delegation";
-    if (this.delegation.claudeBusy) return "claude_busy";
+    if (this.delegation.hasCollecting() || (!manual && this.delegation.pendingWork().length > 0)) return "delegation";
+    if (!manual && this.delegation.claudeBusy) return "claude_busy";
     if (this.wakeQueue.length || this.timers.notifyWatch) return "wake_queue";
     if (this.speech.size > 0) return "speech_queued";
     // The page is waiting on these answers; a swap would drop the request

@@ -196,9 +196,22 @@ test("daily cap: warning at 80 %, close at 100 %, then 429 and the cap message",
   assert.equal(h.voice.status().today.seconds, 601);
   const r = await h.voice.createSession({ sdp: "x" });
   assert.deepEqual([r.status, r.body.error.code], [429, "daily_cap"]);
-  assert.equal(h.on().message, "sotto: daily voice cap reached (10 min). Raise daily_cap_minutes in /config to continue.");
+  assert.equal(h.on().message, "sotto: daily voice cap reached (10 min). Run `sotto cap off` (or pick Daily limit: Unlimited in the voice window) to continue.");
   const usage = JSON.parse(fs.readFileSync(path.join(h.dataDir, "usage.json"), "utf8"));
   assert.equal(Object.values(usage.days)[0], 601);
+  // `sotto cap off`: saved in prefs.json (beats userConfig), the pause lifts at once.
+  assert.match(h.voice.control({ action: "cap" }).message, /^sotto: daily voice limit 10 min; /);
+  assert.equal(h.voice.control({ action: "cap", cap: "banana" }).ok, false);
+  const off = h.voice.control({ action: "cap", cap: "off", via: "cli" });
+  assert.equal(off.ok, true);
+  assert.match(off.message, /^sotto: daily voice limit off \(unlimited\); .* Voice resumes\.$/);
+  assert.equal(JSON.parse(fs.readFileSync(path.join(h.dataDir, "prefs.json"), "utf8")).daily_cap_minutes, 0);
+  assert.equal(h.voice.status().last_error, null);
+  assert.equal(h.voice.state, "waiting_page");
+  assert.equal(h.voice.status().today.cap_minutes, 0);
+  assert.equal(h.voice.capReached(), false);
+  assert.match(h.voice.control({ action: "cap", cap: "4h" }).message, /set to 4 h a day/);
+  assert.equal(h.voice.capMinutes(), 240);
 });
 
 test("usage is never summed across usage.updated events", async (t) => {

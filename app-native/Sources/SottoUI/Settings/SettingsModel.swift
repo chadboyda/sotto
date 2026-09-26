@@ -169,6 +169,12 @@ public final class SettingsModel {
         pending["wake"] ?? (status?.wake?.enabled == false ? "off" : status?.wake?.sensitivity) ?? "medium"
     }
     public var window: String { pending["window"] ?? settings?.window ?? "auto" }
+    /// The daily limit in minutes (0 = unlimited): the in-flight choice, else the daemon's.
+    public var capMinutes: Int { pending["cap"].flatMap { Int($0) } ?? status?.today?.cap_minutes.map { Int($0) } ?? 120 }
+    /// The picker's choices, plus the current limit when it was set elsewhere (`sotto cap 90`).
+    public var capChoices: [Int] {
+        SettingsText.capChoices.contains(capMinutes) ? SettingsText.capChoices : (SettingsText.capChoices + [capMinutes]).sorted { a, b in a == 0 ? true : b == 0 ? false : a < b }
+    }
     public var keyRow: SettingsText.KeyRow { SettingsText.keyRow(status?.key) }
     public var keyCard: SettingsText.KeyCard? {
         SettingsText.keyCard(state: status?.state, key: status?.key, lastErrorCode: status?.last_error?.code)
@@ -185,6 +191,7 @@ public final class SettingsModel {
 
     public func setPolicy(_ p: String) { run("policy", value: p, command: "set_policy", args: ["policy": .string(p)]) }
     public func setWake(_ s: String) { run("wake", value: s, command: "set_wake", args: ["sensitivity": .string(s)]) }
+    public func setCap(_ m: Int) { run("cap", value: String(m), command: "set_cap", args: ["minutes": .number(Double(m))]) }
     public func setAppearance(_ a: String) {
         let v = ViewText.normalizeTheme(a)
         guard v != appearance else { return }

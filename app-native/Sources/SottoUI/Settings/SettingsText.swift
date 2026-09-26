@@ -148,6 +148,14 @@ public enum SettingsText {
         switch s { case "off": return "Off"; case "low": return "Low"; case "medium": return "Medium"; case "high": return "High"; default: return s.capitalized }
     }
     public static let wakeHelp = "How readily your voice wakes a sleeping session. Nothing is sent or billed until it wakes."
+    /// Daily limit choices in minutes (0 = unlimited), as the page's select.
+    public static let capChoices = [0, 60, 120, 240, 480]
+    public static func capLabel(_ m: Int) -> String {
+        if m <= 0 { return "Unlimited" }
+        if m == 60 { return "1 hour" }
+        return m % 60 == 0 ? "\(m / 60) hours" : "\(m) minutes"
+    }
+    public static let capHelp = "Voice time allowed per day. At the limit the voice pauses; you get a spoken heads-up at 80 %."
 
     /// Settings > Appearance (the page's segmented control): System follows macOS, live.
     public static func appearanceLabel(_ a: String) -> String {
