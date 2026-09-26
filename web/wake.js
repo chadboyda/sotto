@@ -81,9 +81,18 @@ const NEAR_MARGIN_DB = 5;
 // clicks and fans are broadband and aperiodic; a click is also too short.
 const BAND_LO_HZ = 80;
 const BAND_HI_HZ = 4000;
+/** Upper edge of the voice band (pitch and first formant): voiced speech keeps most of its power under it, keyboard clicks do not. */
+const VOICE_HI_HZ = 1000;
 const MIN_BAND_RATIO = 0.5;
 const MIN_PERIODICITY = 0.35;
 const MAX_FLATNESS = 0.45;
+/**
+ * Native profile: a voiced frame also keeps this share of its power in 80-1000 Hz.
+ * Keyboard typing at a headset (live capture 2026-09-25, AirPods Max) has pitch-like
+ * periodicity around 0.38 but only 13 % of its power there (speech: 95 %), and it
+ * woke the voice with nothing to transcribe.
+ */
+const NATIVE_MIN_VOICE_RATIO = 0.4;
 const PITCH_MIN_HZ = 70;
 const PITCH_MAX_HZ = 400;
 /** Gaps (unvoiced consonants, short pauses) shorter than this keep a speech run going. */
@@ -164,7 +173,7 @@ function hann(n) {
  *   db: frame level in dBFS; bandRatio: share of power in 80-4000 Hz;
  *   flatness: spectral flatness in that band (0 tonal .. ~0.56 white noise);
  *   periodicity: best normalized autocorrelation at a 70-400 Hz pitch lag;
- *   zcr: zero crossings per second.
+ *   zcr: zero crossings per second; voiceRatio: share of power in 80-1000 Hz.
  */
 export function frameFeatures(frame, sampleRate) {
   const n = frame.length;
@@ -176,7 +185,7 @@ export function frameFeatures(frame, sampleRate) {
   }
   const level = db(energy / n);
   const zcr = (crossings * sampleRate) / n;
-  if (level < -100) return { db: level, bandRatio: 0, flatness: 1, periodicity: 0, zcr };
+  if (level < -100) return { db: level, bandRatio: 0, flatness: 1, periodicity: 0, zcr, voiceRatio: 0 };
 
   // Spectrum (Hann window).
   const w = hann(n);
@@ -187,12 +196,15 @@ export function frameFeatures(frame, sampleRate) {
   const binHz = sampleRate / n;
   const lo = Math.max(1, Math.round(BAND_LO_HZ / binHz));
   const hi = Math.min(n / 2 - 1, Math.round(BAND_HI_HZ / binHz));
+  const vhi = Math.min(n / 2 - 1, Math.round(VOICE_HI_HZ / binHz));
   let total = 0;
   let band = 0;
+  let voice = 0;
   let logSum = 0;
   for (let k = 1; k < n / 2; k++) {
     const p = re[k] * re[k] + im[k] * im[k];
     total += p;
+    if (k >= lo && k < vhi) voice += p;
     if (k >= lo && k <= hi) {
       band += p;
       logSum += Math.log(p + 1e-20);
@@ -231,7 +243,7 @@ export function frameFeatures(frame, sampleRate) {
     const r = xx > 0 && yy > 0 ? xy / Math.sqrt(xx * yy) : 0;
     if (r > periodicity) periodicity = r;
   }
-  return { db: level, bandRatio, flatness, periodicity, zcr };
+  return { db: level, bandRatio, flatness, periodicity, zcr, voiceRatio: total > 0 ? voice / total : 0 };
 }
 
 /** Preset for a sensitivity name; unknown names fall back to medium. `off` → null. */
@@ -418,7 +430,8 @@ export function createVad({ sampleRate = 48000, sensitivity = "medium", boostDb 
       const bar = preset.snrDb + boost;
       const loudEnough = f.db >= minDb();
       const aboveBar = snr >= bar;
-      const voiceLike = f.bandRatio >= MIN_BAND_RATIO && f.periodicity >= MIN_PERIODICITY && f.flatness <= MAX_FLATNESS;
+      const voiceLike = f.bandRatio >= MIN_BAND_RATIO && f.periodicity >= MIN_PERIODICITY && f.flatness <= MAX_FLATNESS
+        && (!native || f.voiceRatio >= NATIVE_MIN_VOICE_RATIO);
       const voiced = !zero && floor !== null && loudEnough && aboveBar && voiceLike;
 
       let trigger = false;
@@ -468,7 +481,7 @@ export function createVad({ sampleRate = 48000, sensitivity = "medium", boostDb 
         cand.maxSnr = Math.max(cand.maxSnr, snr);
         if (voiced) cand.voicedMs += frameMs;
         else {
-          const why = !aboveBar ? "snr" : !loudEnough ? "level" : f.periodicity < MIN_PERIODICITY ? "periodicity" : f.flatness > MAX_FLATNESS ? "flatness" : "band";
+          const why = !aboveBar ? "snr" : !loudEnough ? "level" : f.periodicity < MIN_PERIODICITY ? "periodicity" : f.flatness > MAX_FLATNESS ? "flatness" : native && f.voiceRatio < NATIVE_MIN_VOICE_RATIO ? "voice_band" : "band";
           cand.fails[why] = (cand.fails[why] || 0) + 1;
         }
         if (runFail) cand.runFail = runFail;

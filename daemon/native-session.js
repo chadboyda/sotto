@@ -51,6 +51,12 @@ const SETTLE_GIVE_UP_MS = 5000;
 const NEAR_INFO_PER_SLEEP = 5;
 /** Local speech is reported to voice.js at most this often. */
 const LOCAL_SPEECH_EVERY_MS = 250;
+/**
+ * The can't-hear monitor counts the mic as "the user is talking" only within
+ * this long of a frame of talking (mostly voiced, daemon/agc.js): typing next to the mic is loud
+ * but is not speech the model could transcribe (live capture 2026-09-25).
+ */
+const VOICED_HOLD_MS = 300;
 /** The echo report checks the live leak this often while the assistant talks. */
 const ECHO_CHECK_MS = 5000;
 /** A `cmd` the daemon cannot answer sooner is answered with a timeout (the app gives up at 15 s). */
@@ -134,6 +140,8 @@ export class NativeController {
     this.capture = createDebugCapture({ dir: voice.paths?.debug || null, clock, log });
     this.settle = { done: true, at: 0, audioAt: null, ms: SETTLE_MS, rearm: false };
     this.localSpeechAt = 0;
+    this.voicedAt = -Infinity;
+    this.rejectedCount = 0;
     this.echoTest = null;
     voice.setNativeController?.(this);
   }
@@ -334,11 +342,14 @@ export class NativeController {
       const learn = settled && live && now >= this.lastAudibleAt;
       const a = this.agc.process(pcm, { learn });
       if (live) up = a.pcm;
-      if (a.speech && learn && now - this.localSpeechAt >= LOCAL_SPEECH_EVERY_MS) {
+      // Talking only (mostly voiced): typing and breath neither keep a session awake nor count as the user talking.
+      if (a.talking) this.voicedAt = now;
+      if (a.talking && learn && now - this.localSpeechAt >= LOCAL_SPEECH_EVERY_MS) {
         this.localSpeechAt = now;
         v.noteLocalSpeech?.();
       }
       if (a.utterance) this.onUtterance(a.utterance);
+      if (a.rejected) this.onNotSpeech(a.rejected);
     }
     if (this.session?.ready) this.pacer.push(up);
     this.capture.frame(pcm, this.session?.ready && !muted ? up : null);
@@ -352,7 +363,7 @@ export class NativeController {
     if (this.echoTest) this.echoTest.mic.push(m ? m.pow : 0);
     if (this.session?.ready) {
       const voiceLevel = now < this.lastAudibleAt ? 1 : 0;
-      const heard = this.hearing.sample({ rms: m ? m.rms : 0, muted, voice: voiceLevel, now });
+      const heard = this.hearing.sample({ rms: m ? m.rms : 0, muted, voice: voiceLevel, now, speech: now - this.voicedAt <= VOICED_HOLD_MS });
       if (heard) this.onCantHear(heard);
       if (!muted && this.leak) this.feedLeak(m.pow, now);
     }
@@ -548,6 +559,14 @@ export class NativeController {
     return s.done;
   }
 
+  /** A loud run that was not voiced speech (typing, breath): not learned; logged sparingly. */
+  onNotSpeech(r) {
+    this.rejectedCount++;
+    if (this.rejectedCount <= 3 || this.rejectedCount % 20 === 0) {
+      this.log.info("mic.not_speech", { input: this.micKey(), ms: r.ms, db: r.db, voiced: r.voiced, count: this.rejectedCount });
+    }
+  }
+
   /** An utterance of the user's heard on the current mic while live: learn its level. */
   onUtterance(u) {
     const name = this.micKey();
@@ -556,7 +575,7 @@ export class NativeController {
     this.profiles.flush();
     if (p.utterances <= 5 || p.utterances % 10 === 0) {
       this.log.info("mic.calibrate", {
-        input: name, utterance_db: u.speechDb, utterance_ms: u.ms, speech_db: p.speech_db, floor_db: p.floor_db,
+        input: name, utterance_db: u.speechDb, utterance_ms: u.ms, voiced: u.voiced, speech_db: p.speech_db, floor_db: p.floor_db,
         utterances: p.utterances, calibrated: p.calibrated, gain_db: Math.round(this.agc.gainDb * 10) / 10,
       });
     }

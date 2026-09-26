@@ -4,9 +4,9 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { createUplinkAgc, createMicProfiles, TARGET_DB, CALIBRATED_UTTERANCES, MAX_FLOOR_OUT_DB } from "../../daemon/agc.js";
+import { createUplinkAgc, createMicProfiles, TARGET_DB, CALIBRATED_UTTERANCES, MAX_FLOOR_OUT_DB, PROFILE_METHOD } from "../../daemon/agc.js";
 import { readWavPcm24k } from "../helpers/fake-native-app.js";
-import { bluetoothMic, bluetoothSilence, activeLevelDb, pcmToFloat } from "../helpers/bt-audio.js";
+import { bluetoothMic, bluetoothSilence, activeLevelDb, pcmToFloat, keyboardTyping } from "../helpers/bt-audio.js";
 
 const FIX = (n) => path.join(fileURLToPath(new URL("../fixtures", import.meta.url)), `${n}.wav`);
 const FRAME = 960;
@@ -15,12 +15,16 @@ const FRAME = 960;
 function run(agc, pcm, o = {}) {
   const out = [];
   const utts = [];
+  const rejected = [];
+  let voiced = 0;
   for (let off = 0; off + FRAME <= pcm.length; off += FRAME) {
     const r = agc.process(pcm.subarray(off, off + FRAME), o);
     out.push(r.pcm);
     if (r.utterance) utts.push(r.utterance);
+    if (r.rejected) rejected.push(r.rejected);
+    if (r.voiced) voiced++;
   }
-  return { pcm: Buffer.concat(out), utts };
+  return { pcm: Buffer.concat(out), utts, rejected, voiced };
 }
 
 const speech = (name, o) => bluetoothMic(readWavPcm24k(FIX(name)), o);
@@ -109,4 +113,39 @@ test("mic profiles: calibrated after 5 utterances, persisted per device, evicted
   // Garbage on disk never throws.
   const r = createMicProfiles({ load: () => { throw new Error("bad json"); } });
   assert.equal(r.get("x"), null);
+});
+
+// Live capture 2026-09-25 (AirPods Max, 0.4.3): typing next to the headset was
+// learned as "speech at -50 dBFS" and set +24 to +28 dB of gain.
+test("keyboard typing is not speech: nothing learned, no gain", () => {
+  const agc = createUplinkAgc();
+  const input = Buffer.concat([bluetoothSilence(1000), keyboardTyping(15000), bluetoothSilence(600)]);
+  const { utts, rejected, pcm } = run(agc, input);
+  assert.equal(utts.length, 0, JSON.stringify(utts));
+  assert.ok(rejected.length >= 1, "the typing runs are reported as not speech");
+  assert.ok(rejected.every((r) => r.voiced < 0.3), JSON.stringify(rejected));
+  assert.equal(agc.speechDb, null);
+  assert.equal(agc.gainDb, 0);
+  assert.ok(pcm.equals(input.subarray(0, pcm.length)), "passes byte for byte");
+});
+
+test("typing around real-level speech: the level comes from the voice alone", () => {
+  const agc = createUplinkAgc();
+  const pcm = Buffer.concat([bluetoothSilence(800), keyboardTyping(8000), speech("decide-name", { speechDb: -31 }), bluetoothSilence(400),
+    keyboardTyping(6000, { seed: 3 }), speech("ask-files", { speechDb: -31 }), bluetoothSilence(600)]);
+  const { utts } = run(agc, pcm);
+  assert.ok(utts.length >= 2, JSON.stringify(utts));
+  assert.ok(utts.every((u) => Math.abs(u.speechDb - -31) < 5 && u.voiced >= 0.3), JSON.stringify(utts));
+  assert.ok(Math.abs(agc.speechDb - -31) < 5, `speech ${agc.speechDb}`);
+  assert.ok(agc.gainDb < 8, `gain ${agc.gainDb}`);
+});
+
+test("mic profiles from before the voicing test (0.4.3: typing) are ignored and relearned", () => {
+  const saved = { devices: { "Chad's AirPods Max": { speech_db: -49.8, floor_db: -79.6, utterances: 132, updated: 1 } } };
+  const p = createMicProfiles({ load: () => saved });
+  assert.equal(p.get("Chad's AirPods Max"), null);
+  const q = p.learn("Chad's AirPods Max", { speechDb: -30, ms: 900 }, -80);
+  assert.equal(q.utterances, 1);
+  assert.equal(q.speech_db, -30);
+  assert.equal(q.method, PROFILE_METHOD);
 });

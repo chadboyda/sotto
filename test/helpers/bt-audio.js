@@ -2,11 +2,12 @@
 // clean 24 kHz PCM16 speech fixture into what the app relays from AirPods.
 //
 // Measured on AirPods Max in call mode (macOS, raw AUHAL capture at the
-// device's 24 kHz, 2026-09-25): conversational speech at about -31 dBFS
-// (active-frame median; quieter wake words reached the detector at -46 to
-// -51), a room floor near -80 dBFS, about 20 % of the samples exact digital
+// device's 24 kHz, 2026-09-25; confirmed on a `sotto debug capture` of the
+// user talking): conversational speech at about -30 dBFS (active-frame
+// median; loudest frames -15 to -21), a room floor near -80 dBFS, digital
 // zeros between words (the headset's noise gate), and little energy above
-// 8 kHz. Pure and deterministic (seeded noise), so unit tests and the e2e
+// 8 kHz. The "-46 to -51 dBFS" once read as soft speech was keyboard typing
+// (`keyboardTyping` below). Pure and deterministic (seeded noise), so unit tests and the e2e
 // build identical fixtures.
 
 const RATE = 24000;
@@ -123,6 +124,67 @@ function bluetoothMicUncached(pcm, { speechDb, floorDb, bandHz, gateDb, seed }) 
 export function bluetoothSilence(ms, o = {}) {
   const n = Math.round((ms / 1000) * RATE);
   return bluetoothMic(Buffer.alloc(n * 2), o);
+}
+
+/**
+ * Keyboard typing as a headset mic next to a laptop picks it up: keystrokes
+ * (a short noise burst ringing around 2-4 kHz, then a softer key release 60-110
+ * ms later) at about `rate` per second, on the headset's gated floor. Shaped
+ * after a real capture (AirPods Max in call mode, `sotto debug capture`,
+ * 2026-09-25): loudest frames about -25 dBFS, active-frame median about -43,
+ * 13 % of the power under 1 kHz, pitch periodicity about 0.4 (speech: 95 %
+ * and 0.75), 5 % of its frames passing daemon/agc.js's voicing test. This one
+ * is a little harsher (a desk thump under each key: about 9 %). 0.4.3's AGC
+ * took the real one for the user's speech at -50 dBFS.
+ * @param {number} ms
+ * @param {object} [o]
+ * @param {number} [o.peakDb=-25]  level of the loudest keystroke frames (dBFS)
+ * @param {number} [o.rate=7]      keystrokes per second
+ * @param {number} [o.seed=11]
+ * @returns {Buffer} PCM16 LE 24 kHz
+ */
+export function keyboardTyping(ms, { peakDb = -25, rate = 7, seed = 11, floorDb = -80, gateDb = -72 } = {}) {
+  const n = Math.round((ms / 1000) * RATE);
+  const rnd = lcg(seed);
+  const y = new Float64Array(n);
+  // Two-pole resonator around fc (the keycap and case ring).
+  const click = (at, amp, fc, r = 0.93) => {
+    const c = 2 * r * Math.cos((2 * Math.PI * fc) / RATE);
+    let y1 = 0, y2 = 0;
+    const len = Math.round(0.03 * RATE);
+    for (let i = 0; i < len && at + i < n; i++) {
+      const env = Math.exp(-i / (0.004 * RATE));
+      const e = (rnd() * 2 - 1) * env;
+      const v = e + c * y1 - r * r * y2;
+      y2 = y1; y1 = v;
+      y[at + i] += v * amp;
+    }
+  };
+  let t = Math.round(rnd() * RATE / rate);
+  while (t < n) {
+    const amp = 0.5 + rnd() * 0.5;
+    click(t, amp, 2200 + rnd() * 1800);
+    click(t, amp * 0.03, 180 + rnd() * 250, 0.985); // the desk thump under it
+    click(t + Math.round((0.06 + rnd() * 0.05) * RATE), amp * 0.35, 2600 + rnd() * 1400);
+    t += Math.round(((0.4 + rnd() * 1.2) / rate) * RATE);
+  }
+  // Scale so the loudest 20 ms frames sit at peakDb.
+  let best = 0;
+  for (let i = 0; i + 480 <= n; i += 480) {
+    let e = 0;
+    for (let j = 0; j < 480; j++) e += y[i + j] * y[i + j];
+    best = Math.max(best, e / 480);
+  }
+  const g = best > 0 ? Math.sqrt(10 ** (peakDb / 10) / best) : 0;
+  const noiseAmp = 10 ** (floorDb / 20) * Math.sqrt(3);
+  for (let i = 0; i < n; i++) y[i] = y[i] * g + (rnd() * 2 - 1) * noiseAmp;
+  for (let i = 0; i < n; i += 240) {
+    let e = 0;
+    const end = Math.min(n, i + 240);
+    for (let j = i; j < end; j++) e += y[j] * y[j];
+    if (db(e / (end - i)) < gateDb) y.fill(0, i, end);
+  }
+  return floatToPcm(y);
 }
 
 /** Word recall of `heard` against `expected` (order-free bag of words, lower-cased, punctuation stripped). */

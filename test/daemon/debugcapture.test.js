@@ -4,11 +4,11 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { createDebugCapture, FLAG_FILE, MAX_MS, KEEP_MS } from "../../daemon/debugcapture.js";
+import { createDebugCapture, FLAG_FILE, MAX_MS, KEEP_MS, STALE_MS } from "../../daemon/debugcapture.js";
 
 function setup() {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "clv-dbg-"));
-  let t = 1_000_000;
+  let t = 1_790_000_000_000;
   const clock = { now: () => t };
   const lines = [];
   const log = { info: (ev, o) => lines.push({ ev, ...o }), warn: (ev, o) => lines.push({ ev, ...o }) };
@@ -65,4 +65,28 @@ test("switches itself off after MAX_MS and deletes the flag; old captures are pr
   s.advance(KEEP_MS);
   c.frame(frame(1), null);
   assert.deepEqual(wavs(s.dir), []);
+});
+
+test("the 10 minutes count from when the daemon first saw the flag; a stale flag starts nothing", (t) => {
+  const s = setup(); t.after(s.cleanup);
+  const flag = path.join(s.dir, FLAG_FILE);
+  fs.writeFileSync(flag, "");
+  const made = (s.clock.now() - MAX_MS + 60_000) / 1000; // made 9 minutes before the daemon looks
+  fs.utimesSync(flag, made, made);
+  const c = createDebugCapture({ dir: s.dir, clock: s.clock, log: s.log });
+  c.frame(frame(1), null);
+  assert.equal(c.active, true);
+  s.advance(5 * 60_000);
+  c.frame(frame(1), null);
+  assert.equal(c.active, true, "still on 14 minutes after the flag was made");
+  c.close();
+  const s2 = setup(); t.after(s2.cleanup);
+  const flag2 = path.join(s2.dir, FLAG_FILE);
+  fs.writeFileSync(flag2, "");
+  const old = (s2.clock.now() - STALE_MS - 1000) / 1000;
+  fs.utimesSync(flag2, old, old);
+  const c2 = createDebugCapture({ dir: s2.dir, clock: s2.clock, log: s2.log });
+  c2.frame(frame(1), null);
+  assert.equal(c2.active, false);
+  assert.equal(fs.existsSync(flag2), false);
 });
