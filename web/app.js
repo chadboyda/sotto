@@ -70,6 +70,7 @@ const el = {
   overlayBtn: $("overlay-btn"),
   overlayKbd: $("overlay-kbd"),
   wakeSelect: $("wake-select"),
+  capSelect: $("cap-select"),
   promptPointer: $("prompt-pointer"),
   keyField: $("key-field"),
   keyInput: $("api-key-input"),
@@ -2645,6 +2646,21 @@ function renderFooter(v = S.view || computeView()) {
     if (el.wakeSelect.value !== sens && document.activeElement !== el.wakeSelect) el.wakeSelect.value = sens;
     el.wakeSelect.disabled = !connected;
   }
+  if (el.capSelect) {
+    const cap = S.status?.today?.cap_minutes;
+    if (Number.isFinite(cap) && document.activeElement !== el.capSelect) {
+      const v = String(cap);
+      // A limit set elsewhere (`sotto cap 90`, userConfig) shows as its own option.
+      if (![...el.capSelect.options].some((o) => o.value === v)) {
+        const o = document.createElement("option");
+        o.value = v;
+        o.textContent = cap % 60 === 0 ? `${cap / 60} hours` : `${cap} minutes`;
+        el.capSelect.append(o);
+      }
+      if (el.capSelect.value !== v) el.capSelect.value = v;
+    }
+    el.capSelect.disabled = !connected;
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -3036,6 +3052,13 @@ el.wakeSelect?.addEventListener("change", () => {
   const v = el.wakeSelect.value;
   if (S.status?.wake) S.status = { ...S.status, wake: { ...S.status.wake, sensitivity: v, enabled: v !== "off" } };
   post("set_wake", { sensitivity: v });
+  render();
+});
+
+el.capSelect?.addEventListener("change", () => {
+  const minutes = Number(el.capSelect.value);
+  if (S.status?.today) S.status = { ...S.status, today: { ...S.status.today, cap_minutes: minutes } };
+  post("set_cap", { minutes });
   render();
 });
 

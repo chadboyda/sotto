@@ -58,6 +58,13 @@ public struct SettingsView: View {
                 }
                 FieldHelp(SettingsText.wakeHelp, error: model.error("wake"))
             }
+
+            VStack(alignment: .leading, spacing: 6) {
+                Picker("Daily limit", selection: Binding(get: { model.capMinutes }, set: { model.setCap($0) })) {
+                    ForEach(model.capChoices, id: \.self) { Text(SettingsText.capLabel($0)).tag($0) }
+                }
+                FieldHelp(SettingsText.capHelp, error: model.error("cap"))
+            }
         } header: { Text("Conversation") }
     }
 

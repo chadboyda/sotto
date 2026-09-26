@@ -502,6 +502,12 @@ export class NativeController {
         v.setWakeSensitivity(args.sensitivity);
         return { ok: true, data: { sensitivity: args.sensitivity } };
       }
+      case "set_cap": {
+        const r = v.setCap(args.minutes, "app");
+        if (!r.ok) return { ok: false, code: "bad_cap", message: r.message };
+        this.onBroadcast({ type: "status", status: v.pageStatus() }); // settings changed
+        return { ok: true, data: { minutes: r.cap, message: r.message } };
+      }
       case "set_window": {
         const r = v.setWindow(args.mode);
         if (!r.ok) return { ok: false, code: "bad_window", message: r.message };

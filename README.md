@@ -86,6 +86,7 @@ The symlink loads the plugin in place as `sotto@skills-dir`, so edits to the rep
 | `/talk persona <name>` | Change the voice's personality, for example `/talk persona moss`. Switches right away if voice is live, and is saved like the voice (see [Personas](#personas)) |
 | `/talk app` | Use the Sotto desktop app: install it now if it is missing (or retry a failed install), open the voice in it, and remember the choice |
 | `/talk window <auto\|app\|chrome>` | Where the voice window opens, saved like the voice. `/talk window` alone shows the current choice and whether the app is installed |
+| `/talk cap <off\|minutes\|hours h>` | The daily voice limit, for example `/talk cap off` (unlimited) or `/talk cap 4h`. Applies at once and resumes a voice paused on the limit; `sotto cap` and Settings > Daily limit do the same. `/talk cap` alone shows it and today's use |
 | `/talk key` | Which OpenAI API key is in use (its last four characters) and where it comes from; with no key, opens the window to add one |
 
 `/sotto:talk …` is the same command with its full name.
@@ -291,7 +292,7 @@ Set these in `/config` (the sotto rows). An unset or invalid value uses the defa
 | `wake_sensitivity` | `medium` | How readily your voice wakes a sleeping session: off, low, medium, high. Off = press Space or Wake now. |
 | `idle_minutes` | `5` | Legacy; used only when `idle_seconds` is not set. |
 | `speaking_policy` | `milestones` | Default narration level |
-| `daily_cap_minutes` | `120` | Voice minutes allowed per local day. You get a spoken warning at 80 %; at 100 % voice pauses. 0 = no cap. |
+| `daily_cap_minutes` | `120` | Voice minutes allowed per local day. You get a spoken warning at 80 %; at 100 % voice pauses. 0 = no cap. `sotto cap off` (or Settings, Daily limit: Unlimited) overrides it at once; `sotto cap 4h` sets another limit. |
 | `mirror` | `all` | What you said to the voice that it did not hand to Claude still reaches Claude as background ([details](#decisions-reach-claude-even-ones-the-voice-answered)): `all`, `decisions`, or `off` |
 | `echo_guard` | `auto` | Keeps the voice from hearing itself on speakers ([details](#speakers-echo-and-talking-over-the-voice)): `auto` (only when the window measures echo that echo cancellation left), `on`, or `off` |
 | `window` | `auto` | Where the voice window opens: `auto` (the Sotto app on macOS once built; else Chrome), `app`, `chrome`, or `default` (your default browser) |

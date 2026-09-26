@@ -139,7 +139,7 @@ export async function performRestart({
   log.info("update.preflight", { ok: pre.ok, ms: pre.ms, message: pre.message || undefined });
   if (!pre.ok) return { ok: false, code: "preflight" };
   // The preflight took a moment: still quiet?
-  const why = d.voice.restartBlocker(quietMs);
+  const why = d.voice.restartBlocker(quietMs, { manual: reason === "manual" });
   if (why) return { ok: false, code: "not_quiet", why };
 
   const prep = await d.voice.prepareRestart(reason);

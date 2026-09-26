@@ -1398,7 +1398,7 @@ export function pageView(s) {
     if (cap) {
       const capMin = Number(s?.capMinutes);
       const used = capMin > 0 ? `You've used today's ${formatDuration(capMin * 60, { long: true })} of voice. ` : "";
-      body = `${used}Raise daily_cap_minutes in /config (sotto) to continue today.`;
+      body = `${used}Set Daily limit to Unlimited in Settings (or run sotto cap off) to continue today.`;
     }
     else if (lastCode === "mic_denied" || lastCode === "mic_error") body = s?.lastError?.message || body;
     return card(

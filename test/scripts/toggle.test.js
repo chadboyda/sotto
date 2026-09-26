@@ -159,7 +159,7 @@ describe("toggle.sh cold start", () => {
   test("bogus argument prints usage and never contacts the daemon", async () => {
     const { D, env } = await setup();
     const out = parseOut(await run(TOGGLE, { env, input: stdinFor("bogus") }));
-    assert.equal(out.stopReason, "sotto: usage: /talk [on|off|status|restart|quiet|milestones|walkthrough|voice [name]|persona [name]|app|window [auto|app|chrome]|key]");
+    assert.equal(out.stopReason, "sotto: usage: /talk [on|off|status|restart|quiet|milestones|walkthrough|voice [name]|persona [name]|app|window [auto|app|chrome]|cap [off|<minutes>]|key]");
     assert.ok(!existsSync(join(D, "daemon.pid")));
   });
 });
@@ -677,6 +677,42 @@ describe("toggle.sh /talk persona (SPEC §4.6)", () => {
     assert.deepEqual(bodies.map((b) => b.confirm), [undefined, true]);
     assert.equal(bodies[1].via, undefined, "/talk typed in the TUI is not the CLI");
     assert.ok(!existsSync(join(D, "prefs.json")), "the daemon owns the write when it runs");
+  });
+});
+
+describe("toggle.sh /talk cap: the daily voice limit (SPEC §4.5)", () => {
+  test("daemon down: shows and sets prefs.json (off = 0, hours, minutes), keeping the other prefs", async () => {
+    const { D, env } = await setup({ CLAUDE_PLUGIN_OPTION_DAILY_CAP_MINUTES: "120" });
+    let out = parseOut(await run(TOGGLE, { env, input: stdinFor("cap") }));
+    assert.equal(out.stopReason, "sotto: daily voice limit 2 h. Set it with `sotto cap off|<minutes>|<hours>h`.");
+    parseOut(await run(TOGGLE, { env, input: stdinFor("voice cedar") }));
+    out = parseOut(await run(TOGGLE, { env, input: stdinFor("cap off") }));
+    assert.equal(out.stopReason, "sotto: daily voice limit off (unlimited).");
+    assert.deepEqual(JSON.parse(readFileSync(join(D, "prefs.json"), "utf8")), { voice: "cedar", daily_cap_minutes: 0 });
+    out = parseOut(await run(TOGGLE, { env, input: stdinFor("cap 4h") }));
+    assert.equal(out.stopReason, "sotto: daily voice limit set to 4 h a day.");
+    out = parseOut(await run(TOGGLE, { env, input: stdinFor("cap 90") }));
+    assert.equal(out.stopReason, "sotto: daily voice limit set to 90 min a day.");
+    // Other writes keep the limit.
+    parseOut(await run(TOGGLE, { env, input: stdinFor("window app") }));
+    assert.deepEqual(JSON.parse(readFileSync(join(D, "prefs.json"), "utf8")), { voice: "cedar", window: "app", daily_cap_minutes: 90 });
+    out = parseOut(await run(TOGGLE, { env, input: stdinFor("cap") }));
+    assert.equal(out.stopReason, "sotto: daily voice limit 90 min. Set it with `sotto cap off|<minutes>|<hours>h`.");
+    for (const bad of ["2000", "banana", "25h"]) {
+      out = parseOut(await run(TOGGLE, { env, input: stdinFor(`cap ${bad}`) }));
+      assert.match(out.stopReason, /^sotto: ERROR the daily limit is off/, bad);
+    }
+    assert.equal(JSON.parse(readFileSync(join(D, "prefs.json"), "utf8")).daily_cap_minutes, 90);
+    assert.ok(!existsSync(join(D, "daemon.pid")), "never spawns a daemon");
+  });
+
+  test("daemon up: /control gets action cap (+ cap)", async () => {
+    const { D, env } = await setup();
+    parseOut(await run(TOGGLE, { env, input: stdinFor("on") }));
+    parseOut(await run(TOGGLE, { env, input: stdinFor("cap unlimited") }));
+    parseOut(await run(TOGGLE, { env, input: stdinFor("cap") }));
+    const bodies = controlBodies(D).slice(1);
+    assert.deepEqual(bodies.map((b) => [b.action, b.cap]), [["cap", "unlimited"], ["cap", undefined]]);
   });
 });
 

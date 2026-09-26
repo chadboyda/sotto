@@ -132,7 +132,7 @@ export function createDaemon({
   if (onRestart) {
     updater = new Updater({
       root: pluginRoot, clock, log: logger, env,
-      isQuiet: (quietMs) => voice.restartBlocker(quietMs),
+      isQuiet: (quietMs, o) => voice.restartBlocker(quietMs, o),
       restart: (r) => onRestart(r),
     }).start();
   }

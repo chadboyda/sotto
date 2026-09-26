@@ -39,6 +39,7 @@ test("restartBlocker: live needs 45 s of silence both ways; delegation, busy Cla
   // A voice request being collected, then with Claude.
   ws.receive({ type: "session.delegation.created", offset_ms: 0, delegation: { id: "item_1", type: "delegation", target: "client" } });
   assert.equal(h.voice.restartBlocker(0), "delegation");
+  assert.equal(h.voice.restartBlocker(0, { manual: true }), "delegation", "still being collected: even a manual restart waits");
   // Claude mid-turn from the terminal (no voice request).
   const h2 = await makeHarness();
   t.after(() => h2.cleanup());
@@ -47,6 +48,8 @@ test("restartBlocker: live needs 45 s of silence both ways; delegation, busy Cla
   h2.voice.handleHook("UserPromptSubmit", { prompt: "typed", prompt_id: "p1" }, SESSION().socket);
   h2.voice.handleHook("PreToolUse", { tool_name: "Bash", tool_input: { command: "ls" }, prompt_id: "p1" }, SESSION().socket);
   assert.equal(h2.voice.restartBlocker(0), "claude_busy");
+  // `sotto restart` does not wait for Claude's turn (live 2026-09-25: 8 minutes on "delegation").
+  assert.equal(h2.voice.restartBlocker(0, { manual: true }), null);
   h2.voice.handleHook("Stop", { prompt_id: "p1", last_assistant_message: "done" }, SESSION().socket);
   await h2.clock.advance(0);
   assert.notEqual(h2.voice.restartBlocker(0), "claude_busy");

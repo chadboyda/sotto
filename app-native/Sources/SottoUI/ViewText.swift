@@ -682,7 +682,7 @@ public enum ViewText {
             var body = "Resume to keep talking with Claude Code."
             if cap {
                 let used = (s.capMinutes ?? 0) > 0 ? "You've used today's \(formatDuration(s.capMinutes! * 60, long: true)) of voice. " : ""
-                body = "\(used)Raise daily_cap_minutes in /config (sotto) to continue today."
+                body = "\(used)Set Daily limit to Unlimited in Settings (or run sotto cap off) to continue today."
             } else if lastCode == "mic_denied" || lastCode == "mic_error" {
                 body = nonEmpty(s.lastErrorMessage) ?? body
             }

@@ -49,7 +49,8 @@ const RUN = `(async () => {
   const delays = []; let rafs = 0;
   window.setTimeout = (fn, ms, ...rest) => { if (fn && fn.name === "tick") delays.push(ms); return st(fn, ms, ...rest); };
   window.requestAnimationFrame = (fn) => { if (fn && fn.name === "tick") rafs++; return raf(fn); };
-  draws = 0; await wait(1000);
+  // Two seconds: a loaded macOS runner fired only 2 of the timer's frames in one (CI 2026-09-26).
+  draws = 0; await wait(2000);
   window.setTimeout = st; window.requestAnimationFrame = raf;
   out.approvalHeld = { draws, animating: s.animating, minDelay: Math.min(...delays), frames: delays.length, rafs };
   s.set({ attention: false, working: false });
@@ -66,10 +67,10 @@ test("string: the idle panel draws nothing; sound and a held approval draw, then
   assert.equal(m.speaking.animating, true, JSON.stringify(m));
   assert.deepEqual(m.afterSound, { draws: 0, animating: false }, JSON.stringify(m));
   // The shimmer: it keeps drawing, on a timer of about 24 fps (never display rate), and
-  // never more than 24 frames in a second.
+  // never more than 24 frames in a second (48 in the two measured).
   const a = m.approvalHeld;
   assert.equal(a.animating, true, JSON.stringify(m));
-  assert.ok(a.draws >= 3 && a.draws <= 30, JSON.stringify(m));
+  assert.ok(a.draws >= 3 && a.draws <= 54, JSON.stringify(m));
   assert.equal(a.rafs, 0, `no display-rate frames: ${JSON.stringify(m)}`);
   assert.ok(a.frames >= 3 && a.minDelay >= 40 && a.minDelay <= 45, `a ~24 fps timer: ${JSON.stringify(m)}`);
   assert.deepEqual(m.resolved, { draws: 0, animating: false }, JSON.stringify(m));

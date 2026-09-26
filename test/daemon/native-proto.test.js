@@ -14,7 +14,7 @@ test("protocol constants are the docs/NATIVE.md contract", () => {
   assert.equal(HEADER_BYTES, 16);
   assert.ok(COMMANDS.includes("mute") && COMMANDS.includes("key_save"));
   // Mirrored by app-native/Tests/SottoClientTests/MessageTests.swift testEveryCommandNameEncodes.
-  assert.deepEqual([...COMMANDS], ["mute", "pause", "resume", "wake", "end", "set_voice", "set_persona", "set_policy", "set_wake",
+  assert.deepEqual([...COMMANDS], ["mute", "pause", "resume", "wake", "end", "set_voice", "set_persona", "set_policy", "set_wake", "set_cap",
     "set_window", "key_save", "key_remove", "get_voices", "echo_test", "open_browser"]);
   assert.ok(SERVER_TYPES.includes("caption") && CLIENT_TYPES.includes("hello"));
 });
