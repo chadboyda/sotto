@@ -10,7 +10,7 @@ import { fileURLToPath } from "node:url";
 import { makeHarness } from "../helpers/daemon-harness.js";
 import { FRAME_BYTES, FLAG } from "../../daemon/native-proto.js";
 import { readWavPcm24k } from "../helpers/fake-native-app.js";
-import { bluetoothMic, bluetoothSilence, activeLevelDb, pcmToFloat } from "../helpers/bt-audio.js";
+import { bluetoothMic, bluetoothSilence, activeLevelDb, pcmToFloat, keyboardTyping } from "../helpers/bt-audio.js";
 import { MIN_AWAKE_MS, FALSE_WAKE_QUIET_MS } from "../../daemon/wake.js";
 import { CALIBRATED_UTTERANCES } from "../../daemon/agc.js";
 
@@ -92,6 +92,30 @@ test("soft headset speech reaches the model at a level it hears; the gain is lea
   const listen = h.log.entries.filter((e) => e.ev === "wake.listen").at(-1);
   assert.equal(listen.calibrated, true);
   assert.ok(Math.abs(listen.min_db - (listen.speech_db - 15)) < 0.2, JSON.stringify(listen));
+});
+
+// Live capture 2026-09-25 (AirPods Max, 0.4.3): the user typed while the
+// session was live; the AGC learned the clicks as speech at -50 dBFS (+24 to
+// +28 dB of gain) and the can't-hear monitor told the user it could not hear
+// them. Typing is neither speech to learn, nor talking the model missed.
+test("keyboard typing while live: no gain, nothing learned, no can't-hear, no keep-awake", async (t) => {
+  const h = await setup(t);
+  h.on();
+  const link = await h.attach();
+  h.route(link);
+  const ws = await h.startPrimary();
+  let kept = 0;
+  const orig = h.voice.noteLocalSpeech?.bind(h.voice);
+  h.voice.noteLocalSpeech = () => { kept++; orig?.(); };
+  const typing = Buffer.concat([bluetoothSilence(1000), keyboardTyping(25_000), bluetoothSilence(600)]);
+  await h.stream(link, typing);
+  assert.equal(h.log.entries.filter((e) => e.ev === "page.cant_hear").length, 0, "no can't-hear notice");
+  assert.equal(h.log.entries.filter((e) => e.ev === "mic.calibrate").length, 0);
+  assert.ok(h.log.entries.some((e) => e.ev === "mic.not_speech"), "the typing is logged as not speech");
+  assert.equal(h.voice.status().native.agc.gain_db, 0);
+  assert.ok(kept <= 2, `typing kept the session awake ${kept} times`);
+  const up = uplink(ws);
+  assert.ok(up.length > 0 && typing.includes(up.subarray(FRAME_BYTES * 100, FRAME_BYTES * 200)), "the uplink is the raw mic, untouched");
 });
 
 test("listen route on a Bluetooth mic: the profile-switch silence and burst are not trusted; the wake clip comes from the settled stream", async (t) => {

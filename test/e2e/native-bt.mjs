@@ -9,6 +9,11 @@
 //   clean    the fixtures as recorded (TTS, about -18 dBFS)
 //   headset  AirPods-like, conversational level (-31 dBFS)
 //   soft     AirPods-like, soft speech (-50 dBFS)
+//   typing   headset speech with keyboard typing before and between the
+//            utterances, as a real capture showed (`sotto debug capture`,
+//            2026-09-25): the typing must not be learned as speech (the
+//            uplink gain stays small, no can't-hear notice) and the words
+//            must still be transcribed
 // Then (unless SOTTO_BT_WAKE=0) a voice wake on the headset signal: idle
 // sleep, a wake phrase at the headset level, the clip must be transcribed and
 // the woken session must stay awake while live speech follows.
@@ -20,6 +25,10 @@
 //   SOTTO_BT_CONDITIONS=clean,headset,soft   which conditions to run
 //   SOTTO_BT_WAKE=0                          skip the wake scenario
 //   SOTTO_E2E_KEEP=1                         keep the temp dirs (daemon logs)
+//   SOTTO_BT_REPLAY=<raw.wav>                also replay a `sotto debug capture` raw WAV
+//     [SOTTO_BT_REPLAY_FROM=s SOTTO_BT_REPLAY_TO=s]  (a part of it, in seconds)
+//     [SOTTO_BT_REPLAY_PROFILE_DB=-49.8]    (start from a learned device level)
+//     and print what gpt-live-1 transcribed, the gain and any can't-hear notice
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -29,7 +38,7 @@ import { createDaemon } from "../../daemon/index.js";
 import { resolveApiKey } from "../../daemon/config.js";
 import { startFakeInbox } from "../helpers/fake-inbox.js";
 import { FakeNativeApp, bootstrap, readWavPcm24k } from "../helpers/fake-native-app.js";
-import { bluetoothMic, bluetoothSilence, wordRecall } from "../helpers/bt-audio.js";
+import { bluetoothMic, bluetoothSilence, wordRecall, keyboardTyping } from "../helpers/bt-audio.js";
 
 const REPO = fileURLToPath(new URL("../..", import.meta.url)).replace(/\/$/, "");
 const FIX = (n) => path.join(REPO, "test", "fixtures", n);
@@ -43,11 +52,12 @@ const CONDITIONS = {
   clean: null,
   headset: { speechDb: -31 },
   soft: { speechDb: -50 },
+  typing: { speechDb: -31, typing: true },
   // Measurement only (not in the default run): where gpt-live-1 stops hearing.
   db40: { speechDb: -40 },
   db45: { speechDb: -45 },
 };
-const WANT = (process.env.SOTTO_BT_CONDITIONS || "clean,headset,soft").split(",").map((s) => s.trim()).filter((s) => s in CONDITIONS);
+const WANT = (process.env.SOTTO_BT_CONDITIONS || "clean,headset,soft,typing").split(",").map((s) => s.trim()).filter((s) => s in CONDITIONS);
 const GAP_MS = 3000;
 const LEAD_MS = 3000;
 const TAIL_MS = 6000;
@@ -68,9 +78,12 @@ const freePort = () => new Promise((resolve, reject) => {
 });
 
 function signal(cond, pcm) { return cond ? bluetoothMic(pcm, cond) : pcm; }
-function quiet(cond, ms) { return cond ? bluetoothSilence(ms, cond) : Buffer.alloc(Math.round(ms * 24) * 2); }
+function quiet(cond, ms) {
+  if (cond?.typing) return Buffer.concat([keyboardTyping(ms - 600, { seed: Math.round(ms) }), bluetoothSilence(600, cond)]);
+  return cond ? bluetoothSilence(ms, cond) : Buffer.alloc(Math.round(ms * 24) * 2);
+}
 
-async function withDaemon(label, fn, { config = {} } = {}) {
+async function withDaemon(label, fn, { config = {}, micLevels = null } = {}) {
   const key = resolveApiKey({ env: process.env, pluginRoot: REPO });
   const TMP = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), `clv-bt-${label}-`)));
   const SOCK = `/tmp/clv-bt-${process.pid}-${label}.sock`;
@@ -82,6 +95,10 @@ async function withDaemon(label, fn, { config = {} } = {}) {
     SOTTO_VOCAB: "0", SOTTO_UPDATE: "0",
   };
   const chrome = { opened: 0, open() { this.opened++; return { mode: "none" }; }, async kill() { return 0; }, notify() {}, appStatus: () => ({ state: "ready" }) };
+  if (micLevels) {
+    fs.mkdirSync(path.join(TMP, "data"), { recursive: true });
+    fs.writeFileSync(path.join(TMP, "data", "mic-levels.json"), JSON.stringify(micLevels));
+  }
   const d = createDaemon({ dataDir: path.join(TMP, "data"), port, pluginRoot: REPO, env, chrome, onExit: () => {} });
   await d.listen();
   let app = null;
@@ -122,7 +139,7 @@ async function closeAndBill(app) {
 /** One condition: the utterances in a row, scored by word recall of the user captions. */
 async function runCondition(name) {
   const cond = CONDITIONS[name];
-  return withDaemon(name, async ({ app }) => {
+  return withDaemon(name, async ({ d, app, logFile }) => {
     const parts = [quiet(cond, LEAD_MS)];
     for (const u of UTTERANCES) parts.push(signal(cond, readWavPcm24k(FIX(u.file))), quiet(cond, GAP_MS));
     parts.push(quiet(cond, TAIL_MS));
@@ -134,10 +151,45 @@ async function runCondition(name) {
     const heard = app.ofType("caption").filter((c) => c.role === "user").map((c) => c.text).join("");
     const recall = wordRecall(UTTERANCES.map((u) => u.text).join(" "), heard);
     check(`${name}: user speech transcribed`, name === "clean" ? recall >= 0.7 : recall >= 0.6, `recall ${(recall * 100).toFixed(0)} %: ${JSON.stringify(heard.trim().slice(0, 140))}`);
+    if (cond?.typing) {
+      const agc = d.voice.status().native?.agc || {};
+      check("typing: not learned as speech (uplink gain stays small)", Number(agc.gain_db) < 10, JSON.stringify(agc));
+      const lines = readLog(logFile);
+      check("typing: no can't-hear notice", !lines.some((e) => e.ev === "page.cant_hear"), "");
+      check("typing: reported as not speech", lines.some((e) => e.ev === "mic.not_speech"), "");
+    }
     const billed = await closeAndBill(app);
     log(`${name}: billed ${billed} s`);
     return billed;
   });
+}
+
+/** A captured raw WAV (diagnosis): what gpt-live-1 made of it. Informational, no pass bar. */
+async function runReplay(file) {
+  const all = readWavPcm24k(file);
+  const from = Math.round(Number(process.env.SOTTO_BT_REPLAY_FROM || 0) * 24000) * 2;
+  const to = process.env.SOTTO_BT_REPLAY_TO ? Math.round(Number(process.env.SOTTO_BT_REPLAY_TO) * 24000) * 2 : all.length;
+  const pcm = Buffer.concat([all.subarray(from, to), Buffer.alloc(24000 * 2 * 4)]);
+  const prof = Number(process.env.SOTTO_BT_REPLAY_PROFILE_DB);
+  const INPUT = "Fake Mic";
+  const micLevels = Number.isFinite(prof) ? { devices: { [INPUT]: { speech_db: prof, floor_db: -80, utterances: 50, updated: 1, method: "voiced" } } } : null;
+  return withDaemon("replay", async ({ d, app, logFile }) => {
+    const dev = { name: INPUT, bluetooth: true, headphones: false };
+    app.sendJson({ type: "route", mode: "split", input: dev, output: { ...dev, headphones: true }, echo_cancellation: "automatic" });
+    const started = app.waitType("live", 15_000, (m) => m.event.type === "session.started");
+    app.startMic({ pcm });
+    await started;
+    await sleep((pcm.length / 2 / 24000) * 1000);
+    const heard = app.ofType("caption").filter((c) => c.role === "user").map((c) => c.text).join("").trim();
+    const lines = readLog(logFile);
+    const gains = lines.filter((e) => e.ev === "native.audio").map((e) => e.gain_db);
+    log(`replay: transcribed ${JSON.stringify(heard.slice(0, 400))}`);
+    log(`replay: gain_db over time ${JSON.stringify(gains)}, final ${JSON.stringify(d.voice.status().native?.agc)}`);
+    log(`replay: can't-hear ${lines.filter((e) => e.ev === "page.cant_hear").length}, utterances learned ${lines.filter((e) => e.ev === "mic.calibrate").length}, not speech ${lines.filter((e) => e.ev === "mic.not_speech").length}`);
+    const billed = await closeAndBill(app);
+    log(`replay: billed ${billed} s`);
+    return billed;
+  }, { micLevels });
 }
 
 /** Voice wake on the headset signal: the clip is transcribed and live speech keeps the session awake. */
@@ -172,6 +224,7 @@ async function main() {
   let billed = 0;
   try {
     for (const c of WANT) billed += await runCondition(c);
+    if (process.env.SOTTO_BT_REPLAY) billed += await runReplay(process.env.SOTTO_BT_REPLAY);
     if (process.env.SOTTO_BT_WAKE !== "0") billed += await runWake();
   } catch (e) {
     check("no exception", false, String(e && e.stack || e));

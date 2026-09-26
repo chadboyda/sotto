@@ -9,7 +9,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import * as wake from "../../web/wake.js";
-import { bluetoothMic, bluetoothSilence, pcmToFloat } from "../helpers/bt-audio.js";
+import { bluetoothMic, bluetoothSilence, pcmToFloat, keyboardTyping } from "../helpers/bt-audio.js";
 import { readWavPcm24k } from "../helpers/fake-native-app.js";
 
 const SR = 24000; // the native link's rate (daemon/native-proto.js)
@@ -216,6 +216,9 @@ test("typing, fans, hum and an abrupt steady tone never wake the native detector
     "fan at -45 dBFS": plus(macFloor(samples(n), -55, 13), fan(n, -45)),
     "fan starting at -40 dBFS": plus(macFloor(samples(n), -55, 14), (() => { const f = fan(n, -40); f.fill(0, 0, samples(3000)); return f; })()),
     "hum only, -48 dBFS": macFloor(samples(n), -48, 15),
+    // As a headset in call mode picks it up (live capture 2026-09-25: it woke 0.4.3, empty clips).
+    "typing at a headset, -25 dBFS frames": Float32Array.from(pcmToFloat(keyboardTyping(n))),
+    "typing at a headset, -20 dBFS frames": Float32Array.from(pcmToFloat(keyboardTyping(n, { peakDb: -20, rate: 9, seed: 5 }))),
     "tone starting at -30 dBFS": plus(macFloor(samples(n), -55, 16), (() => {
       const t = new Float32Array(samples(n));
       for (let i = samples(2000); i < t.length; i++) {

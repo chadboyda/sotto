@@ -1,7 +1,8 @@
 // Opt-in uplink audio capture for diagnosing "the voice does not hear me"
 // (SPEC §6.19 "Debug capture"). Off by default. `sotto debug capture on`
-// creates `D/debug/capture.on`; while that file exists (and for at most
-// MAX_MS after it was made: the daemon then deletes it), the native session
+// creates `D/debug/capture.on`; while that file exists (for at most MAX_MS
+// from when the daemon first saw it, then the daemon deletes it; a flag
+// older than STALE_MS never starts a capture), the native session
 // writes two aligned 24 kHz mono PCM16 WAVs per session into `D/debug/`:
 //   <stamp>-raw.wav  the app's mic frames exactly as they arrived
 //   <stamp>-up.wav   what was pushed to gpt-live-1 (after level control;
@@ -15,6 +16,8 @@ import path from "node:path";
 export const FLAG_FILE = "capture.on";
 /** A capture switches itself off this long after it was turned on. */
 export const MAX_MS = 10 * 60_000;
+/** A flag file older than this when first seen is stale (made while no daemon ran): deleted, no capture. */
+export const STALE_MS = 60 * 60_000;
 /** Finished captures are deleted after this long. */
 export const KEEP_MS = 24 * 3600_000;
 /** How often the flag file is looked at (one stat). */
@@ -39,6 +42,7 @@ function wavHeader(dataBytes) {
 export function createDebugCapture({ dir, clock, log = null, fsImpl = fs }) {
   let checkedAt = -Infinity;
   let on = false;
+  let onSince = 0;
   let files = null; // {raw:{fd,bytes,path}, up:{...}}
   const flag = dir ? path.join(dir, FLAG_FILE) : null;
 
@@ -70,7 +74,7 @@ export function createDebugCapture({ dir, clock, log = null, fsImpl = fs }) {
     checkedAt = now;
     let st = null;
     try { st = fsImpl.statSync(flag); } catch { st = null; }
-    if (st && now - st.mtimeMs > MAX_MS) {
+    if (st && ((on && now - onSince > MAX_MS) || (!on && now - st.mtimeMs > STALE_MS))) {
       try { fsImpl.unlinkSync(flag); } catch { /* ignore */ }
       log?.info("debug.capture", { on: false, reason: "timeout" });
       st = null;
@@ -79,7 +83,7 @@ export function createDebugCapture({ dir, clock, log = null, fsImpl = fs }) {
     if (want !== on) {
       on = want;
       if (!on) close();
-      else log?.info("debug.capture", { on: true, dir });
+      else { onSince = now; log?.info("debug.capture", { on: true, dir }); }
     }
     if (!on) prune(now);
   }

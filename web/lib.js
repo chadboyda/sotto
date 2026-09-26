@@ -649,10 +649,12 @@ export function createHearingMonitor(opts = {}) {
       return fired;
     },
     /**
-     * One meter reading. `rms` raw mic RMS, `voice` the assistant's output level (0..1).
+     * One meter reading. `rms` raw mic RMS, `voice` the assistant's output level (0..1),
+     * `speech` (optional; the native app's voicing test, daemon/agc.js) false when the
+     * sound is not voiced speech (typing): then it does not count as the user talking.
      * @returns {null | {kind:"silent"|"no_transcript", peak_rms:number, speech_ms:number, since_ms:number}}
      */
-    sample({ rms, muted = false, voice = 0, now }) {
+    sample({ rms, muted = false, voice = 0, now, speech = true }) {
       if (liveAt === null || fired || isHeard()) return null;
       const dt = lastAt === null ? 0 : Math.min(250, Math.max(0, now - lastAt));
       lastAt = now;
@@ -668,7 +670,7 @@ export function createHearingMonitor(opts = {}) {
       }
       const v = Number(rms) || 0;
       if (v > peak) peak = v;
-      if (v >= o.speechRms && !(voice > o.voiceLevel)) speechMs += dt;
+      if (speech && v >= o.speechRms && !(voice > o.voiceLevel)) speechMs += dt;
       if (armedAt !== null && now - armedAt >= o.silentMs) {
         if (peak < o.silentRms) {
           fired = { kind: "silent", peak_rms: peak, speech_ms: speechMs, since_ms: now - armedAt };
