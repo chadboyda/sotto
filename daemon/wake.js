@@ -39,9 +39,13 @@ export const WAKE_SENSITIVITIES = Object.freeze(["off", "low", "medium", "high"]
 /**
  * Sources whose message is worth waking a sleeping session for (voice.js
  * sendAppend()): answers to voice requests and anything Claude is blocked on.
+ * `mirror_result` too (§6.20 D): Claude answering words the user said to the
+ * voice is a reply the user is waiting for (live log 2026-09-28: the voice
+ * slept while Claude answered a mirrored "So, what's the verdict?"); a mere
+ * "Noted." routes as thinking only and never wakes.
  * Typed-turn results and routine completions only wait as pendingResult.
  */
-export const WAKE_SOURCES = Object.freeze(new Set(["voice_result", "background_voice", "voice_notice", "permission", "approval_reminder", "question", "attention", "notify"]));
+export const WAKE_SOURCES = Object.freeze(new Set(["voice_result", "mirror_result", "background_voice", "voice_notice", "permission", "approval_reminder", "question", "attention", "notify"]));
 
 /**
  * Should the live session go to sleep now?
