@@ -29,6 +29,23 @@ import { WakeGovernor, WAKE_SOURCES, sleepDecision, idleSecondsOf } from "./wake
 import { QUIET_MS } from "./update.js";
 import { decodeWavB64, wavDurationMs, transcribeWithFallback, wakeInstruction } from "./transcribe.js";
 import { normalizeKeyInput, validateKey, keyWhere } from "./apikey.js";
+import { isHandoffClaim, isWaitingClaim, clipWantsDelegation } from "./handoff.js";
+import { VOICE_WAIT_MAX_MS } from "./delegation.js";
+
+// Handoff guard (§6.20). The voice said it handed something to Claude: a
+// delegation made with that line (up to HANDOFF_LOOKBACK_MS before it) or
+// within HANDOFF_GRACE_MS after it counts; otherwise the daemon sends the
+// user's unsent words itself.
+const HANDOFF_GRACE_MS = 2000;
+const HANDOFF_LOOKBACK_MS = 5000;
+/** Assistant speech this recent is checked for a handoff line. */
+const HANDOFF_TEXT_MS = 6000;
+// Wake-clip words that are a request (§6.20 B): give the model this long to
+// delegate them itself; then, once the model has answered and the user has
+// been quiet CLIP_QUIET_MS (or CLIP_MAX_MS after the injection), send them.
+const CLIP_GRACE_MS = 3000;
+const CLIP_QUIET_MS = 1500;
+const CLIP_MAX_MS = 8000;
 
 /** The voice says "I can't hear you well" at most this often (§7.5). */
 const CANT_HEAR_SAY_MS = 10 * 60 * 1000;
@@ -114,7 +131,7 @@ const RESTART_WAIT_WORDS = {
 export function newCounters() {
   return {
     delegations: 0, inbox_sent: 0, inbox_failed: 0, thinking_sent: 0, commentary_sent: 0, instructions_sent: 0,
-    appends_acked: 0, appends_failed: 0, hooks: 0, sessions_created: 0, mirror_sent: 0, mirror_failed: 0, echo_guard_on: 0, echo_heard: 0,
+    appends_acked: 0, appends_failed: 0, hooks: 0, sessions_created: 0, mirror_sent: 0, mirror_failed: 0, echo_guard_on: 0, echo_heard: 0, handoff_fallbacks: 0,
   };
 }
 
@@ -171,6 +188,11 @@ export class Voice {
     this.usageSeen = new Map(); // live id → last usage.seconds
     this.capWarnedDate = null;
     this.lastPageActivityAt = 0;
+    // Handoff guard (§6.20): the last handoff line, a pending wake-clip
+    // request, and when the voice last said it is waiting with the user.
+    this.handoffSeenAt = 0;
+    this.clipHandoff = null;
+    this.voiceWaitingAt = 0;
     this.liveStartedAt = 0;
     this.lastClaudeEventAt = 0;
     this.pageHello = false;
@@ -295,6 +317,7 @@ export class Voice {
         vocabularyHint: (text) => vocabularyHint(text, this.vocab.terms),
         // A late delegation of words the mirror already sent (§6.18).
         claimMirror: () => this.mirror.claimRecent(),
+        peekMirror: () => this.mirror.peekRecent(),
       },
     });
     // Claude is waiting for the user's answer (§6.10.3): {text, at, via} or null.
@@ -2285,6 +2308,7 @@ export class Voice {
         this.transcript.add("assistant", evt.delta, evt.start_ms, evt.end_ms);
         this.speech.onOutput(evt.delta, evt.start_ms, evt.end_ms);
         this.style.onOutput(evt.delta);
+        this.onAssistantSpeech();
         break;
       case "session.delegation.created": this.delegation.onCreated(evt); break;
       case "session.usage.updated": this.onUsage(sb.id, Number(evt.usage?.seconds)); break;
@@ -2346,6 +2370,96 @@ export class Voice {
     this.clear("reconnectWatch");
     this.clear("reconnectOpen");
     this.clear("wakeNote");
+    this.clear("handoff");
+    this.clear("clipHandoff");
+    this.clipHandoff = null;
+    this.voiceWaitingAt = 0;
+  }
+
+  // ---- handoff guard (§6.20) ------------------------------------------------------------
+  /**
+   * Every assistant transcript delta: did the voice just say it is handing
+   * something to Claude (A), or that it is waiting with the user for Claude's
+   * reply (E)? A handoff line arms a check HANDOFF_GRACE_MS later.
+   */
+  onAssistantSpeech() {
+    const now = this.clock.now();
+    // Only speech after the last handoff line counts (one line, one check).
+    const since = Math.max(now - HANDOFF_TEXT_MS, (this.handoffSeenAt || 0) + 1);
+    const text = this.transcript.assistantTextSince(now - since);
+    if (!text) return;
+    if (isWaitingClaim(text)) this.voiceWaitingAt = now;
+    if (this.timers.handoff || !isHandoffClaim(text)) return;
+    this.handoffSeenAt = now;
+    this.timer("handoff", () => this.handoffCheck(now, text), HANDOFF_GRACE_MS);
+  }
+
+  /** The voice said it handed something over at `at`: make sure something actually went. */
+  handoffCheck(at, said) {
+    if (!this.sideband || this.state !== "live") return;
+    if (this.delegation.hasCollecting() || this.delegation.lastCreatedAt >= at - HANDOFF_LOOKBACK_MS) {
+      this.log.info("handoff.delegated", { said: truncate(said.trim(), 120) });
+      return;
+    }
+    this.sendHandoff("fallback", { said });
+  }
+
+  /** Send the user's unsent words to Claude ourselves (§6.20); logs handoff.fallback. */
+  sendHandoff(reason, { said = "" } = {}) {
+    const rec = this.delegation.sendDirect(reason);
+    if (!rec) {
+      this.log.info("handoff.covered", { reason, said: truncate(said.trim(), 120) });
+      return null;
+    }
+    this.counters.handoff_fallbacks++;
+    this.log.info("handoff.fallback", { reason, id: rec.id, status: rec.status, said: truncate(said.trim(), 120), text: truncate(rec.text || "", 300) });
+    return rec;
+  }
+
+  /** The words that woke the voice are a request (§6.20 B): make sure they reach Claude. */
+  armClipHandoff(text) {
+    this.clipHandoff = { at: this.clock.now(), text };
+    this.timer("clipHandoff", () => this.clipHandoffCheck(), CLIP_GRACE_MS);
+  }
+
+  clipHandoffCheck() {
+    const c = this.clipHandoff;
+    if (!c || !this.sideband || this.state !== "live") return;
+    if (this.delegation.hasCollecting() || this.delegation.lastCreatedAt >= c.at) {
+      this.clipHandoff = null;
+      this.log.info("handoff.delegated", { reason: "wake_clip" });
+      return;
+    }
+    // The user may still be finishing the sentence the clip started, and the
+    // live transcript of the rest lags the audio: wait until the model has
+    // answered (its turn-taking says the user is done) and the user has been
+    // quiet CLIP_QUIET_MS, or CLIP_MAX_MS at most. e2e 2026-09-28: sent at
+    // +3 s on quiet alone, the request lost the words still being transcribed.
+    const now = this.clock.now();
+    const quiet = now - (this.transcript.lastUserSpeechAt || 0);
+    const answered = (this.transcript.lastAssistantSpeechAt || 0) > c.at;
+    if ((quiet < CLIP_QUIET_MS || !answered) && now - c.at < CLIP_MAX_MS) {
+      const wait = quiet < CLIP_QUIET_MS ? CLIP_QUIET_MS - quiet : 500;
+      this.timer("clipHandoff", () => this.clipHandoffCheck(), Math.max(1, Math.min(wait, CLIP_MAX_MS - (now - c.at))));
+      return;
+    }
+    this.clipHandoff = null;
+    this.sendHandoff("wake_clip", { said: c.text });
+  }
+
+  /**
+   * Hold the voice awake (§6.20 C, E): Claude works on something for it (a
+   * delegation, a request the daemon sent itself, a mirror turn), a handoff
+   * check is pending, or the voice told the user it is waiting with them
+   * while Claude is busy. Bounded by VOICE_WAIT_MAX_MS; the reply still wakes
+   * a sleeping voice (§6.15).
+   */
+  voiceIsWaiting() {
+    if (this.timers.handoff || this.timers.clipHandoff) return true;
+    // SOTTO_VOICE_WAIT_MS shortens the bound for the e2e (test/e2e/handoff.mjs).
+    const bound = Number(this.env.SOTTO_VOICE_WAIT_MS) > 0 ? Number(this.env.SOTTO_VOICE_WAIT_MS) : VOICE_WAIT_MAX_MS;
+    if (this.delegation.voiceWorkPending(bound)) return true;
+    return !!(this.voiceWaitingAt && this.clock.now() - this.voiceWaitingAt <= bound && this.delegation.claudeBusy);
   }
 
   /** Graceful close of the current Live session (§6.11). */
@@ -2392,10 +2506,10 @@ export class Voice {
 
   idleTick() {
     if (this.state !== "live") return;
-    // ARCHITECTURE §7: never idle-close while a delegation is pending, i.e. being
-    // collected or still being worked on by Claude (bounded: a request in
-    // flight for over 30 min no longer keeps a paid session open).
-    const busy = this.delegation.hasCollecting() || this.delegation.pendingWork().length > 0;
+    // ARCHITECTURE §7: never idle-close while Claude works on something for
+    // the voice (§6.20 C: delegations, requests the daemon sent itself, mirror
+    // turns), bounded to VOICE_WAIT_MAX_MS; the answer wakes it after that.
+    const busy = this.voiceIsWaiting();
     const why = sleepDecision({
       now: this.clock.now(), idleMs: idleSecondsOf(this.config) * 1000, liveStartedAt: this.liveStartedAt,
       lastUserAt: this.transcript.lastUserSpeechAt, lastAssistantAt: this.transcript.lastAssistantSpeechAt,
@@ -2495,7 +2609,14 @@ export class Voice {
       this.emitPage({ type: "wake_heard", text });
     }
     this.deliver({ kind: "instructions", content: wakeInstruction(text), delegationId: null });
-    this.log.info("wake.inject", { via, chars: text ? text.length : 0 });
+    // gpt-live-1 read these words in an instruction and never heard them, and
+    // it does not delegate text it only read (live log 2026-09-28: "How's it
+    // looking?" and "So, what's the verdict?" each got a spoken "passing that
+    // to Claude" and no delegation). A request among them is sent by the
+    // daemon unless the model delegates first (§6.20 B).
+    const route = !!text && clipWantsDelegation(text);
+    if (route) this.armClipHandoff(text);
+    this.log.info("wake.inject", { via, chars: text ? text.length : 0, route });
   }
 
   onWakeTiming(msg) {

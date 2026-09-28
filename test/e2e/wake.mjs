@@ -181,13 +181,16 @@ async function main() {
   const sentIns = readLog().find((e) => e.ev === "client.send" && e.live_id === id2 && e.type === "session.instructions.append" && /What they said/.test(e.content || ""));
   check("instructions.append carries the words", !!sentIns);
 
-  // 5. The model acts on them: delegation → inbox.
-  const deleg = await until(() => readLog().find((e) => e.ev === "session.delegation.created" && e.live_id === id2), 25000);
-  check("session 2 delegated to Claude", !!deleg);
+  // 5. The words reach Claude: the model delegates, or the handoff guard
+  // sends them (SPEC §6.20 B: gpt-live-1 does not delegate words it only read).
+  const deleg = await until(() => readLog().find((e) => (e.ev === "session.delegation.created" && e.live_id === id2) || e.ev === "handoff.fallback"), 25000);
+  check("session 2 sent the request to Claude (delegation or handoff guard)", !!deleg, deleg ? (deleg.ev === "handoff.fallback" ? `handoff guard (${deleg.reason})` : "delegation") : "");
   const frame = await until(() => inbox.frames.find((f) => f.type === "user"), 10000);
   const content = frame?.message?.content || "";
   const norm = (t) => String(t).toLowerCase().replace(/[^a-z0-9 ]+/g, " ").replace(/\s+/g, " ").trim();
-  check("inbox got the request (\"files\")", /files/i.test(content), JSON.stringify(content.slice(0, 140)));
+  const heardFiles = /files/i.test(clipText) || readLog().some((e) => e.ev === "session.input_transcript.delta" && e.live_id === id2 && /files/i.test(e.delta || ""));
+  if (heardFiles || /files/i.test(content)) check("inbox got the request (\"files\")", /files/i.test(content), JSON.stringify(content.slice(0, 140)));
+  else warn("inbox got the request (\"files\")", `gpt-live-1 never transcribed "files" (clip ${JSON.stringify(clipText)}); sent: ${JSON.stringify(content.slice(0, 140))}`);
   check("the request starts with the words from the wake clip", clipText && norm(content).includes(norm(clipText)), JSON.stringify(clipText));
   const heardLive = readLog().filter((e) => e.ev === "session.input_transcript.delta" && e.live_id === id2).map((e) => e.delta).join("").trim();
   log(`session 2 heard live: ${JSON.stringify(heardLive.slice(0, 140))}`);

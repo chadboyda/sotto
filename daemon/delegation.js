@@ -49,6 +49,13 @@ export const STOP_DEFER_MS = 2500;
 export const STOP_RECHECK_MS = 1200;
 /** A request still in flight after this long is given up on (orphaned). */
 export const MAX_IN_FLIGHT_MS = 30 * 60_000;
+/**
+ * The voice stays awake for work Claude does for it (§6.20 C) at most this
+ * long; after that it may sleep, and the answer wakes it (§6.15 notify wake).
+ */
+export const VOICE_WAIT_MAX_MS = 10 * 60_000;
+/** A late delegation of words the daemon already sent itself (§6.20) claims that send this long. */
+export const DIRECT_CLAIM_MS = 20_000;
 const REPEAT_WINDOW_MS = 10 * 60_000;
 
 /** Background launches remembered for matching their task-notification later. */
@@ -109,6 +116,9 @@ export class DelegationEngine {
     this.lastSentAt = 0;
     this.lastHookAt = 0;
     this.mirrorPrompts = []; // mirror messages Claude has picked up (UserPromptSubmit), newest last
+    this.lastCreatedAt = 0; // wall time of the latest session.delegation.created
+    this.directSeq = 0;
+    this.lastDirect = null; // {rec, at}: the latest request the daemon sent itself (§6.20), until claimed
     this.timers = new Set();
     // prompt_id → {origin: "voice"|"typed"|"task", tasks: [...]} (last 50 prompts)
     this.turns = new Map();
@@ -144,8 +154,11 @@ export class DelegationEngine {
     if (!this.fx.liveId) return true;
     return rec.live_id != null && rec.live_id === this.liveId();
   }
-  /** The delegation id to append with: the record's own only in its own Live session. */
-  idFor(rec) { return this.isCurrentLive(rec) ? rec.id : null; }
+  /**
+   * The delegation id to append with: the record's own only in its own Live
+   * session. A request the daemon sent itself (§6.20) has no Live id at all.
+   */
+  idFor(rec) { return !rec?.synthetic && this.isCurrentLive(rec) ? rec.id : null; }
   wasStopped(promptId) { return typeof promptId === "string" && this.stoppedPrompts.includes(promptId); }
 
   /** New Live session: its timeline restarts at 0. */
@@ -170,6 +183,66 @@ export class DelegationEngine {
     return this.inFlight().filter((r) => !r.sent_at || now - r.sent_at <= maxAgeMs);
   }
 
+  /**
+   * Is Claude working on something for the voice (§6.20 C)? A delegation being
+   * collected, requests in flight (delegated or sent by the daemon itself) and
+   * mirror turns Claude started (UserPromptSubmit of a mirror, until its
+   * Stop), younger than maxAgeMs.
+   */
+  voiceWorkPending(maxAgeMs = VOICE_WAIT_MAX_MS) {
+    if (this.hasCollecting() || this.pendingWork(maxAgeMs).length) return true;
+    return this.pendingMirrorTurns(maxAgeMs) > 0;
+  }
+
+  /** Mirror turns Claude started and has not ended, younger than maxAgeMs. */
+  pendingMirrorTurns(maxAgeMs = VOICE_WAIT_MAX_MS) {
+    const now = this.clock.now();
+    let n = 0;
+    for (const t of this.turns.values()) if (t.origin === "mirror" && !t.done && t.at && now - t.at <= maxAgeMs) n++;
+    return n;
+  }
+
+  /**
+   * Send the user's unsent words to Claude as a request, without a Live
+   * delegation (§6.20): the voice said it handed something to Claude but
+   * delegated nothing, or the words that woke it are a request. Same content
+   * and tracking as a delegation (sent → delivered → answered, spoken as a
+   * voice_result). Words the mirror sent moments ago as background and Claude
+   * has not picked up yet are re-sent as the request (as a late delegation
+   * does, §6.18). Returns the record, or null when there is nothing to send
+   * or a delegation is being collected (it takes the words itself).
+   */
+  sendDirect(reason = "fallback") {
+    if (this.hasCollecting()) return null;
+    const fresh = this.transcript.userFragmentsAfter(this.consumedThroughMs);
+    const latest = fresh.reduce((m, f) => Math.max(m, f.end_ms), 0);
+    const req = collectRequest(this.transcript, this.consumedThroughMs, latest);
+    const mirrored = !req.text && this.fx.peekMirror?.();
+    if (!req.text && !mirrored) return null;
+    this.rev += 1;
+    const rec = {
+      id: `sotto-${reason}-${++this.directSeq}`, rev: this.rev, created_at: this.clock.now(), offset_ms: latest,
+      status: "collecting", text: null, content: null, msg_id: null, sent_at: 0, sent_while_busy: false,
+      delivered_at: 0, answered_at: 0, owner_socket: this.fx.ownerSocket?.() ?? null,
+      live_id: this.liveId(), prompt_id: null, synthetic: reason,
+    };
+    this.records.push(rec);
+    if (this.records.length > 200) this.records.splice(0, this.records.length - 200);
+    this.log.info("delegation", { id: rec.id, rev: rec.rev, to: "collecting", synthetic: reason });
+    this.fx.onChange?.(rec);
+    this.lastDirect = { rec, at: rec.created_at };
+    this.settle(rec);
+    return rec;
+  }
+
+  /** A request the daemon sent itself moments ago, claimed once by a late delegation (§6.20). */
+  claimDirect(withinMs = DIRECT_CLAIM_MS) {
+    const d = this.lastDirect;
+    if (!d || this.clock.now() - d.at > withinMs || !IN_FLIGHT.has(d.rec.status)) return null;
+    this.lastDirect = null;
+    return d.rec;
+  }
+
   /** Last n records, newest first, for /status (timestamps as ISO). */
   list(n = 10) {
     const iso = (ms) => (ms ? new Date(ms).toISOString() : null);
@@ -184,6 +257,7 @@ export class DelegationEngine {
     if (!d || d.target !== "client" || !d.id) return null;
     if (this.get(d.id)) return null; // duplicate event
     this.rev += 1;
+    this.lastCreatedAt = this.clock.now();
     const rec = {
       id: d.id, rev: this.rev, created_at: this.clock.now(), offset_ms: Number(evt.offset_ms) || 0,
       status: "collecting", text: null, content: null, msg_id: null, sent_at: 0, sent_while_busy: false,
@@ -238,6 +312,18 @@ export class DelegationEngine {
     // The words were already mirrored to Claude as an FYI because the model
     // delegated late (§6.18): send them again, this time as the request the
     // model says they are, so Claude answers and the answer is spoken.
+    // The daemon already sent these words itself (§6.20: the voice said it
+    // handed them over without delegating, or they woke it): this late
+    // delegation is that request. Claude has it; say so and send nothing.
+    if (!text && !req.echoLines && !rec.synthetic) {
+      const direct = this.claimDirect();
+      if (direct) {
+        rec.text = direct.text;
+        this.setStatus(rec, "mirrored");
+        this.fx.append("thinking", MIRRORED_NOTE, this.idFor(rec));
+        return;
+      }
+    }
     let mirrored = null;
     if (!text && !req.echoLines) {
       try { mirrored = this.fx.claimMirror?.() || null; } catch { mirrored = null; }
@@ -256,6 +342,7 @@ export class DelegationEngine {
     }
     if (!text && !mirrored) {
       this.setStatus(rec, "dropped_empty");
+      if (rec.synthetic) return; // the model asked nothing: nothing to say
       this.fx.append("commentary", "I didn't catch the request clearly. Could you say it again?", this.idFor(rec));
       return;
     }
@@ -271,7 +358,12 @@ export class DelegationEngine {
     const now = this.clock.now();
     if (!mirrored && words(text).length <= 6 && this.transcript.lastAssistantSpeechAt && now - this.transcript.lastAssistantSpeechAt <= 15000) {
       const line = this.transcript.lastAssistantLine();
-      if (line && line.text.trim()) {
+      // A request the daemon sends itself (§6.20) follows the voice's own
+      // handoff line ("Passing that to Claude now."): that is not what the
+      // user replied to. Only a line spoken before their words is context.
+      const firstAt = req.frags[0]?.at ?? 0;
+      const before = !rec.synthetic || (line && line.at < firstAt);
+      if (line && line.text.trim() && before) {
         content += `\n(Replying to the voice assistant, which had just said: "${clip(line.text, 200).replace(/"/g, "'")}")`;
       }
     }
@@ -343,6 +435,8 @@ export class DelegationEngine {
     // A new prompt means the previous turn is over. If it never sent Stop
     // (Esc interrupt), its voice requests will never be answered by it.
     if (pid && this.promptId && pid !== this.promptId) {
+      const prev = this.turns.get(this.promptId);
+      if (prev) prev.done = true;
       for (const r of this.records) {
         if (r.status === "delivered" && r.prompt_id === this.promptId) this.setStatus(r, "interrupted");
       }
@@ -393,7 +487,7 @@ export class DelegationEngine {
     const key = pid || "_";
     let t = this.turns.get(key);
     if (!t) {
-      t = { origin, tasks: [] };
+      t = { origin, tasks: [], at: this.clock.now(), done: false };
       this.turns.set(key, t);
       while (this.turns.size > 50) this.turns.delete(this.turns.keys().next().value);
     }
@@ -453,6 +547,9 @@ export class DelegationEngine {
       if (this.stoppedPrompts.length > 50) this.stoppedPrompts.shift();
       if (this.promptId === pid) this.promptId = null;
     }
+    // The turn is over: a mirror turn no longer holds the voice awake (§6.20 C).
+    const ended = this.turns.get(pid || "_");
+    if (ended) ended.done = true;
     const stopAt = this.clock.now();
     const text = typeof body.last_assistant_message === "string" ? body.last_assistant_message : "";
 
@@ -480,7 +577,7 @@ export class DelegationEngine {
     const current = target.rev >= this.sentRev && !this.hasCollecting();
     const earlier = !this.isCurrentLive(target);
     const answered_at = this.clock.now();
-    const payload = { text, delegationId: earlier ? null : target.id, requestText: target.text, earlier };
+    const payload = { text, delegationId: this.idFor(target), requestText: target.text, earlier };
     if (current) {
       this.setStatus(target, "answered", { answered_at });
       this.fx.route("voice_result", payload);

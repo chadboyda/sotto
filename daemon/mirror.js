@@ -272,10 +272,15 @@ export class Mirror {
    * delegation that arrives after its words were mirrored takes it (§6.18).
    */
   claimRecent(withinMs = 20000) {
-    const m = this.last;
-    if (!m || this.clock.now() - m.at > withinMs) return null;
-    this.last = null;
+    const m = this.peekRecent(withinMs);
+    if (m) this.last = null;
     return m;
+  }
+
+  /** The latest mirror if claimRecent() would return it, without claiming it. */
+  peekRecent(withinMs = 20000) {
+    const m = this.last;
+    return m && this.clock.now() - m.at <= withinMs ? m : null;
   }
 
   dispose() {
