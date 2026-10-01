@@ -69,6 +69,8 @@ scripts/lib.sh                        A  shared bash: data dir, json_escape, rea
 scripts/hook.sh                       A  gate + forwarder for all non-toggle hooks (§5.6)
 scripts/toggle.sh                     A  UserPromptExpansion handler: spawn/claim daemon (§5.7)
 scripts/voice-context.txt             A  one-line voice-context text (§5.8)
+scripts/courier.sh                    A  launcher for the courier MCP server: picks node or Bun, execs daemon/courier.js (§6.9.2)
+.mcp.json                             A  declares the courier as the plugin's stdio MCP server (§6.9.2)
 bin/sotto                       A  CLI on Claude's Bash PATH: `sotto voice [name]`, `status` (§5.9)
 test/scripts/*.test.js                A  node:test tests for the scripts (§11.1)
 test/scripts/helpers/*.js             A  fake daemon HTTP server etc.
@@ -82,7 +84,8 @@ daemon/statefiles.js                  B  atomic writes of daemon.key/active/stat
 daemon/http.js                        B  HTTP server + router + auth
 daemon/sse.js                         B  SSE hub
 daemon/owner.js                       B  owner binding, liveness checks
-daemon/inbox.js                       B  inbox-socket client
+daemon/inbox.js                       B  inbox-socket client, courier client, inbound hold risk (§6.9.1, §6.9.2)
+daemon/courier.js                     B  the courier: tool-less stdio MCP server, delivers for the daemon as the session's child (§6.9.2)
 daemon/live.js                        B  session create (SDP proxy) + Sideband class
 daemon/ws.js                          B  WebSocket constructor adapter
 daemon/transcript.js                  B  transcript fragments, grouping, echo detection
@@ -855,7 +858,7 @@ It settles anyway at `created_at + 3000`. (Amended: was 300 ms / 2000; see SPEC-
      - on `no_socket`/`refused`, run the liveness check (§6.5).
 7. **Held timer:** if `!sent_while_busy`, and no UserPromptSubmit/PreToolUse/MessageDisplay/Stop hook arrives within 8 s of `sent_at`:
    - set status `held_suspected`;
-   - send `commentary.append(id, "That request hasn't reached Claude Code. It may be waiting for approval in the terminal, or the session may be set to hold messages from other sessions.")`;
+   - send `commentary.append(id, "Your message is waiting for approval in the terminal. Claude Code has not picked it up yet; approve it there and it goes through.")` (Claude Code tells the sender nothing about a hold: no reply on the socket, verified with 2.1.286, so this timer is the only signal);
    - set `last_error = {code:"inbox_held"}` and show a page notice.
 
    A later hook moves the record back into the normal flow.
@@ -904,7 +907,24 @@ It settles anyway at `created_at + 3000`. (Amended: was 300 ms / 2000; see SPEC-
    ```
 4. `end()` and resolve `ok` once the write callback fires. Log any bytes received back at debug level; do not wait for them.
 
-The token line matters: it lets Claude Code verify the message as an own-child message, so even bypass-mode sessions deliver it without `crossSessionInbound` (cross-session-messaging.md, "Own-child messages"). A successful write is **not** a delivery receipt; E4 is.
+The token line lets Claude Code verify a child that has already exited as the session's own. It does **not** help the daemon: on macOS, Claude Code verifies a sender that is still running by process evidence only, and the detached, long-lived daemon is not the session's child, so a session that bypasses permission prompts holds its message (§6.9.2). The daemon therefore sends through the session's courier first and posts directly only as the fallback. A successful write is **not** a delivery receipt; E4 is.
+
+#### 6.9.2 The courier (`daemon/courier.js`, `.mcp.json`)
+**Why.** With no `crossSessionInbound` value, Claude Code delivers a peer message to a session that bypasses permission prompts only when it verifies the message came from the session's own child process; anything else is held for approval (`peer_message_hold`, `cause:"no-mode-asserted"`). On macOS it verifies a running sender by its process ancestry and checks `CLAUDE_CODE_MESSAGING_TOKEN` only after the sender has exited. Measured with CLI 2.1.286 in a `claude -p --permission-mode bypassPermissions` session (2026-10-01):
+| Sender | Result |
+|---|---|
+| detached process, alive while Claude Code reads it (the daemon's case), with the token | **held** |
+| detached process that exits right after its write, with the token | delivered (`selfSent`; racy, not used) |
+| the session's MCP server (a live child), with the token | **delivered** (`origin.selfSent:true`, `verifiedPeerPid` = the courier) |
+
+**What.** The plugin declares one stdio MCP server, `courier` (`.mcp.json`: `${CLAUDE_PLUGIN_ROOT}/scripts/courier.sh`, which execs `daemon/courier.js` with `SOTTO_NODE`, `node` or Bun). Claude Code starts it in every session (marketplace, `--plugin-dir` and skills-dir installs alike), as its own child, and keeps it running for the session's life. It gets the session's `CLAUDE_CODE_MESSAGING_SOCKET`, `CLAUDE_CODE_MESSAGING_TOKEN` and `CLAUDE_PLUGIN_DATA`.
+- **MCP side:** answers `initialize` with `capabilities:{}`, no `instructions` and `serverInfo.name` `sotto-courier`; `ping` → `{}`; `tools/list` → `{tools:[]}`; any other request → `-32601`. It adds nothing to the model's context. stdin closing (session end) or SIGTERM/SIGHUP/SIGINT: it removes its files and exits 0. It writes nothing to stderr or stdout outside JSON-RPC.
+- **Listener:** without an inbox socket in its env it only serves MCP. Otherwise it listens on `courierPaths(D, inbox).socket` = `D/courier/<first 16 hex of sha256(inbox socket path)>.sock` (dir 0700, socket 0600), or `/tmp/sotto-courier-<uid>/<same>.sock` when that path exceeds 103 bytes, and writes its pid to the `.pid` next to it. A courier for the same inbox (an `/mcp` reconnect) replaces the socket; a courier removes the files on exit only while the pid file is still its own. The daemon derives the same path from the owner socket, so nothing registers.
+- **Request** (one NDJSON line per connection, answer one line, then close): `{"op":"send","key":"<daemon.key>","content":"…","msg_id":"…","priority":"next"|"later"}` or `{"op":"ping","key":"…"}`. The key must equal `D/daemon.key` (read per request, constant-time compare), else `{"ok":false,"code":"bad_key"}` and nothing is sent. A send runs `inbox.send` (§6.9.1) with the courier's own socket and token and answers `{"ok":true}` or `{"ok":false,"code":"<inbox code>"}`; a ping answers `{"ok":true,"pid":…,"version":"1"}`.
+- **Daemon** (`Voice.inboxSend`): `viaCourier` first (2.5 s timeout). A courier answer, success or an inbox error, is final. When the courier never took the request (no socket, refused, `bad_key`, connect timeout: `fallback:true`), the daemon posts directly as before. So older Claude Code, `--strict-mcp-config` or a disabled MCP server still work wherever the direct post is delivered. `inbox.send` logs `via:"courier"|"direct"` (and the courier's code on a fallback).
+- **Cost:** one idle Node process per Claude Code session (about 45 MB resident, measured), no tools, no tokens, no network; it does nothing until the daemon connects.
+
+**Up-front warning.** toggle.sh forwards the hook's `permission_mode` (a plain word) in the `/control` session. On `on`, `app` and a `toggle` that turns voice on, the daemon logs `owner.inbound {courier, permission_mode, inbound, risk}` and appends one sentence to the answer (§9.2) when `inboundRisk` is not null: `refuse`/`hold` from `crossSessionInbound` (managed settings, then `$CLAUDE_CONFIG_DIR`/`~/.claude/settings.json`; a `--settings` value is invisible to the daemon), else `bypass` when `permission_mode` is `bypassPermissions`, no courier runs for the session (pid file, live pid, socket) and the setting is not `accept`. Sotto never changes the setting itself; the sentence names the `/config` row and says it applies to every session.
 
 ### 6.10 Speaking-policy routing (`daemon/policy.js`, pure)
 `route(source, policy, payload) → [{kind:"commentary"|"thinking"|"instructions", delegationId, content}]`. `speech.js` prepares all content.
@@ -1550,6 +1570,7 @@ The earlier voice conversation follows as user and assistant messages, oldest fi
 | on, page already connected | `sotto: voice ON (<project>).` |
 | on, moved | `sotto: voice ON (<project>), moved from <old project>.` |
 | on, already owner and live | `sotto: voice is already ON here (<project>).` |
+| on (any of the above), messages will be held or dropped (§6.9.2) | + ` <warning>`: `bypass` → `Heads-up: this session skips permission prompts and the Sotto courier is not running in it, so Claude Code will hold each voice message until you approve it in the terminal. Run /reload-plugins (or restart the session) to start the courier, or choose Accept for Messages from your other sessions in /config (that applies to all your sessions).`; `hold` → `Heads-up: your crossSessionInbound setting is hold, so Claude Code will hold each voice message until you approve it in the terminal. Choose Accept for Messages from your other sessions in /config to deliver them.`; `refuse` → `Warning: your crossSessionInbound setting is refuse, so Claude Code drops voice messages and the voice cannot reach this session.` |
 | on, no key | `sotto: voice ON (<project>), but there is no OpenAI API key yet. Opening the voice window so you can add it; it is saved in your macOS Keychain.` (page already connected: `… Add it in the voice window; it is saved in your macOS Keychain.`; `open_browser:false`: `… Run /talk key to add it.`; no window mode: `… Open the voice window to add it.`) |
 | on, no key, no Keychain | `sotto: ERROR OPENAI_API_KEY was not found. Run /talk key to add it, or export it before starting Claude Code.` |
 | key, have one | `sotto: using the OpenAI API key ending in <hint> from <the macOS Keychain | the plugin settings | the OPENAI_API_KEY environment variable | <.env path>>.` + ` Change or remove it in the voice window settings.` / ` Change it where OPENAI_API_KEY is exported.` / ` Change it in that file.` |
@@ -1587,7 +1608,7 @@ With `no key` and `cap reached`, the owner is still bound (so `/talk off` works)
 | Mic denied | `/talk status` last error (the app: "Sotto can't use the microphone: allow it in System Settings > Privacy & Security > Microphone") | error state with "Allow the microphone in Chrome settings"; the app: the macOS card with Open System Settings | – |
 | Mic silent (exact zeros) | `/talk status` last error `mic_silent` | the app: a fresh app or Chrome, the voice reconnects; Chrome: banner | – |
 | OpenAI 401/429/5xx | status last error | banner | – |
-| Inbox held | status last error `inbox_held` | warn notice with "set crossSessionInbound to accept" | yes (§6.9) |
+| Inbox held | status last error `inbox_held` | warn notice "Your voice message is waiting for approval in the Claude Code terminal…" | yes: "Your message is waiting for approval in the terminal…" (§6.9) |
 | Owner gone | – | notice, then window closes | yes (§6.5) |
 | Moderation close | status | error banner | – |
 | Daily cap | status + `/talk on` message | paused overlay reason | 80 % warning |
@@ -1788,6 +1809,6 @@ These need the user in a real interactive TUI. They are not blockers; the design
 3. How strongly Claude honours the voice-context framing of peer messages, and whether mid-turn absorbed inbox messages fire UserPromptSubmit (§6.9 handles both cases).
 4. Whether a Chrome `--app` window with a dedicated profile keeps the mic grant after the first prompt (expected yes).
 5. A real-mic echo-cancellation check with the MacBook speakers and with AirPods output. With AirPods, the app's native mic (§6.16): that the AirPods stay at 48 kHz (Audio MIDI Setup) and other audio is not lowered while voice is on (expected: the app opens only the built-in mic, without voice processing).
-6. Whether a message sent with the owner's token to a bypassPermissions session is delivered as own-child (the docs say yes; otherwise the held timer in §6.9 speaks the hint).
+6. ~~Whether a message sent with the owner's token to a bypassPermissions session is delivered as own-child.~~ Answered (CLI 2.1.286): not from the running daemon; it is held. The courier (§6.9.2) delivers; verified headless by `npm run e2e:courier`. Still to watch in an interactive TUI: the courier showing as connected in `/mcp`.
 7. Voice wake with a real room: the VAD thresholds are tuned on synthetic signals and the TTS e2e; check false wakes with music/TV and a mechanical keyboard, and quiet speech from across the room (raise or lower the Wake setting).
 8. Desktop app (§6.16): that the microphone permission survives a rebuild (the ad hoc signature keeps the designated requirement `identifier "com.chadboyda.sotto"`; expected yes), and a spoken end-to-end conversation through the app on MacBook speakers.
