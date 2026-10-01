@@ -116,6 +116,13 @@ export const MSG = {
   noKeyNoWindow: "sotto: ERROR OPENAI_API_KEY was not found. Run /talk key to add it, or export it before starting Claude Code.",
 };
 
+/** /talk on: why Claude Code will hold or drop voice messages here (SPEC §6.9.2, §9.1). */
+export const INBOUND_WARNING = {
+  bypass: "Heads-up: this session skips permission prompts and the Sotto courier is not running in it, so Claude Code will hold each voice message until you approve it in the terminal. Run /reload-plugins (or restart the session) to start the courier, or choose Accept for Messages from your other sessions in /config (that applies to all your sessions).",
+  hold: "Heads-up: your crossSessionInbound setting is hold, so Claude Code will hold each voice message until you approve it in the terminal. Choose Accept for Messages from your other sessions in /config to deliver them.",
+  refuse: "Warning: your crossSessionInbound setting is refuse, so Claude Code drops voice messages and the voice cannot reach this session.",
+};
+
 /** Why a restart waits, in words for /talk restart (SPEC §9.2). */
 const RESTART_WAIT_WORDS = {
   delegation: "a voice request is still with Claude",
@@ -614,8 +621,19 @@ export class Voice {
   async inboxSend(content, msgId, priority = "next") {
     const o = this.owner;
     if (!o) return { ok: false, code: "no_owner" };
+    // Through the session's courier first (SPEC §6.9.2): a live child of the
+    // session is delivered where a post from this detached daemon is held
+    // (bypass-permission sessions). Direct when no courier took it.
+    let courier = null;
+    if (typeof this.inbox.viaCourier === "function" && this.paths?.dir) {
+      courier = await this.inbox.viaCourier({ dataDir: this.paths.dir, inboxSocket: o.socket, key: this.daemonKey, content, msgId, priority });
+      if (courier.ok || !courier.fallback) {
+        this.log.info("inbox.send", { ok: courier.ok, code: courier.code, via: "courier", msg_id: msgId, length: content.length, priority });
+        return courier;
+      }
+    }
     const r = await this.inbox.send({ socket: o.socket, token: o.token, content, msgId, priority, log: this.log });
-    this.log.info("inbox.send", { ok: r.ok, code: r.code, msg_id: msgId, length: content.length, priority });
+    this.log.info("inbox.send", { ok: r.ok, code: r.code, via: "direct", ...(courier ? { courier: courier.code } : {}), msg_id: msgId, length: content.length, priority });
     return r;
   }
 
@@ -690,6 +708,25 @@ export class Voice {
     this.changed();
   }
 
+  /**
+   * /talk on's up-front warning (SPEC §6.9.2) when Claude Code will hold or
+   * drop voice messages in this session: it bypasses permission prompts and
+   * has no courier, or crossSessionInbound is hold/refuse. Never changes a
+   * setting; it says what to do. null when messages will be delivered.
+   */
+  inboundWarning(session) {
+    const courier = typeof this.inbox.courierAlive === "function" && this.paths?.dir
+      ? this.inbox.courierAlive(this.paths.dir, session.socket) : false;
+    const mode = typeof session.permission_mode === "string" ? session.permission_mode : null;
+    let inbound = null;
+    if (typeof this.inbox.readInboundSetting === "function") {
+      try { inbound = this.inbox.readInboundSetting({ env: this.env }); } catch { inbound = null; }
+    }
+    const risk = this.inbox.inboundRisk ? this.inbox.inboundRisk({ permissionMode: mode, courier, inbound }) : null;
+    this.log.info("owner.inbound", { courier, permission_mode: mode, inbound, risk });
+    return INBOUND_WARNING[risk] || null;
+  }
+
   // ---- /control ---------------------------------------------------------------------
   control(req = {}) {
     const action = req.action;
@@ -701,6 +738,9 @@ export class Voice {
     if (action !== "shutdown" && action !== "app") {
       try { this.chrome.ensureInstalled?.(); } catch (e) { this.log.warn("app.ensure_error", { message: e.message }); }
     }
+    // Turning voice on (not a toggle that turns it off): /talk on's hold warning applies.
+    const turningOn = action === "on" || action === "app" || (action === "toggle"
+      && !(this.owner && req.session && this.owner.socket === req.session.socket && this.state !== "off"));
     let r;
     switch (action) {
       case "toggle": {
@@ -731,6 +771,11 @@ export class Voice {
         break;
       }
       default: r = { ok: false, message: MSG.usage };
+    }
+    if (turningOn && this.state !== "off" && this.owner
+        && req.session && this.owner.socket === req.session.socket) {
+      const warn = this.inboundWarning(req.session);
+      if (warn) r = { ...r, message: `${r.message} ${warn}` };
     }
     const out = { ok: r.ok, state: this.state, message: r.message };
     this.log.info("control.result", { action, ok: out.ok, state: out.state });

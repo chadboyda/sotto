@@ -132,9 +132,20 @@ describe("toggle.sh cold start", () => {
         cwd: 'C:\\odd "dir"\\x',
         project_dir: "/tmp/proj dir",
         transcript_path: "/tmp/t\u00e9st.jsonl",
+        permission_mode: "auto",
       },
       config: { voice: "marin", speaking_policy: "milestones", daily_cap_minutes: 120, wake_sensitivity: "medium", window: "auto", mirror: "all", echo_guard: "auto", open_browser: true },
     });
+  });
+
+  test("permission_mode is forwarded only when it is a plain word (SPEC §6.9.2)", async () => {
+    const { D, env } = await setup();
+    parseOut(await run(TOGGLE, { env, input: stdinFor("on", { permission_mode: "bypassPermissions" }) }));
+    parseOut(await run(TOGGLE, { env, input: stdinFor("on", { permission_mode: 'x", "token": "y' }) }));
+    const bodies = controlBodies(D);
+    assert.equal(bodies[0].session.permission_mode, "bypassPermissions");
+    assert.equal(bodies[1].session.permission_mode, undefined);
+    assert.equal(bodies[1].session.token, TOKEN);
   });
 
   test("action mapping once the daemon is up", async () => {

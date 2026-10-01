@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "courier": {
+      "command": "${CLAUDE_PLUGIN_ROOT}/scripts/courier.sh",
+      "args": []
+    }
+  }
+}

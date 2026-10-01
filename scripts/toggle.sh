@@ -64,6 +64,7 @@ RAW_ARGS="$(json_field command_args)"
 IN_TRANSCRIPT="$(json_field transcript_path)"
 IN_CWD="$(json_field cwd)"
 IN_SESSION="$(json_field session_id)"
+IN_MODE="$(json_field permission_mode)"
 
 # First word of the argument (read trims leading/trailing whitespace).
 # Escaped whitespace from JSON (\n, \t) counts as a separator too.
@@ -634,6 +635,9 @@ if [[ -n "$CLAUDE_CODE_MESSAGING_TOKEN" ]]; then json_escape -v v "$CLAUDE_CODE_
 [[ -n "$IN_CWD" ]] && add_field cwd "\"$IN_CWD\""
 if [[ -n "$CLAUDE_PROJECT_DIR" ]]; then json_escape -v v "$CLAUDE_PROJECT_DIR"; add_field project_dir "\"$v\""; fi
 [[ -n "$IN_TRANSCRIPT" ]] && add_field transcript_path "\"$IN_TRANSCRIPT\""
+# The session's permission mode: /talk on warns when Claude Code would hold
+# voice messages here (bypassPermissions without the courier, SPEC §6.9.2).
+[[ "$IN_MODE" =~ ^[A-Za-z]{1,32}$ ]] && add_field permission_mode "\"$IN_MODE\""
 
 BODY="{\"action\":\"$ACTION\""
 [[ "$ACTION" == policy ]] && BODY+=",\"policy\":\"$POLICY\""

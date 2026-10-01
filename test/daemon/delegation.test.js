@@ -182,7 +182,7 @@ test("held timer fires at 8 s without hooks", async () => {
   assert.equal(rec.status, "held_suspected");
   assert.equal(h.lastError, "inbox_held");
   assert.deepEqual(h.notices, ["inbox_held"]);
-  assert.match(h.appends.at(-1).content, /hasn't reached Claude Code/);
+  assert.match(h.appends.at(-1).content, /waiting for approval in the terminal/);
   // A later UserPromptSubmit brings it back into the flow.
   h.engine.onHook("UserPromptSubmit", { prompt: rec.content });
   assert.equal(rec.status, "delivered");

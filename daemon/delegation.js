@@ -408,9 +408,9 @@ export class DelegationEngine {
   checkHeld(rec) {
     if (rec.status !== "sent" || this.lastHookAt >= rec.sent_at) return;
     this.setStatus(rec, "held_suspected");
-    this.fx.append("commentary", "That request hasn't reached Claude Code. It may be waiting for approval in the terminal, or the session may be set to hold messages from other sessions.", this.idFor(rec));
-    this.fx.setLastError?.("inbox_held", "A voice request did not reach Claude Code. If the session uses bypass permissions, set crossSessionInbound to accept.");
-    this.fx.notice?.("warn", "inbox_held", "Claude Code has not picked up the voice request. If it keeps happening, set crossSessionInbound to accept in your Claude Code settings.");
+    this.fx.append("commentary", "Your message is waiting for approval in the terminal. Claude Code has not picked it up yet; approve it there and it goes through.", this.idFor(rec));
+    this.fx.setLastError?.("inbox_held", "A voice message is waiting for approval in the Claude Code terminal (held). Approve it there; see Troubleshooting in the Sotto README.");
+    this.fx.notice?.("warn", "inbox_held", "Your voice message is waiting for approval in the Claude Code terminal. If this keeps happening, run /talk on again there: it says why.");
   }
 
   // ---- E4/E5 hooks ---------------------------------------------------------

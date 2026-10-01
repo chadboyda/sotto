@@ -1,6 +1,6 @@
 {
   "name": "sotto",
-  "version": "0.4.8",
+  "version": "0.4.9",
   "private": true,
   "type": "module",
   "engines": { "node": ">=22.6" },
@@ -21,6 +21,7 @@
     "e2e:bt": "node test/e2e/native-bt.mjs",
     "e2e:app": "node test/e2e/native-app.mjs",
     "e2e:handoff": "node test/e2e/handoff.mjs",
+    "e2e:courier": "node test/e2e/courier.mjs",
     "test:app": "node --test test/app/*.test.mjs",
     "test:native": "swift test --package-path app-native",
     "build:app": "bash scripts/build-app.sh",
