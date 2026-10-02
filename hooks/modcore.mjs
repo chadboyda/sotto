@@ -149,3 +149,104 @@ export class Delivery {
 export function appendText(content, context) {
   return context ? `${content}\n\n(${context})` : content;
 }
+
+// ---- phase 4: /talk from the mod, the conversation for the seed -----------------
+
+/**
+ * CLAUDE_PLUGIN_OPTION_* for toggle.sh run by the mod: the userConfig values
+ * register() got (defaults filled in). idle_seconds' default is left out when
+ * the legacy idle_minutes was set, as an unset option would be (SPEC §4.2).
+ */
+export function optionEnv(options = {}) {
+  const env = {};
+  for (const [k, v] of Object.entries(options || {})) {
+    if (!/^[a-z_]+$/.test(k) || v === undefined || v === null || typeof v === "object") continue;
+    env[`CLAUDE_PLUGIN_OPTION_${k.toUpperCase()}`] = String(v);
+  }
+  if (Number(options?.idle_seconds) === 60 && options?.idle_minutes !== undefined && Number(options.idle_minutes) !== 5) delete env.CLAUDE_PLUGIN_OPTION_IDLE_SECONDS;
+  return env;
+}
+
+/** Is this command.run the plugin's /talk? */
+export function isTalkCommand(name) {
+  return name === "sotto:talk" || name === "talk";
+}
+
+/** The transcript file Claude Code keeps for a session: <config>/projects/<cwd, non-alphanumerics as "-">/<id>.jsonl. */
+export function transcriptPathFor(configDir, cwd, sessionId) {
+  if (!configDir || !cwd || !sessionId) return "";
+  return `${configDir}/projects/${String(cwd).replace(/[^A-Za-z0-9]/g, "-")}/${sessionId}.jsonl`;
+}
+
+/** UserPromptExpansion stdin for toggle.sh, as Claude Code would hand it. */
+export function expansionInput({ sessionId, transcriptPath, cwd, permissionMode, args }) {
+  const a = typeof args === "string" ? args : "";
+  return JSON.stringify({
+    session_id: sessionId || "", transcript_path: transcriptPath || "", cwd: cwd || "", permission_mode: permissionMode || "default",
+    hook_event_name: "UserPromptExpansion", expansion_type: "slash_command", command_name: "sotto:talk", command_args: a,
+    prompt: `/sotto:talk${a ? ` ${a}` : ""}`,
+  });
+}
+
+/** toggle.sh's one line ({"continue":false,"stopReason":…}) as command text, without the "sotto: " Claude Code adds itself. */
+export function toggleText(stdout) {
+  const line = String(stdout || "").trim().split("\n").pop() || "";
+  let j = null;
+  try { j = JSON.parse(line); } catch { return null; }
+  if (!j || typeof j.stopReason !== "string") return null;
+  return j.stopReason.replace(/^sotto:\s*/, "");
+}
+
+/** $.session.messages() rows → [{role, text}] for the daemon's seed (newest last). */
+export function contextOf(rows, max = 40) {
+  const out = [];
+  for (const r of Array.isArray(rows) ? rows.slice(-max * 2) : []) {
+    if (!r || (r.role !== "user" && r.role !== "assistant") || typeof r.text !== "string" || !r.text.trim()) continue;
+    out.push({ role: r.role, text: r.text.length > 4000 ? r.text.slice(0, 4000) : r.text });
+  }
+  return out.slice(-max);
+}
+
+// ---- phase 6: what the mod draws -------------------------------------------------
+
+/** The voice state word as /talk status says it. */
+function stateWord(s) { return s.state === "live" ? "ON" : s.state || "off"; }
+
+/** The pinned status line under the prompt. */
+export function statusLine(s) {
+  if (!s) return undefined;
+  // Claude Code puts the plugin's name in front of the line ("sotto: ").
+  const parts = [`voice ${stateWord(s)}`];
+  if (s.persona) parts.push(`persona ${s.persona}`);
+  if (s.voice) parts.push(`voice ${s.voice}`);
+  return parts.join(" | ");
+}
+
+/** The phase words of the band. */
+export function phaseOf(s) {
+  if (!s) return "";
+  if (s.approval) return "approval needed";
+  if (s.state === "live") return s.busy ? "Claude is working" : "listening";
+  if (s.state === "sleeping") return s.busy ? "Claude is working, voice asleep" : "asleep, talk to wake it";
+  return s.state || "";
+}
+
+/** Text on one line, cut to `cols` cells (a code point per cell is close enough here). */
+export function fit(text, cols) {
+  const t = String(text || "").replace(/\s+/g, " ").trim();
+  if (!(cols > 0)) return "";
+  const chars = [...t];
+  return chars.length <= cols ? t : chars.slice(0, Math.max(0, cols - 1)).join("") + "…";
+}
+
+/**
+ * The band above the prompt: one or two lines fitted to the band's width:
+ * "sotto | <phase>" and the voice's last words (else the latest activity).
+ */
+export function bandLines(s, cols) {
+  if (!s) return [];
+  const w = Math.max(10, Number(cols) || 80);
+  const head = fit(`sotto | ${phaseOf(s)}${s.approval ? `: ${s.approval}` : ""}`, w);
+  const body = s.said ? `"${s.said}"` : s.activity || "";
+  return body ? [head, fit(body, w)] : [head];
+}

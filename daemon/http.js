@@ -126,7 +126,7 @@ export function createHttpServer({ voice, port, daemonKey, pageToken, pageSecret
         let closed = null;
         // A parked poll whose mod went away (connection closed) is dropped.
         res.on("close", () => { if (!res.writableEnded) closed?.(); });
-        const r = await voice.modPoll({ instance: url.searchParams.get("instance") || "", after: url.searchParams.get("after") || "0" }, (fn) => { closed = fn; });
+        const r = await voice.modPoll({ instance: url.searchParams.get("instance") || "", after: url.searchParams.get("after") || "0", sv: url.searchParams.get("sv") }, (fn) => { closed = fn; });
         if (r) send(res, r.status, r.body);
         return;
       }

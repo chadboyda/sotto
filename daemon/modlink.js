@@ -46,6 +46,21 @@ export class ModLink {
     this.pending = new Map(); // msg_id → {resolve, timer}
     this.counters = { sent: 0, taken: 0, not_taken: 0, receipts: 0, events: 0, dup_events: 0, links: 0, lost: 0 };
     this.lastLost = null; // {reason, at}
+    // The voice's state for the mod's terminal UI (status line, band; §6.21):
+    // the latest only, versioned; a poll whose `sv` is older gets it at once.
+    this.uiState = null;
+    this.stateVer = 0;
+  }
+
+  /** New UI state for the mod; answered to parked polls at once when it changed. */
+  setState(state) {
+    const key = JSON.stringify(state ?? null);
+    if (key === this.stateKey) return false;
+    this.stateKey = key;
+    this.uiState = state ?? null;
+    this.stateVer++;
+    this.wake();
+    return true;
   }
 
   get linked() { return !!this.link; }
@@ -76,14 +91,16 @@ export class ModLink {
    * else after the first new item or holdMs with none. `onClose` registration
    * lets the HTTP layer drop a parked poll whose connection went away.
    */
-  poll({ instance, after = 0 } = {}, onClose) {
+  poll({ instance, after = 0, sv = null } = {}, onClose) {
     if (!this.isLinked(instance)) return Promise.resolve({ status: 410, body: { error: { code: "not_linked" } } });
     this.link.lastSeenAt = this.clock.now();
     const a = Number.isFinite(Number(after)) ? Number(after) : 0;
+    // sv absent: a mod that draws nothing (older); never answered for state.
+    const v = sv === null || sv === undefined || sv === "" ? null : Number(sv);
     const ready = this.ready(a);
-    if (ready.length) return Promise.resolve(this.take(ready, a));
+    if (ready.length || this.stateNews(v)) return Promise.resolve(this.take(ready, a, v));
     return new Promise((resolve) => {
-      const w = { after: a, resolve: null, timer: null };
+      const w = { after: a, sv: v, resolve: null, timer: null };
       const done = (r) => {
         if (!this.waiters.delete(w)) return;
         this.clock.clearTimeout(w.timer);
@@ -91,7 +108,7 @@ export class ModLink {
         resolve(r);
       };
       w.resolve = done;
-      w.timer = this.clock.setTimeout(() => done({ status: 200, body: { items: [], seq: a } }), this.holdMs);
+      w.timer = this.clock.setTimeout(() => done(this.take([], a, v)), this.holdMs);
       this.waiters.add(w);
       onClose?.(() => done(null));
     });
@@ -101,7 +118,9 @@ export class ModLink {
 
   ready(after) { return this.outbox.filter((it) => it.seq > after); }
 
-  take(items, after) {
+  stateNews(sv) { return sv !== null && Number.isFinite(sv) && sv < this.stateVer; }
+
+  take(items, after, sv = null) {
     const now = this.clock.now();
     for (const it of items) {
       if (!it.takenAt) {
@@ -112,14 +131,16 @@ export class ModLink {
       }
     }
     const out = items.map(({ seq, kind, msg_id, text, priority, submit_only }) => ({ seq, kind, msg_id, text, priority, ...(submit_only ? { submit_only: true } : {}) }));
-    return { status: 200, body: { items: out, seq: Math.max(after, ...items.map((i) => i.seq)) } };
+    const body = { items: out, seq: Math.max(after, ...items.map((i) => i.seq)) };
+    if (sv !== null && Number.isFinite(sv)) { body.sv = this.stateVer; if (this.stateNews(sv)) body.state = this.uiState; }
+    return { status: 200, body };
   }
 
   /** Answer every parked poll that has something new. */
   wake() {
     for (const w of [...this.waiters]) {
       const ready = this.ready(w.after);
-      if (ready.length) w.resolve(this.take(ready, w.after));
+      if (ready.length || this.stateNews(w.sv)) w.resolve(this.take(ready, w.after, w.sv));
     }
   }
 

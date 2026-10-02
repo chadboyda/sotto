@@ -1,0 +1,12 @@
+{
+  "//": "Typecheck of the Claude Code mod against the types the CLI writes into .claude-plugin/types/ when it loads the mod from --plugin-dir (git-ignored, regenerated per CLI release). Run: npm run typecheck:mod (CI: .github/workflows/claude-code-mod.yml).",
+  "extends": "./.claude-plugin/types/tsconfig.json",
+  "compilerOptions": {
+    "allowJs": true,
+    "checkJs": true,
+    "strict": false,
+    "noImplicitAny": false,
+    "noUncheckedIndexedAccess": false
+  },
+  "include": ["hooks/*.mjs", "test/mod/*.ts"]
+}

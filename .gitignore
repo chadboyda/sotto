@@ -18,3 +18,4 @@ dist/
 # Written by Claude Code when it loads the mod from --plugin-dir (SPEC §6.21)
 .claude-plugin/types/
 /tsconfig.json
+.ci-claude-code-tested

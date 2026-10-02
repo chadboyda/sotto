@@ -391,7 +391,9 @@ export class DelegationEngine {
       if (busy) this.fx.createPendingContext();
       this.fx.counters.inbox_sent++;
       this.fx.append("thinking", `[sotto] Request sent to Claude Code: "${clip(reqText, 300).replace(/"/g, "'")}". Claude Code is working on it; there is no result yet.`, this.idFor(rec));
-      if (!busy) this.timer(() => this.checkHeld(rec), HELD_MS);
+      // The held timer is the classic inbox's inference (§6.9 E3.7): a message the
+      // mod took is put in by the session itself and never held (§6.21).
+      if (!busy && res.via !== "mod") this.timer(() => this.checkHeld(rec), HELD_MS);
     } else {
       const code = (res && res.code) || "error";
       this.setStatus(rec, "failed");

@@ -985,7 +985,14 @@ class BoundedSet extends Set {
 export const AGENT_STALE_MS = 15 * 60_000;
 export class AgentTracker {
   constructor({ clock }) { this.clock = clock; this.reset(); }
-  reset() { this.agents = new Map(); this.pending = []; this.known = new BoundedSet(500); this.done = new BoundedSet(500); }
+  reset() { this.agents = new Map(); this.pending = []; this.known = new BoundedSet(500); this.done = new BoundedSet(500); this.ignored = new BoundedSet(500); }
+  /** A helper agent (started by a subagent or a plugin, §6.21): never counted. */
+  ignore(id) {
+    if (!id) return;
+    this.ignored.add(id);
+    this.agents.delete(id);
+  }
+  isIgnored(id) { return !!id && this.ignored.has(id); }
   /** A main-thread Agent/Task launch whose agent has not reported yet. */
   launched() { this.pending.push(this.clock.now()); }
   /** A hook from agent `id`. */
@@ -1010,7 +1017,7 @@ export class AgentTracker {
    * id (an internal agent) or one already counted.
    */
   complete(id) {
-    if (!this.isKnown(id) || this.done.has(id)) return false;
+    if (this.isIgnored(id) || !this.isKnown(id) || this.done.has(id)) return false;
     this.done.add(id);
     if (this.agents.has(id)) this.agents.delete(id);
     else if (this.pending.length) this.pending.shift(); // launched, finished before any hook of its own
