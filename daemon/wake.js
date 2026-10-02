@@ -43,9 +43,14 @@ export const WAKE_SENSITIVITIES = Object.freeze(["off", "low", "medium", "high"]
  * voice is a reply the user is waiting for (live log 2026-09-28: the voice
  * slept while Claude answered a mirrored "So, what's the verdict?"); a mere
  * "Noted." routes as thinking only and never wakes.
- * Typed-turn results and routine completions only wait as pendingResult.
+ * `typed_result` too (§6.20 F): a reply to a prompt the user typed is news
+ * they are waiting for (live log 2026-10-02: every reply after the voice slept
+ * mid-turn sat silent in pendingResult). It only wakes when the speaking
+ * policy routes it as commentary (milestones, walkthrough); under "quiet" it
+ * is a thinking note and sendAppend() never wakes for those.
+ * Routine completions only wait as pendingResult.
  */
-export const WAKE_SOURCES = Object.freeze(new Set(["voice_result", "mirror_result", "background_voice", "voice_notice", "permission", "approval_reminder", "question", "attention", "notify"]));
+export const WAKE_SOURCES = Object.freeze(new Set(["voice_result", "mirror_result", "typed_result", "background_voice", "voice_notice", "permission", "approval_reminder", "question", "attention", "notify"]));
 
 /**
  * Should the live session go to sleep now?

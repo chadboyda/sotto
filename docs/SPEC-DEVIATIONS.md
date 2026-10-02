@@ -635,3 +635,9 @@ New SPEC §6.21. Measured on CLI 2.1.287 before building (phase 0, scratch copie
 3. **Approval resolution is the call's end.** No mod event marks the moment a person approves; `tool.call` ending is exact for denials and short calls, and the `ps` probe stays for a long approved Bash.
 4. **The terminal check runs in a pseudo-terminal, not tmux** (not installed; `script` needs a tty on stdin): `test/e2e/mod-ui.mjs` drives Claude Code in a Python `pty` and reads the screen bytes. Its first run answered a workspace-trust dialog for this worktree's directory with the keystrokes it typed; it now fails before typing when the dialog shows.
 5. **The status line has no `sotto:` prefix in the text**: Claude Code prefixes a plugin's status line with the plugin's name.
+
+## Typed turns keep the voice awake and their reply wakes it (fix/awake-typed, 0.6.2)
+Live log 2026-10-02 (0.6.0, mod linked): a voice request was answered and spoken (06:57:05); the user then typed a prompt, Claude's turn started about 06:58:00, the voice idle-slept at 06:58:12 while the turn ran (busy only counted voice work), and at 06:58:25 the reply was routed `typed_result`, which was not a wake source, so it sat in `pendingResult` and nothing was spoken, then or for any later typed reply.
+1. **Any owner turn holds the idle close** (§6.11, new §6.20 F), not only work for the voice: `claudeBusy` since `busySince`, bounded to 10 min (`VOICE_WAIT_MAX_MS`, `SOTTO_VOICE_WAIT_MS` in tests) so a lost Stop cannot hold the session forever, and not while the turn waits on an approval (the approval reminders wake it). This bills Live seconds while Claude works on a typed prompt; the user asked for exactly that ("it shouldn't sleep if you have updates/replies").
+2. **`typed_result` is in `WAKE_SOURCES`** (§6.15). The policy decides: under milestones and walkthrough it is commentary and wakes a sleeping voice; under `quiet` it is a thinking note and does not.
+
