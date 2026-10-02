@@ -111,7 +111,7 @@ async function run(mode) {
     // 1. Idle: a voice message becomes a prompt of its own.
     const W1 = `ALPHA${tag()}`;
     const s1 = Date.now();
-    const sent1 = await voice.inboxSend(`${marker} Reply with exactly the word ${W1} and nothing else.`, `e2e-idle-${W1}`);
+    const sent1 = await voice.inboxSend(`${marker} Hey, can you say ${W1} back to me so I know you can hear me?`, `e2e-idle-${W1}`);
     if (!sent1.ok) return fail(`idle send failed: ${JSON.stringify(sent1)}`);
     if (mode === "mod" && sent1.via !== "mod") return fail(`idle send went ${sent1.via || "classic"}, not through the mod`);
     if (mode === "classic" && sent1.via === "mod") return fail("idle send went through the mod");
@@ -124,7 +124,7 @@ async function run(mode) {
     say("Run this Bash command with a 60000 ms timeout: sleep 12. Then reply with just the word DONE plus any extra word a voice message asked you to include.");
     if (!await waitFor(() => events().some((e) => e.type === "assistant" && JSON.stringify(e.message?.content || "").includes("\"Bash\"")), 60000, "the Bash call")) return;
     await sleep(1500);
-    const sent2 = await voice.inboxSend(`${marker} Also include the word ${W2} in your final answer.`, `e2e-busy-${W2}`);
+    const sent2 = await voice.inboxSend(`${marker} Oh, and when you're done, say ${W2} too.`, `e2e-busy-${W2}`);
     if (!sent2.ok) return fail(`busy send failed: ${JSON.stringify(sent2)}`);
     if (!await waitFor(() => results().slice(before).some((t) => t.includes(W2)), 150000, `Claude to answer the mid-turn voice message (${W2})`)) return;
     console.log(`[${mode}] mid-turn message answered via ${sent2.via || "direct"}${mode === "mod" ? `, receipts: ${log.find("modlink.receipt").map((x) => x.how).join(",")}` : ""}`);
