@@ -99,3 +99,25 @@ test("approvals: the mod's resolved event closes the pending approval by tool_us
   assert.equal(h.voice.approvals.size, 0);
   assert.deepEqual(h.log.find("claude.approval").map((e) => e.phase), ["ask", "resolved"]);
 });
+
+test("UI state problem: held, can't hear (for a minute), and only an error that came with the state", async (t) => {
+  const h = await linked();
+  t.after(() => h.cleanup());
+  const v = h.voice;
+  assert.equal(v.modUiState().problem, null);
+  v.setState("live");
+  v.onCantHear({ kind: "silence" });
+  assert.equal(v.modUiState().problem.kind, "cant_hear");
+  await h.clock.advance(61_000);
+  assert.equal(v.modUiState().problem, null);
+  v.delegation.records.push({ id: "d1", status: "held_suspected" });
+  assert.equal(v.modUiState().problem.kind, "held");
+  v.delegation.records.pop();
+  v.setLastError("openai_auth", "the OpenAI key was refused");
+  assert.equal(v.modUiState().problem, null, "live: an error is not the state");
+  v.setState("paused");
+  assert.deepEqual(v.modUiState().problem, { kind: "error", text: "the OpenAI key was refused" });
+  await h.clock.advance(60_000);
+  v.setState("reconnecting");
+  assert.equal(v.modUiState().problem, null, "an older error is history");
+});

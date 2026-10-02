@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // The mod's terminal UI in a REAL interactive Claude Code terminal (SPEC
-// §6.21 "Terminal UI"): the status line and the band above the prompt.
+// §6.21 "Terminal UI"): the band above the prompt, Sotto's one surface.
 //
 // Claude Code runs in a pseudo-terminal (Python's pty; nothing is drawn on
 // your screen), in this repo's directory (a trusted workspace is needed:
@@ -8,7 +8,8 @@
 // scratch port and an in-process daemon on the --plugin-dir data dir. It
 // types `/sotto:talk status` (no model turn): the mod runs it, links up, gets
 // the voice's state and draws. The captured screen bytes, ANSI stripped, must
-// show "sotto: voice ... | persona ..." (status line) and "sotto | ..." (band).
+// show the band "sotto · <phase> · <persona> · <voice>" and no separate
+// status line ("sotto: voice ... | persona ...", drawn once beside the band).
 // No model call, no OpenAI, no microphone, no window. Run after
 // `npm run e2e:mod` (it needs the data dir the mod remembers from a hello).
 //
@@ -103,12 +104,12 @@ try {
   // The TUI moves the cursor instead of printing spaces, so match without whitespace.
   const text = strip(screen).replace(/\s+/g, "");
   const status = /sotto:voice[A-Za-z_]+\|persona[a-z0-9_-]+\|voice[a-z]+/.exec(text);
-  const band = /sotto\|(listening|paused|asleep|Claudeis|approval|waiting_page|connecting|live|sleeping)[A-Za-z,_]*/.exec(text);
+  const band = /sotto·(listening|paused|asleep|Claudeis|approval|waiting_page|connecting|reconnecting|closing|held|can'thear|error)[A-Za-z,_':]*(·[a-z0-9_-]+){0,2}/.exec(text);
   const talk = /voice[a-z_]+\([^)]*\)\|[^❯]*?linkmod/.exec(text);
   console.log(`status line: ${status ? status[0] : "(none)"}`);
   console.log(`band: ${band ? band[0] : "(none)"}`);
   console.log(`/talk status answer: ${talk ? talk[0].slice(0, 120) : "(none)"}`);
-  if (!status) fail("no status line on screen");
+  if (status) fail("a separate status line is on screen beside the band");
   else if (!band) fail("no band above the prompt");
   else if (!talk) fail("no /talk status answer from the mod");
   else { console.log("PASS terminal UI drawn"); code = 0; }

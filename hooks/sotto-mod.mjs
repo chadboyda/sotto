@@ -19,7 +19,7 @@
 //  - /talk: run here (toggle.sh under $.process.run, the daemon cold-started
 //    from the mod) once the data dir is known; the classic expansion otherwise.
 //  - model tools mcp__sotto__voice / persona / status while linked.
-//  - terminal UI: a status line and a band above the prompt.
+//  - terminal UI: one band above the prompt (no status line).
 // The daemon then writes "mod:<socket>" into D/active, which makes hook.sh a
 // no-op for this session. If this mod goes quiet the daemon falls back to the
 // shell hooks and the courier on its own; if the daemon goes away this mod
@@ -31,7 +31,7 @@
 // inside a hook except a tool or command it answers itself: the loops wait.
 import {
   FORWARDED, adaptPreToolUse, baseOf, forwardBody, markerFor, parseActive, ownsSession, Seen, Uplink, Delivery, appendText,
-  optionEnv, isTalkCommand, transcriptPathFor, expansionInput, toggleText, contextOf, statusLine, bandLines,
+  optionEnv, isTalkCommand, transcriptPathFor, expansionInput, toggleText, contextOf, bandRows,
 } from "./modcore.mjs";
 
 const MOD_VERSION = "2";
@@ -89,7 +89,6 @@ function unlink($) {
   wakeDrain();
   if (ui) {
     ui = null;
-    $.ui.status(undefined);
     $.ui.invalidate("ui.render");
   }
 }
@@ -206,10 +205,13 @@ async function pollLoop($, g) {
   }
 }
 
-/** The voice's state: the pinned status line, and a redraw of the band. */
+/**
+ * The voice's state: a redraw of the band. The band is Sotto's only surface in
+ * the terminal; a status line beside it showed Sotto twice (and Claude Code
+ * draws a plugin's status line as a warning).
+ */
 function applyState($, state) {
   ui = state;
-  $.ui.status(statusLine(state));
   $.ui.invalidate("ui.render");
 }
 
@@ -522,14 +524,15 @@ export function register(on, opts) {
     return r;
   });
 
-  // The band above the prompt (phase 6): what the voice is doing and its last
-  // words, fitted to the band's width; a survey keeps the band.
+  // The band above the prompt (phase 6): "sotto · <phase> · <persona> · <voice>"
+  // and the voice's last words, fitted to the band's width; a survey keeps the band.
   on("ui.render", { component: "AbovePrompt" }, async ($, e, next) => {
     if (!link || !ui || (e.props && e.props.hasSurvey)) return next(e);
-    const lines = bandLines(ui, e.props && e.props.bodyColumns);
-    if (!lines.length) return next(e);
+    const rows = bandRows(ui, e.props && e.props.bodyColumns);
+    if (!rows.length) return next(e);
     const { Box, Text } = $.ui.resolve(e);
-    return Box({ flexDirection: "column", children: lines.map((t, i) => Text({ key: `l${i}`, dimColor: i > 0, bold: i === 0, wrap: "truncate-end", children: t })) });
+    const seg = (g, k) => Text({ key: k, children: g.text, ...(g.bold ? { bold: true } : {}), ...(g.dim ? { dimColor: true } : {}), ...(g.warn ? { color: "warning" } : {}) });
+    return Box({ flexDirection: "column", children: rows.map((row, i) => Text({ key: `l${i}`, wrap: "truncate-end", children: row.map((g, j) => seg(g, `s${j}`)) })) });
   });
 
   void FORWARD;
