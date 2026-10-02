@@ -2715,17 +2715,25 @@ export class Voice {
   }
 
   /**
-   * Hold the voice awake (§6.20 C, E): Claude works on something for it (a
-   * delegation, a request the daemon sent itself, a mirror turn), a handoff
-   * check is pending, or the voice told the user it is waiting with them
-   * while Claude is busy. Bounded by VOICE_WAIT_MAX_MS; the reply still wakes
-   * a sleeping voice (§6.15).
+   * Hold the voice awake (§6.20 C, E, F): Claude works on something for it (a
+   * delegation, a request the daemon sent itself, a mirror turn), Claude is
+   * mid-turn in the owner session at all (a typed turn too: its reply is on
+   * the way), a handoff check is pending, or the voice told the user it is
+   * waiting with them while Claude is busy. Bounded by VOICE_WAIT_MAX_MS; the
+   * reply still wakes a sleeping voice (§6.15).
    */
   voiceIsWaiting() {
     if (this.timers.handoff || this.timers.clipHandoff) return true;
     // SOTTO_VOICE_WAIT_MS shortens the bound for the e2e (test/e2e/handoff.mjs).
     const bound = Number(this.env.SOTTO_VOICE_WAIT_MS) > 0 ? Number(this.env.SOTTO_VOICE_WAIT_MS) : VOICE_WAIT_MAX_MS;
     if (this.delegation.voiceWorkPending(bound)) return true;
+    // Live log 2026-10-02 06:58: a typed prompt started a turn, the voice
+    // idle-slept 12 s later while Claude was still working, and the reply then
+    // had nothing awake to speak it. Busy comes from the mod's turn.start /
+    // turn.complete (exact) or the classic UserPromptSubmit / Stop. Not while
+    // the turn is blocked on an approval: nothing comes until the user acts at
+    // the terminal, and the approval reminders wake the voice (§6.10.4).
+    if (this.delegation.busyWithin(bound) && !this.approvals?.current()) return true;
     return !!(this.voiceWaitingAt && this.clock.now() - this.voiceWaitingAt <= bound && this.delegation.claudeBusy);
   }
 
@@ -2773,9 +2781,9 @@ export class Voice {
 
   idleTick() {
     if (this.state !== "live") return;
-    // ARCHITECTURE §7: never idle-close while Claude works on something for
-    // the voice (§6.20 C: delegations, requests the daemon sent itself, mirror
-    // turns), bounded to VOICE_WAIT_MAX_MS; the answer wakes it after that.
+    // ARCHITECTURE §7: never idle-close while Claude works (§6.20 C, F:
+    // delegations, requests the daemon sent itself, mirror turns, any turn of
+    // the owner session), bounded to VOICE_WAIT_MAX_MS; the answer wakes it after that.
     const busy = this.voiceIsWaiting();
     const why = sleepDecision({
       now: this.clock.now(), idleMs: idleSecondsOf(this.config) * 1000, liveStartedAt: this.liveStartedAt,

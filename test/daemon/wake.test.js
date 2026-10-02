@@ -355,13 +355,19 @@ test("a notify wake the page ignores times out and keeps the result pending", as
   assert.equal(h.voice.pendingResult.text, "Claude has a question for you.");
 });
 
-test("typed results while sleeping do not wake (the user is at the terminal)", async (t) => {
+test("typed results while sleeping wake (§6.20 F); background work results do not", async (t) => {
   const h = await harness(t);
   const ws = await h.goLive({ config: { idle_seconds: 20 } });
   await sleepNow(h, ws, 20_000);
-  h.voice.deliver({ kind: "commentary", content: "Claude Code finished: done.", source: "typed_result" });
+  h.voice.deliver({ kind: "commentary", content: "Claude Code finished the build.", source: "background_result" });
+  await h.clock.advance(3000);
   assert.ok(!h.commands().includes("connect:notify"));
   assert.equal(h.voice.status().wake.queued, 0);
+  assert.equal(h.voice.pendingResult.text, "Claude Code finished the build.");
+  h.voice.deliver({ kind: "commentary", content: "Claude Code finished: done.", source: "typed_result" });
+  await h.clock.advance(3000); // released by the speech queue (§6.10.2)
+  assert.ok(h.commands().includes("connect:notify"), h.commands().join(","));
+  assert.equal(h.voice.status().wake.queued, 1);
   assert.equal(h.voice.pendingResult.text, "Claude Code finished: done.");
 });
 

@@ -14,7 +14,9 @@
 //            appended to the running turn (receipt "appended" or "requeued"
 //            then answered), and the daemon gets the session's events through
 //            the ordered uplink (UserPromptSubmit, PreToolUse with tool_name
-//            Bash from the adapter, Stop, turn start/complete).
+//            Bash from the adapter, Stop, turn start/complete). Both runs: a
+//            typed turn holds a sleeping-capable voice awake and its reply
+//            queues a notify wake (§6.20 F).
 //   classic  SOTTO_INTEGRATION=classic keeps the mod inert: no hello, the same
 //            message goes through the courier and the shell hooks, as in v0.4.9.
 // Needs the CLI >= 2.1.287 on PATH and a signed-in Claude Code. Costs a few
@@ -72,7 +74,7 @@ async function run(mode) {
     fs.rmSync(root, { recursive: true, force: true });
     if (!process.env.SOTTO_E2E_KEEP) fs.rmSync(TMP, { recursive: true, force: true }); else console.log(`kept ${TMP}`);
   };
-  const fail = async (m) => { console.error(`FAIL [${mode}] ${m}`); console.error(log.entries.filter((e) => /^(modlink|inbox|hook|claude|delegation)/.test(e.ev)).slice(-40).map((e) => JSON.stringify(e)).join("\n")); await cleanup(); finish(1); };
+  const fail = async (m) => { console.error(`FAIL [${mode}] ${m}`); console.error(log.entries.filter((e) => /^(modlink|inbox|hook|claude|delegation|wake|speech|result|state|page)/.test(e.ev)).slice(-40).map((e) => JSON.stringify(e)).join("\n")); await cleanup(); finish(1); };
   try {
     const env = { ...process.env, DISABLE_AUTOUPDATER: "1" };
     for (const k of Object.keys(env)) if (/^CLAUDE/.test(k) && k !== "CLAUDE_CONFIG_DIR") delete env[k];
@@ -163,6 +165,29 @@ async function run(mode) {
       if (!(voice.modlink.stateVer > 0) || !voice.modlink.uiState?.persona) return fail("no UI state pushed to the mod");
       if (!log.find("hook").some((x) => x.event === "UserPromptSubmit" && x.via === "mod")) return fail("no prompts through the mod");
     }
+
+    // 7. A typed turn holds the voice awake, and its reply wakes a sleeping
+    // voice (SPEC §6.20 F; live log 2026-10-02). There is no Live session here:
+    // a stand-in page listens and the voice is put to sleep, as idle would.
+    const W7 = `ECHO${tag()}`;
+    const page = { write() {}, end() {} };
+    const stateBefore = voice.state;
+    voice.sse.clients.add(page);
+    voice.setState("sleeping");
+    const before7 = results().length;
+    const wakesBefore = log.find("wake.queue").length;
+    say(`Run this Bash command: sleep 5. Then reply with just the word ${W7}.`);
+    if (!await waitFor(() => events().some((e) => e.type === "assistant" && JSON.stringify(e.message?.content || "").includes("sleep 5")), 60000, "the typed turn's Bash call")) return;
+    await sleep(1000);
+    if (!voice.delegation.claudeBusy || !voice.voiceIsWaiting()) return fail(`a typed turn does not hold the voice (busy ${voice.delegation.claudeBusy})`);
+    if (!await waitFor(() => results().slice(before7).some((t) => t.includes(W7)), 90000, `the typed reply (${W7})`)) return;
+    if (!await waitFor(() => log.find("wake.queue").slice(wakesBefore).some((w) => w.source === "typed_result") && voice.wakeQueue.some((q) => q.source === "typed_result" && q.content.includes(W7)), 15000, "the typed reply to wake the voice")) return;
+    if (!log.find("wake.request").length) return fail("no wake request for the typed reply");
+    console.log(`[${mode}] typed turn held the voice; its reply (${W7}) queued a notify wake, connect:notify sent`);
+    voice.sse.clients.delete(page);
+    voice.clear("notifyWatch");
+    voice.wakeQueue = [];
+    voice.setState(stateBefore);
 
     // /talk status: from the mod (no hook stop) when linked, from toggle.sh otherwise.
     const before5 = results().length;

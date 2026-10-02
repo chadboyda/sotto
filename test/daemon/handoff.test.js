@@ -2,7 +2,8 @@
 // the daemon (A), wake-clip words that are a request reach Claude (B), the
 // voice stays awake while Claude works for it, mirrors included (C), a reply
 // wakes a sleeping voice, mirror replies included (D), and "I'll be right
-// here" holds the session while Claude is busy (E). Replays of the live log of
+// here" holds the session while Claude is busy (E), and any turn holds it
+// while a typed reply wakes it (F). Replays of the live log of
 // 2026-09-28 (0.4.7) with a fake clock.
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -87,10 +88,11 @@ test("clipWantsDelegation: questions and requests yes; fillers, mic checks, voic
   for (const s of ["Hello?", "hello", "okay", "slow down", "testing one two", "", "Hmm?"]) assert.equal(clipWantsDelegation(s), false, s);
 });
 
-test("mirror_result wakes a sleeping voice (D)", () => {
+test("mirror_result and typed_result wake a sleeping voice (D, F); background work does not", () => {
   assert.ok(WAKE_SOURCES.has("mirror_result"));
   assert.ok(WAKE_SOURCES.has("voice_result"));
-  assert.ok(!WAKE_SOURCES.has("typed_result"));
+  assert.ok(WAKE_SOURCES.has("typed_result"));
+  assert.ok(!WAKE_SOURCES.has("background_result"));
 });
 
 // ---- A: a spoken handoff with no delegation --------------------------------------------
@@ -335,10 +337,71 @@ test("E: 'I'll be right here with you' while Claude is busy holds the voice unti
   assert.equal(ws.sentOfType("session.close").length, 1);
 });
 
-test("E: without that line a typed turn does not hold the voice (it sleeps as before)", async (t) => {
+// ---- F: any turn holds the voice; a typed reply wakes it ---------------------------------
+
+test("F: a typed turn holds the voice awake past the idle timeout (live log 2026-10-02 06:58), then it sleeps", async (t) => {
   const h = await harness(t);
   const ws = await h.goLive({ config: { idle_seconds: 20 } });
   h.voice.handleHook("UserPromptSubmit", { prompt: "refactor the parser", prompt_id: "t1" }, OWNER);
+  await h.clock.advance(3 * 60_000);
+  assert.equal(ws.sentOfType("session.close").length, 0, "Claude is mid-turn: stay awake");
+  h.voice.handleHook("Stop", { last_assistant_message: "Parser refactored.", prompt_id: "t1" }, OWNER);
+  await h.clock.advance(3000);
+  assert.match(appends(ws, "commentary").map((e) => e.content).join(" "), /Parser refactored/);
+  await h.clock.advance(25_000);
+  assert.equal(ws.sentOfType("session.close").length, 1, "answered and quiet: sleeps");
+});
+
+test("F: the mod's turn.start holds the voice like a classic turn; turn.complete releases it", async (t) => {
+  const h = await harness(t);
+  const ws = await h.goLive({ config: { idle_seconds: 20 } });
+  h.voice.onModTurn({ phase: "start" });
+  await h.clock.advance(2 * 60_000);
+  assert.equal(ws.sentOfType("session.close").length, 0);
+  h.voice.onModTurn({ phase: "complete", reason: "completed", ms: 120_000 });
   await h.clock.advance(25_000);
   assert.equal(ws.sentOfType("session.close").length, 1);
+});
+
+test("F: the hold is bounded at 10 min from the turn's start (a lost Stop never holds forever)", async (t) => {
+  const h = await harness(t);
+  const ws = await h.goLive({ config: { idle_seconds: 20 } });
+  h.voice.onModTurn({ phase: "start" });
+  // More busy signals in the same turn do not restart the bound.
+  await h.clock.advance(5 * 60_000);
+  h.voice.handleHook("PreToolUse", { tool_name: "Bash", tool_input: { command: "ls" }, tool_use_id: "u1" }, OWNER);
+  await h.clock.advance(VOICE_WAIT_MAX_MS - 5 * 60_000 - 10_000);
+  assert.equal(ws.sentOfType("session.close").length, 0);
+  assert.equal(h.voice.delegation.claudeBusy, true);
+  await h.clock.advance(15_000);
+  await sleepNow(h, ws);
+});
+
+test("F: a typed reply under milestones wakes a sleeping voice and is spoken briefly", async (t) => {
+  const h = await harness(t);
+  let ws = await h.goLive({ config: { idle_seconds: 20, speaking_policy: "milestones" } });
+  await h.clock.advance(25_000);
+  await sleepNow(h, ws);
+  h.voice.handleHook("UserPromptSubmit", { prompt: "refactor the parser", prompt_id: "t1" }, OWNER);
+  h.voice.handleHook("Stop", { last_assistant_message: "Parser refactored into three modules. Then a long second sentence about `src/parser.ts` that is not spoken.", prompt_id: "t1" }, OWNER);
+  await h.clock.advance(3000);
+  assert.ok(h.commands().includes("connect:notify"), h.commands().join(","));
+  assert.equal(h.log.find("wake.queue")[0].source, "typed_result");
+  ws = await h.goLive({ reason: "notify" });
+  await h.clock.advance(3000);
+  const said = appends(ws, "commentary").map((e) => e.content).join(" ");
+  assert.match(said, /Parser refactored into three modules/);
+  assert.doesNotMatch(said, /second sentence/);
+});
+
+test("F: under the quiet policy a typed reply does not wake the voice (it stays pending)", async (t) => {
+  const h = await harness(t);
+  const ws = await h.goLive({ config: { idle_seconds: 20, speaking_policy: "quiet" } });
+  await h.clock.advance(25_000);
+  await sleepNow(h, ws);
+  h.voice.handleHook("UserPromptSubmit", { prompt: "refactor the parser", prompt_id: "t1" }, OWNER);
+  h.voice.handleHook("Stop", { last_assistant_message: "Parser refactored.", prompt_id: "t1" }, OWNER);
+  await h.clock.advance(3000);
+  assert.ok(!h.commands().includes("connect:notify"), h.commands().join(","));
+  assert.equal(h.log.find("wake.queue").length, 0);
 });

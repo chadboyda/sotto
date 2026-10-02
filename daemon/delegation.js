@@ -109,7 +109,8 @@ export class DelegationEngine {
     this.rev = 0;
     this.sentRev = 0;
     this.consumedThroughMs = 0;
-    this.claudeBusy = false;
+    this.busy = false;
+    this.busySince = 0; // when claudeBusy last went true (bounds the idle hold, voice.js voiceIsWaiting)
     this.promptId = null; // prompt_id of the turn in progress (from UserPromptSubmit)
     this.stoppedPrompts = [];
     this.lastSentContent = null;
@@ -124,6 +125,19 @@ export class DelegationEngine {
     this.turns = new Map();
     // tool_use_id of a background launch → {origin, requestText} of the turn that launched it
     this.launches = new Map();
+  }
+
+  /** Is Claude mid-turn in the owner session (any turn: voice, typed, mirror)? */
+  get claudeBusy() { return this.busy; }
+  set claudeBusy(v) {
+    if (v && !this.busy) this.busySince = this.clock.now();
+    if (!v) this.busySince = 0;
+    this.busy = !!v;
+  }
+
+  /** Claude is mid-turn and the turn started at most maxAgeMs ago (a lost Stop must not hold forever). */
+  busyWithin(maxAgeMs = VOICE_WAIT_MAX_MS) {
+    return this.busy && this.clock.now() - this.busySince <= maxAgeMs;
   }
 
   // ---- helpers -------------------------------------------------------------
