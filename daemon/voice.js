@@ -31,6 +31,7 @@ import { decodeWavB64, wavDurationMs, transcribeWithFallback, wakeInstruction } 
 import { normalizeKeyInput, validateKey, keyWhere } from "./apikey.js";
 import { isHandoffClaim, isWaitingClaim, clipWantsDelegation } from "./handoff.js";
 import { VOICE_WAIT_MAX_MS } from "./delegation.js";
+import { ModLink } from "./modlink.js";
 
 // Handoff guard (§6.20). The voice said it handed something to Claude: a
 // delegation made with that line (up to HANDOFF_LOOKBACK_MS before it) or
@@ -67,6 +68,7 @@ const NOTIFY_WATCH_MS = 30000;
 const MAX_WAKE_QUEUE = 10;
 const SESSION_REASONS = ["start", "resume", "reconnect", "wake", "notify"];
 const LIVENESS_MS = 30000;
+const MODLINK_CHECK_MS = 5000;
 const WAITING_PAGE_MS = 30000;
 const EXIT_AFTER_OFF_MS = 3000;
 const CLOSE_WINDOW_KILL_MS = 1500;
@@ -179,6 +181,11 @@ export class Voice {
     this.base = openaiBase(this.env);
     this.state = "off";
     this.owner = null;
+    // The Claude Code mod link (SPEC §6.21): while the owner session's mod is
+    // linked (owner.transport "mod") voice messages and hook events go through
+    // it; without it, or when it goes quiet, the classic shell hooks and the
+    // courier carry them exactly as before.
+    this.modlink = new ModLink({ clock: this.clock, log: this.log, onLost: (reason) => this.onModLost(reason) });
     this.config = normalizeConfig({});
     this.runtimePolicy = null;
     this.live = null; // {id, started_at, expires_at, usage_seconds, muted, reason, greeted}
@@ -308,7 +315,8 @@ export class Voice {
         // message): that ranks with answers in the speech queue.
         append: (kind, content, id) => this.deliver({ kind, content, delegationId: id, source: id != null ? "voice_notice" : undefined }),
         route: (source, payload) => this.narrator.route(source, payload),
-        createPendingContext: () => createPendingContext(this.paths),
+        // hook.sh's PreToolUse fallback; the mod frames its appends itself (§6.21).
+        createPendingContext: () => { if (!this.modActive()) createPendingContext(this.paths); },
         removePendingContext: () => removePendingContext(this.paths),
         setLastError: (code, message) => this.setLastError(code, message),
         notice: (level, code, text) => this.notice(level, code, text),
@@ -381,6 +389,7 @@ export class Voice {
         echo_guard: this.echoGuardMode(),
       },
       claude: { busy: this.delegation.claudeBusy, last_event_at: iso(this.lastClaudeEventAt), awaiting_input: !!this.awaiting, approval: this.approvalStatus() },
+      integration: this.integrationStatus(),
       page: { connected: this.sse.count > 0 || false, clients: this.sse.count },
       delegations: this.delegation.list(10),
       counters: { ...this.counters },
@@ -618,9 +627,18 @@ export class Voice {
     }
   }
 
-  async inboxSend(content, msgId, priority = "next") {
+  async inboxSend(content, msgId, priority = "next", { submitOnly = false } = {}) {
     const o = this.owner;
     if (!o) return { ok: false, code: "no_owner" };
+    // Through the session's Claude Code mod first (SPEC §6.21): it submits or
+    // appends in-process, nothing is held. When it did not take the message
+    // (gone, hung), the classic way below sends it, with no double send.
+    if (this.modActive()) {
+      const m = await this.modlink.send({ content, msgId, priority, submitOnly });
+      this.log.info("inbox.send", { ok: m.ok, code: m.code, via: "mod", msg_id: msgId, length: content.length, priority });
+      if (m.ok || !m.fallback) return m;
+      if (this.owner !== o) return { ok: false, code: "no_owner" };
+    }
     // Through the session's courier first (SPEC §6.9.2): a live child of the
     // session is delivered where a post from this detached daemon is held
     // (bypass-permission sessions). Direct when no courier took it.
@@ -635,6 +653,108 @@ export class Voice {
     const r = await this.inbox.send({ socket: o.socket, token: o.token, content, msgId, priority, log: this.log });
     this.log.info("inbox.send", { ok: r.ok, code: r.code, via: "direct", ...(courier ? { courier: courier.code } : {}), msg_id: msgId, length: content.length, priority });
     return r;
+  }
+
+  // ---- the Claude Code mod link (SPEC §6.21) ----------------------------------------------
+  /** Is the owner session's mod carrying this session (else the classic hooks and courier do)? */
+  modActive() { return !!this.owner && this.owner.transport === "mod" && this.modlink.linked; }
+
+  /**
+   * D/active (SPEC §5.6). While the mod is linked its owner field is
+   * "mod:<socket>": hook.sh compares it with $CLAUDE_CODE_MESSAGING_SOCKET, so
+   * every shell hook of that session is a no-op, and the mod still recognises
+   * its own session in it.
+   */
+  writeActiveFile() {
+    if (!this.owner) return;
+    const socket = this.modActive() ? `mod:${this.owner.socket}` : this.owner.socket;
+    try { writeActive(this.paths, { socket, port: this.port, key: this.daemonKey, nonce: this.nonce }); } catch (e) { this.log.error("active.write_error", { message: e.message }); }
+  }
+
+  integrationStatus() { return this.modlink.status(); }
+
+  /** POST /mod/hello: the mod of the session that owns voice links up. → {status, body} */
+  modHello(b = {}) {
+    const o = this.owner;
+    if (!o || this.state === "off" || this.state === "closing") return { status: 409, body: { error: { code: "not_active" } } };
+    if (typeof b.socket !== "string" || b.socket !== o.socket) return { status: 409, body: { error: { code: "not_owner" } } };
+    if (typeof b.instance !== "string" || !/^[A-Za-z0-9._-]{4,64}$/.test(b.instance)) return { status: 400, body: { error: { code: "bad_instance" } } };
+    const was = this.modActive();
+    const r = this.modlink.hello({ instance: b.instance, cli: typeof b.cli === "string" ? truncate(b.cli, 40) : null, sessionId: typeof b.session_id === "string" ? b.session_id : null });
+    o.transport = "mod";
+    if (typeof b.session_id === "string" && b.session_id) o.session_id = b.session_id;
+    if (!was) this.writeActiveFile();
+    this.log.info("modlink.up", { instance: b.instance, cli: typeof b.cli === "string" ? truncate(b.cli, 40) : null, mod: typeof b.mod === "string" ? truncate(b.mod, 20) : null, relink: was });
+    this.changed();
+    return { status: 200, body: { ok: true, after: r.after, nonce: this.nonce || null, hold_ms: this.modlink.holdMs } };
+  }
+
+  /** GET /mod/poll. */
+  modPoll({ instance, after }, onClose) { return this.modlink.poll({ instance, after }, onClose); }
+
+  /** POST /mod/events: the mod's ordered uplink. → {status, body} */
+  modEvents(b = {}) {
+    if (!this.modActive()) return { status: 410, body: { error: { code: "not_linked" } } };
+    const r = this.modlink.accept({ instance: b.instance, events: b.events });
+    if (!r.ok) return { status: r.status, body: { error: { code: r.code } } };
+    for (const ev of r.fresh) {
+      try { this.onModEvent(ev); } catch (e) { this.log.error("modlink.event_error", { kind: ev.kind, event: ev.event, message: String(e && e.message) }); }
+    }
+    return { status: 200, body: { ok: true, acked: r.acked } };
+  }
+
+  onModEvent(ev) {
+    if (!this.owner) return;
+    if (ev.kind === "classic" && typeof ev.event === "string" && /^[A-Za-z]+$/.test(ev.event)) {
+      this.handleHook(ev.event, ev.body, this.owner.socket, 0, "mod");
+    } else if (ev.kind === "turn") {
+      this.onModTurn(ev);
+    } else if (ev.kind === "receipt") {
+      this.onModReceipt(ev);
+    }
+  }
+
+  /** Main-thread turn start/complete (§6.21): exact busy state for idle, keep-awake and the card. */
+  onModTurn(ev) {
+    const wasBusy = this.delegation.claudeBusy;
+    this.lastClaudeEventAt = this.clock.now();
+    this.delegation.onTurn({ phase: ev.phase, reason: ev.reason });
+    if (ev.phase === "complete") {
+      this.log.info("claude.turn", { phase: "complete", reason: typeof ev.reason === "string" ? ev.reason : null, ms: Number.isFinite(ev.ms) ? ev.ms : null });
+      if (ev.reason === "aborted") this.activity("turn_end", "Claude was interrupted");
+    }
+    if (wasBusy !== this.delegation.claudeBusy) this.changed();
+  }
+
+  /** A receipt for a voice message the mod took (§6.21). */
+  onModReceipt(ev) {
+    const how = typeof ev.how === "string" ? ev.how : "";
+    this.log.info("modlink.receipt", { msg_id: ev.msg_id, how, ...(ev.error ? { error: truncate(String(ev.error), 120) } : {}) });
+    if (how === "failed") {
+      // The mod could not put it in (submit or append refused): the classic way.
+      const rec = this.delegation.records.find((r) => r.msg_id === ev.msg_id);
+      const content = rec?.content || (typeof ev.text === "string" ? ev.text : "");
+      if (content && this.owner) {
+        this.modlink.end("receipt_failed");
+        this.inboxSend(content, ev.msg_id, ev.priority === "later" ? "later" : "next").catch(() => {});
+      }
+      return;
+    }
+    const r = this.delegation.onReceipt({ msgId: ev.msg_id, how, promptId: ev.prompt_id });
+    if (r?.nudge) {
+      // The model never read it (appended after the turn's last request): one
+      // short prompt starts the turn that answers it, once Claude is idle.
+      this.inboxSend(r.nudge, `${ev.msg_id}-n`, "next", { submitOnly: true }).catch(() => {});
+    }
+  }
+
+  /** The mod went away without the session ending: back to the classic hooks and courier, mid-session. */
+  onModLost(reason) {
+    if (!this.owner || this.owner.transport !== "mod") return;
+    this.owner.transport = "inbox";
+    this.writeActiveFile();
+    this.log.warn("modlink.fallback", { reason, to: "classic" });
+    this.changed();
   }
 
   // ---- transcript mirror (§6.18) and "Claude is waiting" (§6.10.3) ---------------------
@@ -684,7 +804,7 @@ export class Voice {
     this.log.info("mirror.send", { ok, code: code || null, reason, lines, dropped, chars: text.length, text: truncate(text, 300) });
     if (!ok) { this.counters.mirror_failed++; return; }
     this.counters.mirror_sent++;
-    if (this.delegation.claudeBusy) createPendingContext(this.paths);
+    if (this.delegation.claudeBusy && !this.modActive()) createPendingContext(this.paths);
     // Tell the voice model, so it can truthfully say Claude has it.
     this.deliver({ kind: "thinking", content: `[sotto] What the user just said was also passed to Claude Code as background, not as a request: "${clip(text, 240).replace(/"/g, "'")}". Claude Code will act on any decision or request in it.`, delegationId: null });
   }
@@ -862,7 +982,7 @@ export class Voice {
     const app = this.appNote();
     if (this.state === "off" || !this.owner) return `sotto: voice is off. ${u}.${app ? ` ${app}.` : ""}`;
     const st = this.state === "live" ? "ON" : this.state;
-    let m = `sotto: voice ${st} (${this.owner.project}) | ${u} | voice ${this.config.voice} | persona ${this.personaIdForStatus()} | ${this.policy}`;
+    let m = `sotto: voice ${st} (${this.owner.project}) | ${u} | voice ${this.config.voice} | persona ${this.personaIdForStatus()} | ${this.policy} | link ${this.modActive() ? "mod" : "classic"}`;
     if (app) m += ` | ${app}`;
     if (this.lastError) m += ` | last error: ${this.lastError.message}`;
     return m;
@@ -953,6 +1073,8 @@ export class Voice {
     const old = this.owner;
     const same = !!old && old.socket === session.socket;
     const next = makeOwner(session, same ? old.since : this.clock.now());
+    if (same && old.transport === "mod" && this.modlink.linked) next.transport = "mod";
+    else if (this.modlink.linked) this.modlink.release(same ? "rebind" : "owner_switch");
     if (!same || !this.nonce) this.nonce = randomBytes(6).toString("hex");
     if (same) {
       this.owner = next;
@@ -980,9 +1102,10 @@ export class Voice {
       this.owner = next;
       this.log.info("owner.bind", { project: next.project, session_id: next.session_id });
     }
-    try { writeActive(this.paths, { socket: next.socket, port: this.port, key: this.daemonKey, nonce: this.nonce }); } catch (e) { this.log.error("active.write_error", { message: e.message }); }
+    this.writeActiveFile();
     this.vocabularyFor(next);
     this.interval("liveness", () => { this.delegation.sweepStale(); this.checkLiveness(); }, LIVENESS_MS);
+    this.interval("modlink", () => this.modlink.check(), MODLINK_CHECK_MS);
     const project = next.project;
     const moved = !same && old ? `sotto: voice ON (${project}), moved from ${old.project}.` : null;
     // A session exists or is being created. "reconnecting" without a sideband
@@ -1439,14 +1562,19 @@ export class Voice {
   }
 
   // ---- hooks --------------------------------------------------------------------------------
-  handleHook(event, body, socketHeader, bytes = 0) {
+  handleHook(event, body, socketHeader, bytes = 0, via = "shell") {
     this.counters.hooks++;
     const b = body && typeof body === "object" ? body : {};
     const f = { event, bytes };
     if (b.tool_name) f.tool_name = b.tool_name;
+    if (via === "mod") f.via = "mod";
     this.log.info("hook", f);
     if (this.debug) this.log.debug("hook.body", { event, body: b });
     if (!this.owner || socketHeader !== this.owner.socket) return false;
+    // One source per session (§6.21): while the mod is linked a shell hook
+    // that raced the active file's rewrite is a duplicate, and once the link
+    // is gone the mod's events are no longer the session's word.
+    if ((via === "mod") !== this.modActive()) { this.log.debug("hook.skip", { event, via }); return false; }
     if (typeof b.session_id === "string") this.owner.session_id = b.session_id;
     if (typeof b.transcript_path === "string") this.owner.transcript_path = b.transcript_path;
     this.lastClaudeEventAt = this.clock.now();
@@ -2822,11 +2950,13 @@ export class Voice {
     this.wakeQueue = [];
     this.governor.onEnd();
     this.clear("notifyWatch");
+    this.modlink.release(reason === "shutdown" ? "shutdown" : "off");
     removeActive(this.paths);
     removePendingContext(this.paths);
     if (this.owner) this.log.info("owner.release", { reason, project: this.owner.project });
     this.owner = null;
     this.clear("liveness");
+    this.clear("modlink");
     this.changed();
     this.command("close_window", reason);
     const killed = new Promise((resolve) => this.clock.setTimeout(() => { Promise.resolve(this.chrome.kill()).catch(() => 0).then(resolve); }, CLOSE_WINDOW_KILL_MS));
@@ -2971,7 +3101,9 @@ export class Voice {
     this.configVoice = this.config.voice;
     this.config.voice = this.effectiveVoice();
     this.runtimePolicy = POLICIES.includes(snap.runtime_policy) ? snap.runtime_policy : null;
-    this.owner = { ...snap.owner };
+    // A new process has no mod link: the classic hooks carry the session until
+    // the mod's next poll is refused and it says hello again (§6.21).
+    this.owner = { ...snap.owner, transport: "inbox" };
     this.nonce = typeof snap.nonce === "string" && /^[0-9a-f]+$/.test(snap.nonce) ? snap.nonce : randomBytes(6).toString("hex");
     if (Array.isArray(snap.history)) {
       this.transcript.history = snap.history.filter((l) => l && (l.role === "user" || l.role === "assistant") && typeof l.text === "string").slice(-60);
@@ -2990,9 +3122,10 @@ export class Voice {
     // Key setup card (§4.3): still wanted only while there is no key.
     this.keySetup = !!snap.key_setup && !this.getApiKey();
     if (snap.window_app) this.chrome?.adoptApp?.();
-    try { writeActive(this.paths, { socket: this.owner.socket, port: this.port, key: this.daemonKey, nonce: this.nonce }); } catch (e) { this.log.error("active.write_error", { message: e.message }); }
+    this.writeActiveFile();
     this.vocabularyFor(this.owner);
     this.interval("liveness", () => { this.delegation.sweepStale(); this.checkLiveness(); }, LIVENESS_MS);
+    this.interval("modlink", () => this.modlink.check(), MODLINK_CHECK_MS);
     const manual = snap.reason === "manual";
     this.helloNotice = { level: "info", code: "updated", text: manual ? "Sotto restarted." : "Sotto updated itself to the latest code." };
     this.log.info("update.restore", { resume: snap.resume, reason: snap.reason, project: this.owner.project, history: this.transcript.history.length });
@@ -3029,6 +3162,7 @@ export class Voice {
   /** Stop every timer (tests and final exit). */
   dispose() {
     for (const name of Object.keys(this.timers)) this.clear(name);
+    this.modlink.dispose();
     this.delegation.dispose();
     this.mirror.dispose();
     this.narrator.dispose();

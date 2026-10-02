@@ -73,7 +73,8 @@ if [[ -n "$CLAUDE_CODE_MESSAGING_SOCKET" ]]; then
   for d in "${CANDS[@]}"; do
     [[ -r "$d/active" ]] || continue
     IFS=$'\t' read -r OWNER APORT _ < "$d/active"
-    if [[ "$OWNER" == "$CLAUDE_CODE_MESSAGING_SOCKET" ]]; then D="$d"; PORT="$APORT"; break; fi
+    # "mod:<socket>": the session's Claude Code mod carries voice (SPEC §6.21).
+    if [[ "$OWNER" == "$CLAUDE_CODE_MESSAGING_SOCKET" || "$OWNER" == "mod:$CLAUDE_CODE_MESSAGING_SOCKET" ]]; then D="$d"; PORT="$APORT"; break; fi
   done
 fi
 # 2. voice is active anywhere.

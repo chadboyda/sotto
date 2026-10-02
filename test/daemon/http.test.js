@@ -46,7 +46,7 @@ test("healthz shape and no-store", async (t) => {
   assert.equal(r.headers["access-control-allow-origin"], undefined);
   assert.equal(r.headers["x-frame-options"], "DENY");
   assert.equal(r.headers["x-content-type-options"], "nosniff");
-  assert.deepEqual(r.json, { ok: true, name: "sotto", version: "0.4.9", pid: process.pid, port: h.port, data_dir: h.dataDir, plugin_root: h.pluginRoot, state: "off", api_key: true });
+  assert.deepEqual(r.json, { ok: true, name: "sotto", version: "0.5.0", pid: process.pid, port: h.port, data_dir: h.dataDir, plugin_root: h.pluginRoot, state: "off", api_key: true });
 });
 
 test("421 on a bad Host header", async (t) => {
@@ -90,7 +90,7 @@ test("/control: every action, both response formats, §9.2 messages", async (t) 
   const active = path.join(h.dataDir, "active");
   assert.equal(fs.statSync(active).mode & 0o777, 0o600);
   const st = await ctl({ action: "status" });
-  assert.equal(st.json.message, "sotto: voice waiting_page (proj-a) | 0 min today ($0.00) | voice marin | persona sotto | milestones");
+  assert.equal(st.json.message, "sotto: voice waiting_page (proj-a) | 0 min today ($0.00) | voice marin | persona sotto | milestones | link classic");
   assert.equal((await ctl({ action: "policy", policy: "quiet" })).json.message, "sotto: speaking policy is now quiet.");
   const t0 = Date.now();
   const off = await ctl({ action: "off" }, "?format=hook");
@@ -108,12 +108,14 @@ test("/status is the full Status object", async (t) => {
   const h = await server(t);
   await h.req({ method: "POST", path: "/control", body: { action: "on", session: SESSION(), config: {} }, headers: h.key });
   const s = (await h.req({ path: "/status", headers: h.key })).json;
-  assert.deepEqual(Object.keys(s), ["state", "owner", "live", "today", "config", "claude", "page", "delegations", "counters", "last_error", "wake", "api_key", "echo", "audio_client", "native"]);
+  assert.deepEqual(Object.keys(s), ["state", "owner", "live", "today", "config", "claude", "integration", "page", "delegations", "counters", "last_error", "wake", "api_key", "echo", "audio_client", "native"]);
   assert.equal(s.audio_client, null);
   assert.equal(s.native.connected, false, "the native app link (docs/NATIVE.md)");
   assert.deepEqual(Object.keys(s.counters), ["delegations", "inbox_sent", "inbox_failed", "thinking_sent", "commentary_sent", "instructions_sent", "appends_acked", "appends_failed", "hooks", "sessions_created", "mirror_sent", "mirror_failed", "echo_guard_on", "echo_heard", "handoff_fallbacks"]);
   assert.equal(s.live, null);
   assert.equal(s.owner.project, "proj-a");
+  assert.equal(s.owner.transport, "inbox");
+  assert.equal(s.integration.mode, "classic", "no mod linked (SPEC §6.21)");
   assert.ok(!JSON.stringify(s).includes("inbox-token-a"));
 });
 
@@ -171,7 +173,7 @@ test("bootstrap returns the page token; SSE requires it and sends status first",
   const h = await server(t);
   const b = (await h.req({ path: "/api/bootstrap", headers: { "X-Sotto-Boot": h.d.pageSecret } })).json;
   assert.equal(b.page_token, h.d.pageToken);
-  assert.equal(b.version, "0.4.9");
+  assert.equal(b.version, "0.5.0");
   assert.match(b.build, /^[0-9a-f]{16}$/, "web/ build hash (the page reloads when it changes, §6.17)");
   assert.equal(b.port, h.port);
   assert.equal(b.status.state, "off");
@@ -251,4 +253,26 @@ test("shutdown: the daemon stops listening right after answering", async (t) => 
   assert.equal(r.status, 200);
   await new Promise((res) => setTimeout(res, 50));
   await assert.rejects(h.req({ path: "/healthz" }), /ECONNREFUSED/, "port is free for the next daemon");
+});
+
+// ---- the Claude Code mod link (SPEC §6.21) ----
+test("/mod/*: key required; hello, a long-poll answered by a send, the ordered uplink", async (t) => {
+  const h = await server(t);
+  const sock = "/tmp/clv-owner-a.sock";
+  h.voice.control({ action: "on", session: SESSION(sock), config: {} });
+  assert.equal((await h.req({ method: "POST", path: "/mod/hello", body: { instance: "inst-1", socket: sock } })).status, 403);
+  const hello = await h.req({ method: "POST", path: "/mod/hello", headers: h.key, body: { instance: "inst-1", socket: sock, cli: "2.1.287" } });
+  assert.equal(hello.status, 200);
+  assert.equal(hello.json.ok, true);
+  const poll = h.req({ path: `/mod/poll?instance=inst-1&after=${hello.json.after}`, headers: h.key });
+  await new Promise((r) => setTimeout(r, 50));
+  const sent = h.voice.inboxSend("[sotto voice] hi", "clv-1-1");
+  const p = await poll;
+  assert.equal(p.status, 200);
+  assert.equal(p.json.items[0].msg_id, "clv-1-1");
+  assert.equal((await sent).via, "mod");
+  const ev = await h.req({ method: "POST", path: "/mod/events", headers: h.key, body: { instance: "inst-1", events: [{ seq: 1, kind: "receipt", msg_id: "clv-1-1", how: "submitted" }] } });
+  assert.deepEqual(ev.json, { ok: true, acked: 1 });
+  assert.equal((await h.req({ path: "/mod/poll?instance=other&after=0", headers: h.key })).status, 410);
+  assert.equal((await h.req({ path: "/mod/nope", headers: h.key })).status, 404);
 });

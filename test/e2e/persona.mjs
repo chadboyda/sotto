@@ -24,6 +24,7 @@ import { fileURLToPath } from "node:url";
 import { startFakeInbox } from "../helpers/fake-inbox.js";
 import { CHROME, spawnSilentChrome } from "../helpers/silent-chrome.js";
 import { resolveApiKey } from "../../daemon/config.js";
+import { BUILTIN_PERSONAS } from "../../daemon/personas.js";
 
 const REPO = fileURLToPath(new URL("../..", import.meta.url)).replace(/\/$/, "");
 const PORT = Number(process.env.SOTTO_E2E_PERSONA_PORT || 47897);
@@ -40,6 +41,8 @@ const QUESTION = "Great news, all the tests just passed! How do you feel about t
 const Q1_AT_MS = 8000; // after the greeting
 const Q2_AT_MS = 38000; // after the switch and the new persona's hello
 const PERSONA = "tempo";
+// The persona's own voice (personas.js), not a name pinned here: v0.4.4 gave tempo the quartz voice.
+const PERSONA_VOICE = BUILTIN_PERSONAS.find((p) => p.id === PERSONA).voice;
 
 const results = [];
 const timings = {};
@@ -164,9 +167,9 @@ async function main() {
   // Switch, as Claude would by voice (sotto persona tempo runs the same handler).
   const tSwitch = Date.now();
   const sw = toggle(`persona ${PERSONA}`);
-  check("toggle.sh persona switches the live session", sw.status === 0 && sw.out?.stopReason === `sotto: persona set to ${PERSONA} with the tempo voice. The live session now runs as ${PERSONA}.`, sw.out?.stopReason);
+  check("toggle.sh persona switches the live session", sw.status === 0 && sw.out?.stopReason === `sotto: persona set to ${PERSONA} with the ${PERSONA_VOICE} voice. The live session now runs as ${PERSONA}.`, sw.out?.stopReason);
   const created2 = await until(() => readLog().find((e) => e.ev === "session.create" && e.ok && ts(e) >= tSwitch - 50), 20000);
-  check("a new session in the new persona and voice", created2?.persona === PERSONA && created2?.voice === "tempo" && created2?.reason === "reconnect", JSON.stringify(created2 && { persona: created2.persona, voice: created2.voice, reason: created2.reason }));
+  check("a new session in the new persona and voice", created2?.persona === PERSONA && created2?.voice === PERSONA_VOICE && created2?.reason === "reconnect", JSON.stringify(created2 && { persona: created2.persona, voice: created2.voice, reason: created2.reason }));
   const live2 = await until(async () => { const s = await status(); return s.state === "live" && s.live?.session_id !== liveId ? s : null; }, 20000);
   check("live again", !!live2);
   if (live2) timings.switch_ms = Date.now() - tSwitch;
