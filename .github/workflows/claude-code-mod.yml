@@ -1,0 +1,78 @@
+name: Claude Code mod
+
+# The mod API is early access and can change with any Claude Code release
+# (SPEC §6.21). Once a day this installs the newest CLI and, the first time a
+# version is seen, validates the plugin, runs the mod's `claude plugin test`
+# suite, regenerates the mod types and typechecks against them, and runs the
+# headless mod e2e in mod and classic mode. The last two need the
+# ANTHROPIC_API_KEY secret (a signed-in CLI); without it they are skipped.
+on:
+  schedule:
+    - cron: "17 7 * * *"
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - "hooks/**"
+      - "daemon/modlink.js"
+      - "test/mod/**"
+      - "test/e2e/mod.mjs"
+      - "tsconfig.mod.json"
+      - ".github/workflows/claude-code-mod.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  mod:
+    runs-on: macos-latest
+    timeout-minutes: 25
+    env:
+      HAS_KEY: ${{ secrets.ANTHROPIC_API_KEY != '' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Install the newest Claude Code
+        id: cli
+        run: |
+          npm install -g @anthropic-ai/claude-code@latest
+          v="$(claude --version | cut -d' ' -f1)"
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+          echo "Claude Code $v"
+      - name: A version already tested (scheduled runs)
+        id: seen
+        if: github.event_name == 'schedule'
+        uses: actions/cache@v4
+        with:
+          path: .ci-claude-code-tested
+          key: claude-code-mod-${{ steps.cli.outputs.version }}
+      - name: Mark this version tested
+        run: echo "${{ steps.cli.outputs.version }}" > .ci-claude-code-tested
+      - name: Unit tests
+        if: steps.seen.outputs.cache-hit != 'true'
+        run: npm ci && npm test
+      - name: claude plugin validate
+        if: steps.seen.outputs.cache-hit != 'true'
+        run: |
+          claude plugin validate .claude-plugin/plugin.json --strict
+          claude plugin validate . --strict
+      - name: claude plugin test (the mod against stubs)
+        if: steps.seen.outputs.cache-hit != 'true'
+        run: claude plugin test
+      - name: Regenerate the mod types (load the plugin once, no model turn)
+        if: steps.seen.outputs.cache-hit != 'true' && env.HAS_KEY == 'true'
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          SOTTO_NO_BROWSER: "1"
+        run: |
+          claude -p --plugin-dir . --setting-sources project,local --output-format json "/sotto:talk status"
+          test -f .claude-plugin/types/claude-code/index.d.ts
+      - name: Typecheck the mod against this CLI's types
+        if: steps.seen.outputs.cache-hit != 'true' && env.HAS_KEY == 'true'
+        run: npx -y -p typescript@5 tsc -p tsconfig.mod.json --noEmit
+      - name: Headless mod e2e (mod and classic mode)
+        if: steps.seen.outputs.cache-hit != 'true' && env.HAS_KEY == 'true'
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: node test/e2e/mod.mjs

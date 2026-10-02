@@ -69,6 +69,7 @@ const MAX_WAKE_QUEUE = 10;
 const SESSION_REASONS = ["start", "resume", "reconnect", "wake", "notify"];
 const LIVENESS_MS = 30000;
 const MODLINK_CHECK_MS = 5000;
+const MOD_CONTEXT_MAX = 40;
 const WAITING_PAGE_MS = 30000;
 const EXIT_AFTER_OFF_MS = 3000;
 const CLOSE_WINDOW_KILL_MS = 1500;
@@ -457,6 +458,7 @@ export class Voice {
   changed() {
     this.emitPage({ type: "status", status: this.pageStatus() });
     this.statusFile.mark();
+    this.pushModState();
   }
 
   setState(s) {
@@ -476,7 +478,10 @@ export class Voice {
   }
 
   notice(level, code, text) { this.emitPage({ type: "notice", level, code, text }); }
-  activity(kind, text, extra = null) { this.emitPage({ type: "activity", kind, text: text || "", ...extra }); }
+  activity(kind, text, extra = null) {
+    this.emitPage({ type: "activity", kind, text: text || "", ...extra });
+    if (kind !== "agents") { this.lastActivity = text || ""; this.pushModState(); }
+  }
   /** Broadcast the background-agent count when it changes. */
   syncAgents() {
     const n = this.agents.count();
@@ -673,6 +678,25 @@ export class Voice {
 
   integrationStatus() { return this.modlink.status(); }
 
+  /**
+   * What the mod draws in the terminal (§6.21 "Terminal UI"): the voice's
+   * state, persona and voice, whether Claude works, the latest activity line
+   * and the voice's latest words. Sent only while the mod is linked, deduped.
+   */
+  modUiState() {
+    const said = this.transcript.lastAssistantLine();
+    return {
+      state: this.state, persona: this.personaIdForStatus(), voice: this.config.voice,
+      busy: !!this.delegation.claudeBusy, activity: clip(this.lastActivity || "", 160),
+      said: said ? clip(said.text, 200) : "", approval: this.approvals?.current()?.label || null,
+    };
+  }
+
+  pushModState() {
+    if (!this.modlink?.linked) return;
+    try { this.modlink.setState(this.modUiState()); } catch (e) { this.log.warn("modlink.state_error", { message: e.message }); }
+  }
+
   /** POST /mod/hello: the mod of the session that owns voice links up. → {status, body} */
   modHello(b = {}) {
     const o = this.owner;
@@ -686,11 +710,12 @@ export class Voice {
     if (!was) this.writeActiveFile();
     this.log.info("modlink.up", { instance: b.instance, cli: typeof b.cli === "string" ? truncate(b.cli, 40) : null, mod: typeof b.mod === "string" ? truncate(b.mod, 20) : null, relink: was });
     this.changed();
-    return { status: 200, body: { ok: true, after: r.after, nonce: this.nonce || null, hold_ms: this.modlink.holdMs } };
+    this.pushModState();
+    return { status: 200, body: { ok: true, after: r.after, nonce: this.nonce || null, hold_ms: this.modlink.holdMs, data_dir: this.paths.dir, port: this.port } };
   }
 
   /** GET /mod/poll. */
-  modPoll({ instance, after }, onClose) { return this.modlink.poll({ instance, after }, onClose); }
+  modPoll({ instance, after, sv }, onClose) { return this.modlink.poll({ instance, after, sv }, onClose); }
 
   /** POST /mod/events: the mod's ordered uplink. → {status, body} */
   modEvents(b = {}) {
@@ -711,7 +736,52 @@ export class Voice {
       this.onModTurn(ev);
     } else if (ev.kind === "receipt") {
       this.onModReceipt(ev);
+    } else if (ev.kind === "context") {
+      this.onModContext(ev);
+    } else if (ev.kind === "agent") {
+      this.onModAgent(ev);
+    } else if (ev.kind === "approval") {
+      this.onModApproval(ev);
     }
+  }
+
+  /**
+   * The conversation as the session holds it ($.session.messages(), §6.21):
+   * the next Live session's seed reads it instead of the transcript file.
+   */
+  onModContext(ev) {
+    const list = Array.isArray(ev.messages) ? ev.messages : [];
+    const msgs = [];
+    for (const m of list.slice(-MOD_CONTEXT_MAX)) {
+      if (!m || (m.role !== "user" && m.role !== "assistant") || typeof m.text !== "string") continue;
+      const text = m.role === "assistant" ? speakable(m.text.trim()) : m.text.trim();
+      if (!text || (m.role === "user" && (text.startsWith("/") || text.startsWith("<command") || text.startsWith("<local-command")))) continue;
+      msgs.push({ role: m.role, text: clip(text, 2000) });
+    }
+    this.modContext = { at: this.clock.now(), messages: msgs.slice(-8) };
+  }
+
+  /**
+   * agent.spawn (§6.21): who launched each subagent. Only agents the main
+   * thread's own Agent calls started are the user's; one a subagent or a
+   * plugin started is a helper, never counted or announced.
+   */
+  onModAgent(ev) {
+    if (typeof ev.agent_id !== "string" || !ev.agent_id) return;
+    const helper = !!ev.parent_agent_id || (typeof ev.origin === "string" && ev.origin !== "engine");
+    this.log.info("claude.agent", { agent_id: ev.agent_id, parent: ev.parent_agent_id || null, origin: ev.origin || null, background: !!ev.background, helper });
+    if (helper) { this.agents.ignore(ev.agent_id); this.syncAgents(); }
+  }
+
+  /**
+   * Tool approvals from the mod (§6.21): tool.check's "ask" by tool_use_id,
+   * and its tool.call ending (ran, denied or failed): the exact close of the
+   * approval, where the classic hooks infer it.
+   */
+  onModApproval(ev) {
+    if (typeof ev.tool_use_id !== "string") return;
+    this.log.info("claude.approval", { phase: ev.phase, tool: typeof ev.tool === "string" ? ev.tool : null, outcome: ev.outcome || null });
+    if (ev.phase === "resolved") this.trackApprovals("PostToolUse", { tool_use_id: ev.tool_use_id, ...(ev.agent_id ? { agent_id: ev.agent_id } : {}) });
   }
 
   /** Main-thread turn start/complete (§6.21): exact busy state for idle, keep-awake and the card. */
@@ -1593,8 +1663,8 @@ export class Voice {
     // toward "N background agents working". Permission prompts and questions
     // are still announced: the terminal asks the user those.
     if (typeof b.agent_id === "string" && b.agent_id) {
-      this.agents.seen(b.agent_id);
-      this.syncAgents();
+      // A helper agent (§6.21: started by a subagent or a plugin) is not counted.
+      if (!this.agents.isIgnored(b.agent_id)) { this.agents.seen(b.agent_id); this.syncAgents(); }
       // A subagent that hands back through SubagentHandback delivers its report
       // as that call's message (last_assistant_message is then only its closing text).
       if (event === "PreToolUse" && b.tool_name === "SubagentHandback" && typeof b.tool_input?.message === "string") {
@@ -2142,7 +2212,8 @@ export class Voice {
     const branchP = gitBranch(owner.cwd, this.execFile ? { execFile: this.execFile } : {});
     const [branch, exchanges, vocab] = await Promise.all([
       branchP,
-      Promise.resolve().then(() => readTranscriptTail(owner.transcript_path)),
+      // The mod's copy of the conversation when it has one (§6.21), else the transcript file.
+      Promise.resolve().then(() => (this.modActive() && this.modContext?.messages.length ? this.modContext.messages : readTranscriptTail(owner.transcript_path))),
       this.vocabularyFor(owner, branchP),
     ]);
     if (this.owner !== owner || this.state !== "connecting" || (gen !== null && gen !== this.nativeGen)) {

@@ -78,7 +78,9 @@ async function run(mode) {
     for (const k of Object.keys(env)) if (/^CLAUDE/.test(k) && k !== "CLAUDE_CONFIG_DIR") delete env[k];
     if (mode === "classic") env.SOTTO_INTEGRATION = "classic"; else delete env.SOTTO_INTEGRATION;
     claude = spawn("claude", ["-p", "--input-format", "stream-json", "--output-format", "stream-json", "--verbose", "--model", "haiku",
-      "--permission-mode", "bypassPermissions", "--plugin-dir", REPO, "--setting-sources", "project,local", ...(process.env.SOTTO_E2E_DEBUG ? ["--debug-file", path.join(TMP, "debug.log")] : [])],
+      "--permission-mode", "bypassPermissions", "--plugin-dir", REPO, "--setting-sources", "project,local",
+      // The scratch port for toggle.sh too (never the live daemon on 47821).
+      "--settings", JSON.stringify({ pluginConfigs: { "sotto@inline": { options: { port } } } }), ...(process.env.SOTTO_E2E_DEBUG ? ["--debug-file", path.join(TMP, "debug.log")] : [])],
     { cwd: TMP, env, stdio: ["pipe", fs.openSync(STREAM, "w"), "ignore"] });
     const events = () => fs.readFileSync(STREAM, "utf8").split("\n").filter(Boolean).map((l) => { try { return JSON.parse(l); } catch { return {}; } });
     const results = () => events().filter((e) => e.type === "result").map((e) => String(e.result || ""));
@@ -149,7 +151,28 @@ async function run(mode) {
       console.log(`[mod] late message answered; receipts ${hows.join(",")}; record ${rec.status}`);
       if (hows.includes("msg:requeued") && !hows.includes("nudge:submitted")) return fail("requeued but the nudge was never submitted");
       if (rec.status !== "answered") return fail(`the late voice request ended ${rec.status}, not answered`);
+
+      // 4. Phase 4: the voice tools, answered by the mod through /control.
+      const before4 = results().length;
+      say("Call the mcp__sotto__status tool (load it with ToolSearch if needed) and reply with exactly the line it returned.");
+      if (!await waitFor(() => results().length > before4, 120000, "the status tool turn")) return;
+      if (!log.find("control").some((c) => c.action === "status" && c.via === "cli")) return fail(`the model's status tool never reached /control: ${results().at(-1)}`);
+      console.log(`[mod] voice tool answered: ${results().at(-1).slice(0, 100)}`);
+
+      // 6. Phase 6: the mod got the voice's state for its status line and band.
+      if (!(voice.modlink.stateVer > 0) || !voice.modlink.uiState?.persona) return fail("no UI state pushed to the mod");
+      if (!log.find("hook").some((x) => x.event === "UserPromptSubmit" && x.via === "mod")) return fail("no prompts through the mod");
     }
+
+    // /talk status: from the mod (no hook stop) when linked, from toggle.sh otherwise.
+    const before5 = results().length;
+    say("/sotto:talk status");
+    if (!await waitFor(() => results().length > before5, 60000, "/talk status")) return;
+    const talk = results().at(-1);
+    const fromHook = talk.startsWith("Operation stopped by hook");
+    if (mode === "mod" && (fromHook || !talk.includes("link mod"))) return fail(`/talk status in mod mode: ${talk}`);
+    if (mode === "classic" && (!fromHook || !talk.includes("link classic"))) return fail(`/talk status in classic mode: ${talk}`);
+    console.log(`[${mode}] /talk status: ${talk.slice(0, 160)}`);
 
     if (mode === "mod") {
       const hooks = log.find("hook").filter((h) => h.via === "mod");

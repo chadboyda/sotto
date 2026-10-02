@@ -14,7 +14,7 @@ type Daemon = { polls: number, events: any[], hello: any[], items: any[] }
 function stubs(on: any, clock: any, d: Daemon, opts: { owner?: string } = {}) {
   mock.env(on, { CLAUDE_CODE_MESSAGING_SOCKET: SOCK, HOME: '/home/u' })
   on('session.start', () => ({ cwd: '/work' }))
-  on('fs.list', () => ({ value: [{ name: 'sotto-skills-dir', kind: 'directory', size: 0, mtimeMs: 0, isLink: false }, { name: 'other', kind: 'directory', size: 0, mtimeMs: 0, isLink: false }] }))
+  on('fs.list', () => ({ value: [{ name: 'sotto-skills-dir', kind: 'dir', size: 0, mtimeMs: 0, isLink: false }, { name: 'other', kind: 'dir', size: 0, mtimeMs: 0, isLink: false }] }))
   on('fs.read', ($: any, e: any) => {
     if (String(e.path).endsWith('/sotto-skills-dir/active')) return { value: `${opts.owner ?? SOCK}\t47999\tKEY\tabc123\n` }
     if (String(e.path).endsWith('/scripts/voice-context.txt')) return { value: CONTEXT + '\n' }
@@ -147,7 +147,7 @@ test('SOTTO_INTEGRATION=classic keeps the mod inert', async ($, on) => {
   let fetches = 0
   mock.env(on, { CLAUDE_CODE_MESSAGING_SOCKET: SOCK, HOME: '/home/u', SOTTO_INTEGRATION: 'classic' })
   on('session.start', () => ({ cwd: '/work' }))
-  on('fs.list', () => ({ value: [{ name: 'sotto-skills-dir', kind: 'directory', size: 0, mtimeMs: 0, isLink: false }] }))
+  on('fs.list', () => ({ value: [{ name: 'sotto-skills-dir', kind: 'dir', size: 0, mtimeMs: 0, isLink: false }] }))
   on('fs.read', () => ({ value: `${SOCK}\t47999\tKEY\tabc123\n` }))
   on('http.fetch', () => { fetches++; return { value: { status: 200, ok: true, headers: {}, text: '{}' } } })
   await $.session.start({ surface: 'terminal', isInteractive: true, cwd: '/work' } as any)
