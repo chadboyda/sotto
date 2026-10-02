@@ -23,6 +23,7 @@ import { createDaemon } from "../../daemon/index.js";
 import { createMemoryLogger } from "../../daemon/log.js";
 import { createFakeKeychain } from "../helpers/fake-keychain.js";
 import { freePort, makePluginRoot } from "../helpers/daemon-harness.js";
+import { scrubInheritedMessaging, isolatedClaudeEnv, assertNotInherited, NO_PEER_TOOLS_ARGS } from "../helpers/isolated-claude.js";
 
 const REPO = fileURLToPath(new URL("../..", import.meta.url)).replace(/\/$/, "");
 const CWD = process.env.SOTTO_E2E_UI_CWD || REPO;
@@ -48,11 +49,12 @@ const d = createDaemon({
 await d.listen();
 const voice = d.voice;
 
-const env = { ...process.env, DISABLE_AUTOUPDATER: "1", TERM: "xterm-256color", COLUMNS: "100", LINES: "30" };
-for (const k of Object.keys(env)) if (/^CLAUDE/.test(k) && k !== "CLAUDE_CONFIG_DIR") delete env[k];
+// Never post into the session running this test (test/helpers/isolated-claude.js).
+scrubInheritedMessaging();
+const env = isolatedClaudeEnv({ TERM: "xterm-256color", COLUMNS: "100", LINES: "30" });
 delete env.SOTTO_INTEGRATION;
 const args = ["claude", "--plugin-dir", REPO, "--setting-sources", "project,local",
-  "--settings", JSON.stringify({ pluginConfigs: { "sotto@inline": { options: { port } } } }), "--permission-mode", "bypassPermissions", "--model", "haiku"];
+  "--settings", JSON.stringify({ pluginConfigs: { "sotto@inline": { options: { port } } } }), "--permission-mode", "bypassPermissions", "--model", "haiku", ...NO_PEER_TOOLS_ARGS];
 // A 100x30 pseudo-terminal from the Python standard library (pty), relaying
 // its bytes to our pipes: Node has no pty of its own and `script` needs a tty.
 const DRIVER = `
@@ -91,6 +93,7 @@ try {
     if (claudePid) sock = [`/tmp/cc-socks/${claudePid}.sock`, `/tmp/cc-socks-${process.getuid()}/${claudePid}.sock`].find((s) => fs.existsSync(s)) || null;
   }
   if (!sock) throw new Error("no inbox socket for the terminal session");
+  assertNotInherited(sock);
   const r = voice.control({ action: "on", session: { socket: sock, cwd: CWD, project_dir: CWD, permission_mode: "bypassPermissions" }, config: {} });
   if (!voice.owner) throw new Error(`owner not bound: ${r.message}`);
   await sleep(4000); // the TUI settles
