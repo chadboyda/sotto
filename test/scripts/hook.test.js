@@ -141,6 +141,29 @@ describe("hook.sh non-owner", () => {
   });
 });
 
+describe("hook.sh in a session whose mod carries voice (owner mod:<socket>, SPEC §6.21)", () => {
+  let D, srv, env;
+  before(async () => {
+    D = tempDir();
+    srv = await startFakeDaemon();
+    writeActive(D, `mod:${SOCK}`, srv.port);
+    writeFileSync(join(D, "pending-context"), "");
+    env = baseEnv({ CLAUDE_PLUGIN_DATA: D, CLAUDE_PLUGIN_ROOT: ROOT, CLAUDE_CODE_MESSAGING_SOCKET: SOCK });
+  });
+  after(async () => { await srv.close(); rmDir(D); });
+
+  test("silent, forwards nothing, prints no context, leaves pending-context alone", async () => {
+    for (const ev of EVENTS) {
+      const input = ev === "UserPromptSubmit" ? JSON.stringify({ prompt: `${MARK} hi` }) : "{}";
+      const r = await run(HOOK, { args: [ev], env, input });
+      assert.deepEqual([r.code, r.stdout, r.stderr], [0, "", ""], ev);
+    }
+    await sleep(300);
+    assert.equal(srv.requests.length, 0);
+    assert.ok(existsSync(join(D, "pending-context")));
+  });
+});
+
 describe("hook.sh owner path", () => {
   let D, srv, env;
   before(async () => {

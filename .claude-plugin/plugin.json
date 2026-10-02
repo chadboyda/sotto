@@ -2,7 +2,7 @@
   "$schema": "https://json.schemastore.org/claude-code-plugin-manifest.json",
   "name": "sotto",
   "displayName": "Sotto",
-  "version": "0.4.9",
+  "version": "0.5.0",
   "description": "Full-duplex voice conversation with your running Claude Code session, powered by OpenAI gpt-live-1. Toggle with /talk.",
   "author": { "name": "Chad Boyda" },
   "homepage": "https://github.com/chadboyda/sotto",
@@ -54,6 +54,11 @@
       "type": "string", "title": "Mirror speech to Claude", "default": "all",
       "options": ["all", "decisions", "off"],
       "description": "What you say to the voice that it does not hand to Claude still reaches Claude a few seconds later as background: all (everything but filler), decisions (only decisions, feedback and requests), or off."
+    },
+    "integration": {
+      "type": "string", "title": "Claude Code integration", "default": "auto",
+      "options": ["auto", "classic"],
+      "description": "auto: on Claude Code 2.1.287 or later Sotto's mod carries voice messages and Claude's events inside the session (nothing is held, exact turn state), and the classic hooks and courier take over by themselves whenever it is unavailable; classic: always the hooks and courier."
     },
     "echo_guard": {
       "type": "string", "title": "Echo guard", "default": "auto",

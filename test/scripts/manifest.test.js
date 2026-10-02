@@ -15,7 +15,9 @@ describe("manifests", () => {
     const m = JSON.parse(read(".claude-plugin/plugin.json"));
     assert.equal(m.name, "sotto");
     assert.ok(m.$schema);
-    assert.deepEqual(Object.keys(m.userConfig), ["voice", "port", "idle_seconds", "idle_minutes", "wake_sensitivity", "speaking_policy", "daily_cap_minutes", "window", "openai_api_key", "mirror", "echo_guard"]);
+    assert.deepEqual(Object.keys(m.userConfig), ["voice", "port", "idle_seconds", "idle_minutes", "wake_sensitivity", "speaking_policy", "daily_cap_minutes", "window", "openai_api_key", "mirror", "integration", "echo_guard"]);
+    assert.equal(m.userConfig.integration.default, "auto");
+    assert.deepEqual(m.userConfig.integration.options, ["auto", "classic"]);
     assert.equal(m.userConfig.mirror.default, "all");
     assert.deepEqual(m.userConfig.mirror.options, ["all", "decisions", "off"]);
     assert.equal(m.userConfig.echo_guard.default, "auto");

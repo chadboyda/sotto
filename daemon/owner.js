@@ -15,6 +15,9 @@ export function makeOwner(session, nowMs) {
     project_dir: s.project_dir || null,
     project,
     transcript_path: s.transcript_path || null,
+    // How voice messages and hook events travel (SPEC §6.21): "inbox" (the
+    // classic shell hooks and the courier) until the session's mod links up.
+    transport: "inbox",
     since: nowMs,
   };
 }
@@ -27,6 +30,7 @@ export function ownerStatus(owner) {
     socket: owner.socket,
     project: owner.project,
     cwd: owner.cwd,
+    transport: owner.transport || "inbox",
     since: new Date(owner.since).toISOString(),
   };
 }

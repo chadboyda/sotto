@@ -481,6 +481,56 @@ export class DelegationEngine {
     }
   }
 
+  // ---- the mod link (SPEC §6.21) ----------------------------------------------
+  /**
+   * A receipt from the Claude Code mod for voice message `msgId`:
+   *  - "appended": put into the running turn ($.session.append). No
+   *    UserPromptSubmit follows, so this is its delivery, in the turn `promptId`.
+   *  - "requeued": appended after the turn's last model request, so the model
+   *    never read it. The row stays in the conversation, so the text is not
+   *    sent again: a short nudge (returned here, for the caller to submit)
+   *    starts a turn that answers it, and the record waits for that turn.
+   * "submitted"/"queued" need nothing: the submitted prompt's own
+   * UserPromptSubmit marks it delivered. → {nudge} | null
+   */
+  onReceipt({ msgId, how, promptId } = {}) {
+    const rec = this.records.find((r) => r.msg_id === msgId);
+    if (!rec) return null;
+    const now = this.clock.now();
+    if (how === "appended") {
+      this.lastHookAt = now;
+      if (rec.status === "sent" || rec.status === "held_suspected") {
+        this.setStatus(rec, "delivered", { delivered_at: now, prompt_id: typeof promptId === "string" ? promptId : this.promptId });
+      }
+      return null;
+    }
+    if (how === "requeued" && IN_FLIGHT.has(rec.status)) {
+      const nudge = `${this.marker()} ${REQUEUE_NUDGE}`;
+      // The nudge is what the next UserPromptSubmit carries: match on it.
+      this.setStatus(rec, "sent", { content: nudge, prompt_id: null, delivered_at: 0, sent_while_busy: false, requeued: true });
+      return { nudge };
+    }
+    return null;
+  }
+
+  /**
+   * Main-thread turn start/complete from the mod: exact busy state (SPEC
+   * §6.21), where the classic hooks only infer it. An interrupted turn (Esc,
+   * reason "aborted") ends its voice requests now, not at the next prompt.
+   */
+  onTurn({ phase, reason } = {}) {
+    if (phase === "start") { this.claudeBusy = true; this.lastHookAt = this.clock.now(); return; }
+    if (phase !== "complete") return;
+    this.claudeBusy = false;
+    if (reason === "aborted" && this.promptId) {
+      for (const r of this.records) {
+        if (r.status === "delivered" && r.prompt_id === this.promptId) this.setStatus(r, "interrupted");
+      }
+      const t = this.turns.get(this.promptId);
+      if (t) t.done = true;
+    }
+  }
+
   // ---- turn origins and background launches (§6.10.1) -------------------------
   /** The turn record for prompt `pid`, created with `origin` if new. */
   turnFor(pid, origin) {
@@ -603,6 +653,8 @@ export class DelegationEngine {
     for (const r of this.records) {
       if (r.prompt_id === pid && (IN_FLIGHT.has(r.status) || r.status === "interrupted")) { out.push(r); continue; }
       if (!IN_FLIGHT.has(r.status) || r.sent_at > stopAt) continue;
+      // A requeued message (§6.21) waits for its nudge's own turn.
+      if (r.requeued && r.status === "sent") continue;
       if (r.status === "delivered") {
         if (!r.prompt_id) out.push(r);
         else this.setStatus(r, "interrupted"); // its own turn ended without a Stop
@@ -644,7 +696,7 @@ export class DelegationEngine {
 
   /** SPEC E6 fallback (no prompt_id): everything in flight, minus late-queued messages. */
   async candidatesByTimer(stopAt) {
-    const cand = this.inFlight().filter((r) => r.sent_at <= stopAt);
+    const cand = this.inFlight().filter((r) => r.sent_at <= stopAt && !(r.requeued && r.status === "sent"));
     const keep = await this.filterQueuedByTimer(cand, stopAt);
     return keep;
   }
@@ -688,7 +740,10 @@ export class DelegationEngine {
   }
 }
 
-const MIRRORED_NOTE = "[sotto] Those words already reached Claude Code a moment ago and it is answering them; the answer will arrive as an update. Do not claim it is done before then.";
+/** The text a requeued voice message's nudge carries after the marker (SPEC §6.21). */
+export const REQUEUE_NUDGE = "(My voice message just above arrived as you were finishing your reply, so you have not answered it yet. Please act on it and answer it now.)";
+
+const MIRRORED_NOTE ="[sotto] Those words already reached Claude Code a moment ago and it is answering them; the answer will arrive as an update. Do not claim it is done before then.";
 const ECHO_NOTE = "[sotto] Not a request: that was your own voice picked up by the microphone. Nothing was sent to Claude Code. Ignore it and do not mention it.";
 
 /**

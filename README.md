@@ -25,7 +25,7 @@ you (speaking) ──▶ gpt-live-1 ──delegates──▶ your Claude Code se
 ## Requirements
 
 - **macOS** (tested on macOS 26, Apple silicon). The daemon and page are portable, but the hooks, window handling and desktop app are only tested on macOS.
-- **Claude Code 2.1.281 or later** (it needs cross-session messaging and the `MessageDisplay` and `UserPromptExpansion` hooks).
+- **Claude Code 2.1.281 or later** (it needs cross-session messaging and the `MessageDisplay` and `UserPromptExpansion` hooks). **2.1.287 or later is better:** Sotto's Claude Code mod then puts voice messages straight into the session (as your own prompt when Claude is idle, into the running turn when it is busy), with nothing held and exact turn state. Everywhere the mod does not run (an older CLI, `--bare`, `--safe-mode`, mods turned off by you or your organization, or the mod failing), Sotto falls back by itself, even mid-session, to its classic hooks and courier, which work as before. `/talk status` ends with `link mod` or `link classic`.
 - **Node.js 22.6 or later** on `PATH`. There are no npm dependencies. If your `node` is older (or missing), [Bun](https://bun.sh) 1.1 or later works too: `/talk` uses it automatically, and tells you how to install one if neither is there.
 - **A voice window:** the native **Sotto** desktop app (downloaded signed and notarized on first use; no Xcode needed), or Google Chrome. Chrome is recommended either way as the fallback: its echo cancellation lets you use laptop speakers without the voice hearing itself. With neither, the page opens in your default browser.
 - **An OpenAI API key with access to `gpt-live-1`.** Voice is billed by OpenAI to that key (see [Cost](#cost)).
@@ -295,6 +295,7 @@ Set these in `/config` (the sotto rows). An unset or invalid value uses the defa
 | `daily_cap_minutes` | `120` | Voice minutes allowed per local day. You get a spoken warning at 80 %; at 100 % voice pauses. 0 = no cap. `sotto cap off` (or Settings, Daily limit: Unlimited) overrides it at once; `sotto cap 4h` sets another limit. |
 | `mirror` | `all` | What you said to the voice that it did not hand to Claude still reaches Claude as background ([details](#decisions-reach-claude-even-ones-the-voice-answered)): `all`, `decisions`, or `off` |
 | `echo_guard` | `auto` | Keeps the voice from hearing itself on speakers ([details](#speakers-echo-and-talking-over-the-voice)): `auto` (only when the window measures echo that echo cancellation left), `on`, or `off` |
+| `integration` | `auto` | `auto`: on Claude Code 2.1.287+ the Sotto mod carries voice messages and events inside the session, and the classic hooks and courier take over by themselves wherever it cannot; `classic`: always the hooks and courier ([details](#architecture)) |
 | `window` | `auto` | Where the voice window opens: `auto` (the Sotto app on macOS once built; else Chrome), `app`, `chrome`, or `default` (your default browser) |
 | `openai_api_key` | none | Optional, sensitive (asked for when you enable the plugin, not shown in `/config`). The last place the key is looked for; see [Install](#install). |
 
@@ -307,6 +308,7 @@ Environment overrides, for debugging and tests:
 | `SOTTO_DEBUG=1` | Log full hook bodies and every non-audio Live event |
 | `SOTTO_MIRROR=all\|decisions\|off` | Overrides the `mirror` option |
 | `SOTTO_ECHO_GUARD=auto\|on\|off` | Overrides the `echo_guard` option |
+| `SOTTO_INTEGRATION=auto\|classic` | Overrides the `integration` option (read by the mod from Claude Code's environment) |
 | `SOTTO_OPENAI_BASE` | Replace `https://api.openai.com/v1` (tests) |
 | `SOTTO_SIGN_IDENTITY` | Sign the desktop app with this identity instead of ad hoc |
 | `SOTTO_APP_DOWNLOAD` | `0`: never download the signed desktop app; build it locally |
@@ -370,7 +372,9 @@ A spoken request travels like this:
 
 Stale results, where you asked something newer meanwhile, go to the model as silent background notes instead of being spoken over you. Tool milestones, typed turns, questions, approvals, notifications and subagent or background-task completions are routed by the speaking policy (table above), and every spoken update waits its turn in a priority queue so it never talks over the voice.
 
-Voice messages reach the session through the **courier**, a tiny MCP server the plugin declares in `.mcp.json`. Claude Code starts one with every session (`plugin:sotto:courier` in `/mcp`); it has no tools, adds nothing to Claude's context, does nothing until a voice message arrives for its session, and lets voice work in sessions that skip permission prompts (see Troubleshooting).
+On Claude Code 2.1.287 and later, the plugin's **mod** (`hooks/sotto-mod.mjs`, loaded by `hooks.json`'s `modules`) carries the session's side: it long-polls the daemon for voice messages and submits each one as your prompt, or appends it to the turn Claude is running, and streams the session's events back in order. While it is linked, the shell hooks of that session stand down (the `active` file names it `mod:<socket>`); if it goes quiet, the daemon switches back to the hooks and the courier within seconds. Set `integration` to `classic` in `/config` (or `SOTTO_INTEGRATION=classic`) to keep it off. See [docs/SPEC.md §6.21](docs/SPEC.md).
+
+Without the mod, voice messages reach the session through the **courier**, a tiny MCP server the plugin declares in `.mcp.json`. Claude Code starts one with every session (`plugin:sotto:courier` in `/mcp`); it has no tools, adds nothing to Claude's context, does nothing until a voice message arrives for its session, and lets voice work in sessions that skip permission prompts (see Troubleshooting).
 
 State lives in the plugin data directory: `${CLAUDE_PLUGIN_DATA}`, which is `~/.claude/plugins/data/sotto-skills-dir` for the symlink install. If that is unset, it is `~/.sotto`. It holds your optional `vocabulary.txt`, `daemon.pid`, `daemon.key`, `active` (present only while a session owns voice; the hooks' gate), `status.json`, `usage.json`, `prefs.json` (the voice and window you chose with `/talk voice` and `/talk window`), `logs/`, `chrome/` (the voice window's own Chrome profile), `app/` (the built desktop app) and `courier/` (one socket per running session's courier).
 
@@ -383,6 +387,7 @@ Design and contracts: [docs/SPEC.md](docs/SPEC.md) (binding spec), [docs/ARCHITE
 | Symptom | Fix |
 |---|---|
 | The voice says "Your message is waiting for approval in the terminal", or the terminal shows "Held peer message … this session bypasses prompts" | Claude Code is **holding** the voice message. A session that skips permission prompts (`bypassPermissions`) delivers messages only from its own child processes, so Sotto sends through its **courier**, a small MCP server (`plugin:sotto:courier` in `/mcp`, no tools) that Claude Code starts with every session. `/talk on` warns when the courier is not running there: run `/reload-plugins` or restart the session (sessions started before Sotto 0.4.9 have none), and check `/mcp` that it is connected (not disabled, and no `--strict-mcp-config`). An explicit `crossSessionInbound` of `hold` or `refuse` holds or drops even the courier's messages. Either way you can approve the held message in the terminal, or choose **Accept** in `/config` → "Messages from your other sessions" (that applies to messages from all your sessions, so Sotto never sets it for you). For `claude -p` workers, pass `crossSessionInbound` with `--settings`. |
+| `/talk status` says `link classic` on Claude Code 2.1.287+ | The mod is not carrying this session: mods are off (`--bare`, `--safe-mode`, `disableAllHooks`, your organization's policy), `integration` is `classic`, or the mod lost the daemon (it reconnects on your next prompt). Voice still works through the hooks and courier. `/plugin` lists active mods; the daemon log has `modlink.up`, `modlink.lost` and `modlink.fallback` lines with the reason. |
 | `/talk` just makes Claude reply "needs the sotto plugin hooks" | The hooks aren't loaded. Check `/hooks`, run `/reload-plugins`, and check that the symlink points at the repo. |
 | "no OpenAI API key yet" / the window asks for a key | Paste a key there (see [Install](#install)), or run `/talk key` to reopen that window. Without the macOS Keychain (`ERROR OPENAI_API_KEY was not found`), export `OPENAI_API_KEY` or put it in `<plugin dir>/.env`. |
 | Saving the key fails | The message says why: "OpenAI rejected this key" (mistyped, revoked, or from another org), "its project cannot use gpt-live-1" (enable the model for the key's project, or use another key), "Could not reach OpenAI" (network), or a Keychain error (unlock the login keychain). |

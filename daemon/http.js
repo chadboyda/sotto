@@ -115,6 +115,28 @@ export function createHttpServer({ voice, port, daemonKey, pageToken, pageSecret
       return;
     }
 
+    // ---- the Claude Code mod link (SPEC §6.21) ----
+    if (p.startsWith("/mod/")) {
+      if (!keyOk(req)) return err(res, 403, "bad_key");
+      if (p === "/mod/hello" && method === "POST") {
+        const r = voice.modHello(body);
+        return send(res, r.status, r.body);
+      }
+      if (p === "/mod/poll" && method === "GET") {
+        let closed = null;
+        // A parked poll whose mod went away (connection closed) is dropped.
+        res.on("close", () => { if (!res.writableEnded) closed?.(); });
+        const r = await voice.modPoll({ instance: url.searchParams.get("instance") || "", after: url.searchParams.get("after") || "0" }, (fn) => { closed = fn; });
+        if (r) send(res, r.status, r.body);
+        return;
+      }
+      if (p === "/mod/events" && method === "POST") {
+        const r = voice.modEvents(body);
+        return send(res, r.status, r.body);
+      }
+      return err(res, 404, "not_found");
+    }
+
     // ---- page routes ----
     if (p === "/api/bootstrap" && method === "GET") {
       // The page token is handed out only to a page that proves the daemon

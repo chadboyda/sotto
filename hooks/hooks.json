@@ -1,4 +1,6 @@
 {
+  "description": "Sotto: the Claude Code mod (CLI 2.1.287+) plus the classic command hooks it replaces in its own session; older CLIs ignore modules and run the hooks.",
+  "modules": ["./sotto-mod.mjs"],
   "hooks": {
     "UserPromptExpansion": [
       { "matcher": "^sotto:talk$",
