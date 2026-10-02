@@ -50,6 +50,8 @@ const CLIP_MAX_MS = 8000;
 
 /** The voice says "I can't hear you well" at most this often (§7.5). */
 const CANT_HEAR_SAY_MS = 10 * 60 * 1000;
+// How long the terminal band says "can't hear you" after the page reports it (§6.21).
+const CANT_HEAR_BAND_MS = 60 * 1000;
 // A silent-mic window swap (SPEC §6.16 "Silent mic") at most this often.
 const MIC_SILENT_SWAP_MS = 60 * 1000;
 /** How long a confirmed /control persona|voice waits for the new session (toggle.sh curl -m is longer). */
@@ -465,6 +467,7 @@ export class Voice {
     if (this.state === s) return;
     this.log.info("state", { from: this.state, to: s });
     this.state = s;
+    this.stateSince = this.clock.now();
     // The speech queue waits (suspended) only across a session swap; if the
     // swap ends in anything but a new session, release what it holds (to
     // pendingResult / backlog, as without a swap).
@@ -689,7 +692,22 @@ export class Voice {
       state: this.state, persona: this.personaIdForStatus(), voice: this.config.voice,
       busy: !!this.delegation.claudeBusy, activity: clip(this.lastActivity || "", 160),
       said: said ? clip(said.text, 200) : "", approval: this.approvals?.current()?.label || null,
+      problem: this.modProblem(),
     };
+  }
+
+  /**
+   * A real problem the band shows in its warning style, else null: a voice
+   * message held in the terminal, a recent "can't hear you", or an error that
+   * came with the current state (an older error is history, not the state).
+   */
+  modProblem() {
+    const now = this.clock.now();
+    if (this.delegation?.records?.some((r) => r.status === "held_suspected")) return { kind: "held", text: "a voice message is waiting for approval here" };
+    if (this.state === "live" && this.cantHearAt !== undefined && now - this.cantHearAt < CANT_HEAR_BAND_MS) return { kind: "cant_hear", text: "can't hear you: check the mic" };
+    const e = this.lastError;
+    if (e && e.code !== "inbox_held" && !["live", "sleeping", "off"].includes(this.state) && Date.parse(e.at) >= (this.stateSince ?? 0) - 5000) return { kind: "error", text: e.message };
+    return null;
   }
 
   pushModState() {
@@ -2024,6 +2042,11 @@ export class Voice {
       peak_rms: num(msg.peak_rms), speech_ms: num(msg.speech_ms), since_ms: num(msg.since_ms),
     });
     const now = this.clock.now();
+    if (this.state === "live") {
+      this.cantHearAt = now;
+      this.pushModState();
+      this.clock.setTimeout(() => this.pushModState(), CANT_HEAR_BAND_MS + 50);
+    }
     if (this.state !== "live" || !this.live || this.live.cantHearSaid) return;
     if (this.cantHearSaidAt !== undefined && now - this.cantHearSaidAt < CANT_HEAR_SAY_MS) return;
     this.live.cantHearSaid = true;

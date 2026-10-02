@@ -209,19 +209,6 @@ export function contextOf(rows, max = 40) {
 
 // ---- phase 6: what the mod draws -------------------------------------------------
 
-/** The voice state word as /talk status says it. */
-function stateWord(s) { return s.state === "live" ? "ON" : s.state || "off"; }
-
-/** The pinned status line under the prompt. */
-export function statusLine(s) {
-  if (!s) return undefined;
-  // Claude Code puts the plugin's name in front of the line ("sotto: ").
-  const parts = [`voice ${stateWord(s)}`];
-  if (s.persona) parts.push(`persona ${s.persona}`);
-  if (s.voice) parts.push(`voice ${s.voice}`);
-  return parts.join(" | ");
-}
-
 /** The phase words of the band. */
 export function phaseOf(s) {
   if (!s) return "";
@@ -239,14 +226,32 @@ export function fit(text, cols) {
   return chars.length <= cols ? t : chars.slice(0, Math.max(0, cols - 1)).join("") + "…";
 }
 
+const PROBLEM_WORDS = { held: "held", cant_hear: "can't hear you", error: "error" };
+
 /**
- * The band above the prompt: one or two lines fitted to the band's width:
- * "sotto | <phase>" and the voice's last words (else the latest activity).
+ * The band above the prompt, the one place Sotto shows itself in the
+ * terminal: a header row "sotto · <phase> · <persona> · <voice>" and a
+ * caption row (the voice's last words in quotes, else the latest activity;
+ * a problem's own words when there is one). Each row is a list of segments
+ * `{ text, bold?, dim?, warn? }` fitted to `cols`: on a narrow band the voice
+ * and then the persona go first, then the phase is cut. Nothing while voice
+ * is off. A warning style only for a real problem (held, can't hear, error).
  */
-export function bandLines(s, cols) {
-  if (!s) return [];
+export function bandRows(s, cols) {
+  if (!s || !s.state || s.state === "off") return [];
   const w = Math.max(10, Number(cols) || 80);
-  const head = fit(`sotto | ${phaseOf(s)}${s.approval ? `: ${s.approval}` : ""}`, w);
-  const body = s.said ? `"${s.said}"` : s.activity || "";
-  return body ? [head, fit(body, w)] : [head];
+  const p = s.problem && PROBLEM_WORDS[s.problem.kind] ? s.problem : null;
+  const phase = p ? PROBLEM_WORDS[p.kind] : `${phaseOf(s)}${s.approval ? `: ${s.approval}` : ""}`;
+  const extras = [s.persona, s.voice].filter(Boolean).map((t) => ({ text: ` · ${t}`, dim: true }));
+  const name = { text: "sotto", bold: true };
+  const width = (segs) => segs.reduce((n, g) => n + [...g.text].length, 0);
+  while (extras.length && width([name, { text: ` · ${phase}` }, ...extras]) > w) extras.pop();
+  const head = [name, { text: ` · ${fit(phase, w - 8)}`, ...(p ? { warn: true } : {}) }, ...extras];
+  const body = p ? p.text : s.said ? `"${s.said}"` : s.activity || "";
+  return body ? [head, [{ text: fit(body, w), ...(p ? { warn: true } : { dim: true }) }]] : [head];
+}
+
+/** The band's rows as plain text (tests, logs). */
+export function bandLines(s, cols) {
+  return bandRows(s, cols).map((row) => row.map((g) => g.text).join(""));
 }

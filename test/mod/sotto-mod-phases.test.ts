@@ -94,22 +94,43 @@ test('once linked: voice tools are registered, allowed without a prompt, and ans
   expect(d.events.some((e) => e.kind === 'context' && e.messages.length === 2)).toBe(true)
 })
 
-test('the band shows the phase and the last words, fitted to the width, and yields to a survey', async ($, on) => {
+test('the band is the one surface: header, persona and voice dimmed, the last words; no status line; yields to a survey', async ($, on) => {
   const clock = mock.clock(on)
   const d: Daemon = { polls: 0, events: [], controls: [], state: STATE }
   stubs(on, clock, d)
+  const statuses: any[] = []
+  on('ui.status', ($: any, e: any) => { statuses.push(e); return { value: undefined } })
   on('ui.render', () => ({ type: 'Text', props: {}, children: ['drawn by Claude Code'] }))
   await $.session.start({ surface: 'terminal', isInteractive: true, cwd: '/work' } as any)
   await settle(clock)
-  const band = await $.ui.mount(BAND)
-  expect(await band.find({ type: 'Text', text: 'sotto | listening' })).toBeDefined()
-  const said = await band.find({ type: 'Text', text: /All forty-two/ })
-  expect(said).toBeDefined()
-  expect([...String((said as any).children)].length <= 28).toBe(true)
+  const band = await $.ui.mount({ ...BAND, props: { ...BAND.props, bodyColumns: 80 } })
+  const head: any = await band.find({ type: 'Text', text: `sotto · listening · ${STATE.persona} · ${STATE.voice}` })
+  expect(head.children.map((c: any) => [c.children[0], c.props ?? {}])).toEqual([
+    ['sotto', { bold: true }], [' · listening', {}], [` · ${STATE.persona}`, { dimColor: true }], [` · ${STATE.voice}`, { dimColor: true }],
+  ])
+  expect(await band.find({ type: 'Text', text: /All forty-two/ })).toBeDefined()
   await band.unmount()
+  const narrow = await $.ui.mount(BAND)
+  const said = await narrow.find({ type: 'Text', text: /All forty-two/ })
+  expect([...String((said as any).children)].length <= 28).toBe(true)
+  await narrow.unmount()
+  expect(statuses.filter((s) => s.text !== undefined)).toEqual([])
   const survey = await $.ui.mount({ ...BAND, props: { ...BAND.props, hasSurvey: true } })
   expect(await survey.find({ type: 'Text', text: 'drawn by Claude Code' })).toBeDefined()
   await survey.unmount()
+})
+
+test('the band warns only for a real problem', async ($, on) => {
+  const clock = mock.clock(on)
+  const d: Daemon = { polls: 0, events: [], controls: [], state: { ...STATE, problem: { kind: 'cant_hear', text: "can't hear you: check the mic" } } }
+  stubs(on, clock, d)
+  await $.session.start({ surface: 'terminal', isInteractive: true, cwd: '/work' } as any)
+  await settle(clock)
+  const band = await $.ui.mount({ ...BAND, props: { ...BAND.props, bodyColumns: 80 } })
+  const head: any = await band.find({ type: 'Text', text: `sotto · can't hear you · ${STATE.persona} · ${STATE.voice}` })
+  expect(head.children[1]).toMatchObject({ props: { color: 'warning' }, children: [" · can't hear you"] })
+  expect(await band.find({ type: 'Text', text: "can't hear you: check the mic" })).toBeDefined()
+  await band.unmount()
 })
 
 test('approvals: an ask is reported by tool_use_id, noted under the dialog, and closed when the call ends', async ($, on) => {
