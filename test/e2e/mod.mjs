@@ -35,12 +35,15 @@ import { createMemoryLogger } from "../../daemon/log.js";
 import { voiceMarker } from "../../daemon/config.js";
 import { createFakeKeychain } from "../helpers/fake-keychain.js";
 import { freePort, makePluginRoot } from "../helpers/daemon-harness.js";
+import { scrubInheritedMessaging, isolatedClaudeEnv, assertNotInherited, peerToolCalls, NO_PEER_TOOLS_ARGS } from "../helpers/isolated-claude.js";
 
 const REPO = fileURLToPath(new URL("../..", import.meta.url)).replace(/\/$/, "");
 const D = path.join(process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), ".claude"), "plugins", "data", "sotto-inline");
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const tag = () => Math.random().toString(36).slice(2, 7).toUpperCase();
 const ONLY = process.env.SOTTO_E2E_ONLY || "";
+// Never post into the session running this test (test/helpers/isolated-claude.js).
+scrubInheritedMessaging();
 
 fs.mkdirSync(D, { recursive: true, mode: 0o700 });
 const keyFile = path.join(D, "daemon.key");
@@ -76,11 +79,10 @@ async function run(mode) {
   };
   const fail = async (m) => { console.error(`FAIL [${mode}] ${m}`); console.error(log.entries.filter((e) => /^(modlink|inbox|hook|claude|delegation|wake|speech|result|state|page)/.test(e.ev)).slice(-40).map((e) => JSON.stringify(e)).join("\n")); await cleanup(); finish(1); };
   try {
-    const env = { ...process.env, DISABLE_AUTOUPDATER: "1" };
-    for (const k of Object.keys(env)) if (/^CLAUDE/.test(k) && k !== "CLAUDE_CONFIG_DIR") delete env[k];
+    const env = isolatedClaudeEnv();
     if (mode === "classic") env.SOTTO_INTEGRATION = "classic"; else delete env.SOTTO_INTEGRATION;
     claude = spawn("claude", ["-p", "--input-format", "stream-json", "--output-format", "stream-json", "--verbose", "--model", "haiku",
-      "--permission-mode", "bypassPermissions", "--plugin-dir", REPO, "--setting-sources", "project,local",
+      "--permission-mode", "bypassPermissions", "--plugin-dir", REPO, "--setting-sources", "project,local", ...NO_PEER_TOOLS_ARGS,
       // The scratch port for toggle.sh too (never the live daemon on 47821).
       "--settings", JSON.stringify({ pluginConfigs: { "sotto@inline": { options: { port } } } }), ...(process.env.SOTTO_E2E_DEBUG ? ["--debug-file", path.join(TMP, "debug.log")] : [])],
     { cwd: TMP, env, stdio: ["pipe", fs.openSync(STREAM, "w"), "ignore"] });
@@ -92,8 +94,10 @@ async function run(mode) {
     // The session's inbox socket names it, as hook.sh and the courier know it.
     let socket = null;
     await waitFor(() => (socket = [`/tmp/cc-socks/${claude.pid}.sock`, `/tmp/cc-socks-${process.getuid()}/${claude.pid}.sock`].find((s) => fs.existsSync(s))), 30000, "the session's inbox socket");
+    assertNotInherited(socket);
     const r = voice.control({ action: "on", session: { socket, session_id: null, cwd: TMP, project_dir: TMP, permission_mode: "bypassPermissions" }, config: {} });
     if (!voice.owner) return fail(`could not bind the owner: ${r.message}`);
+    if (voice.owner.socket !== socket) return fail(`owner socket ${voice.owner.socket} is not the test session's ${socket}`);
     const marker = voiceMarker(voice.nonce);
 
     // A typed first prompt: its UserPromptSubmit is where an unlinked mod looks for voice.
@@ -216,6 +220,8 @@ async function run(mode) {
       if (!voice.statusMessage().includes("link classic")) return fail(`/talk status does not say link classic: ${voice.statusMessage()}`);
       console.log(`[classic] sends via ${[...new Set(sends.map((s) => s.via))].join(",")}, shell hooks: ${log.find("hook").length}`);
     }
+    const peer = peerToolCalls(events());
+    if (peer.length) return fail(`the test session called cross-session tools: ${peer.join(",")}`);
     const cost = events().filter((e) => e.type === "result").reduce((a, e) => a + (e.total_cost_usd || 0), 0);
     console.log(`PASS [${mode}] in ${Math.round((Date.now() - t0) / 1000)} s, $${cost.toFixed(3)}`);
     await cleanup();

@@ -22,6 +22,7 @@ import path from "node:path";
 import { spawn, execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { courierPaths, viaCourier, send } from "../../daemon/inbox.js";
+import { scrubInheritedMessaging, isolatedClaudeEnv, assertNotInherited, NO_PEER_TOOLS_ARGS } from "../helpers/isolated-claude.js";
 
 const REPO = fileURLToPath(new URL("../..", import.meta.url)).replace(/\/$/, "");
 const D = path.join(os.homedir(), ".claude", "plugins", "data", "sotto-inline"); // --plugin-dir's data dir
@@ -48,13 +49,13 @@ const keyFile = path.join(D, "daemon.key");
 if (!fs.existsSync(keyFile)) { fs.writeFileSync(keyFile, `e2e-${tag}-${process.pid}\n`, { mode: 0o600 }); wroteKey = true; }
 const KEY = fs.readFileSync(keyFile, "utf8").trim();
 
-const env = { ...process.env };
-delete env.CLAUDE_CODE_MESSAGING_SOCKET; // never post into the session running this test
-delete env.CLAUDE_CODE_MESSAGING_TOKEN;
+// Never post into the session running this test (test/helpers/isolated-claude.js).
+scrubInheritedMessaging();
+const env = isolatedClaudeEnv();
 const prompt = "Run this Bash command three times, one after another, each with a 60000 ms timeout: python3 -c 'import time; time.sleep(30)'. "
   + "Then reply with every message you received from other sessions during this conversation, quoted verbatim, or NONE.";
 const t0 = Date.now();
-claude = spawn("claude", ["-p", "--permission-mode", "bypassPermissions", "--model", "haiku", "--plugin-dir", REPO,
+claude = spawn("claude", ["-p", "--permission-mode", "bypassPermissions", "--model", "haiku", "--plugin-dir", REPO, ...NO_PEER_TOOLS_ARGS,
   "--output-format", "stream-json", "--verbose", prompt], { cwd: TMP, env, stdio: ["ignore", fs.openSync(STREAM, "w"), "ignore"] });
 const exited = new Promise((r) => claude.once("exit", r));
 
@@ -77,6 +78,7 @@ if (!courier) fail("no courier started as the session's child (is the plugin's .
 const inboxSocket = [`/tmp/cc-socks/${claude.pid}.sock`, `/tmp/cc-socks-${process.getuid()}/${claude.pid}.sock`]
   .find((s) => path.basename(courierPaths(D, s).socket, ".sock") === courier.name);
 if (!inboxSocket) fail("could not match the courier to the session's inbox socket");
+assertNotInherited(inboxSocket);
 console.log(`courier pid ${courier.pid} (child of claude ${claude.pid}), started ${Date.now() - t0} ms after launch`);
 
 // Wait until Claude is inside its first Bash call, so both messages land mid-turn.
