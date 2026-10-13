@@ -7,7 +7,7 @@ import { normalizeConfig, POLICIES, VOICES, VOICE_INFO, ECHO_GUARD_MODES, openai
 import { estTokens, fitTokens, tokenChunks, speakable, summary, clip, awaitingQuestion } from "./speech.js";
 import { makeOwner, ownerStatus, isOwnerAlive } from "./owner.js";
 import { writeActive, removeActive, createPendingContext, removePendingContext, setApprovalPending, readUsage, writeUsage, localDate, StatusFileWriter } from "./statefiles.js";
-import { Transcript } from "./transcript.js";
+import { Transcript, CAPTION_SETTLE_MS } from "./transcript.js";
 import { DelegationEngine, parseTaskNotifications } from "./delegation.js";
 import { Mirror, MIRROR_MODES } from "./mirror.js";
 import { materialOf } from "./phrasing.js";
@@ -32,6 +32,7 @@ import { normalizeKeyInput, validateKey, keyWhere } from "./apikey.js";
 import { isHandoffClaim, isWaitingClaim, clipWantsDelegation } from "./handoff.js";
 import { VOICE_WAIT_MAX_MS } from "./delegation.js";
 import { ModLink } from "./modlink.js";
+import { transcriptVersion, staticLinkReason, notLinkedReason, linkSuffix, linkSentence, LINK_WAIT_MS } from "./linkreason.js";
 
 // Handoff guard (§6.20). The voice said it handed something to Claude: a
 // delegation made with that line (up to HANDOFF_LOOKBACK_MS before it) or
@@ -73,6 +74,9 @@ const MAX_FLUSH = 3;
 const SESSION_REASONS = ["start", "resume", "reconnect", "wake", "notify"];
 const LIVENESS_MS = 30000;
 const MODLINK_CHECK_MS = 5000;
+// The band's caption follows the voice's words at most this often (§6.21
+// "Terminal UI"); a push only on state changes froze it on a first delta.
+const SAID_PUSH_MS = 300;
 const MOD_CONTEXT_MAX = 40;
 const WAITING_PAGE_MS = 30000;
 const EXIT_AFTER_OFF_MS = 3000;
@@ -693,16 +697,55 @@ export class Voice {
   integrationStatus() { return this.modlink.status(); }
 
   /**
+   * Why this session's link will be classic (§6.21 "Link reason"): an older
+   * Claude Code ignores the mod without a word (a long-lived background
+   * session on 2.1.285 looked like "it launched as the plugin, not the mod"),
+   * integration=classic turns it off, and a new-enough CLI whose mod has not
+   * said hello within LINK_WAIT_MS needs /reload-plugins. The version comes
+   * from toggle.sh (the CLI's env), else the transcript's last `version`.
+   */
+  armLinkReason(owner, prev) {
+    if (prev && prev.session_id === owner.session_id) owner.modSeen = prev.modSeen;
+    if (!owner.cli) owner.cli = transcriptVersion(owner.transcript_path);
+    this.clear("linkWait");
+    owner.linkReason = staticLinkReason(owner);
+    if (owner.linkReason) this.logLinkReason(owner);
+    else if (owner.transport !== "mod" && !owner.modSeen) this.timer("linkWait", () => this.onLinkWait(owner), LINK_WAIT_MS);
+  }
+
+  onLinkWait(owner) {
+    if (this.owner !== owner || owner.transport === "mod" || owner.modSeen || this.state === "off") return;
+    owner.linkReason = notLinkedReason(owner);
+    this.logLinkReason(owner);
+  }
+
+  logLinkReason(owner) {
+    const r = owner.linkReason;
+    this.log.info("owner.link_reason", { code: r.code, cli: owner.cli, integration: owner.integration, session_id: owner.session_id });
+  }
+
+  /** The link reason's full sentence, once per session (then only the status suffix). */
+  linkReasonSentence() {
+    const o = this.owner;
+    if (!o?.linkReason || this.modActive()) return "";
+    this.linkReasonSaid ??= new Set();
+    const key = o.session_id || o.socket;
+    if (this.linkReasonSaid.has(key)) return "";
+    this.linkReasonSaid.add(key);
+    return linkSentence(o.linkReason);
+  }
+
+  /**
    * What the mod draws in the terminal (§6.21 "Terminal UI"): the voice's
    * state, persona and voice, whether Claude works, the latest activity line
    * and the voice's latest words. Sent only while the mod is linked, deduped.
    */
   modUiState() {
-    const said = this.transcript.lastAssistantLine();
+    const said = this.transcript.caption();
     return {
       state: this.state, persona: this.personaIdForStatus(), voice: this.config.voice,
       busy: !!this.delegation.claudeBusy, activity: clip(this.lastActivity || "", 160),
-      said: said ? clip(said.text, 200) : "", approval: this.approvals?.current()?.label || null,
+      said: clip(said, 200), approval: this.approvals?.current()?.label || null,
       problem: this.modProblem(),
     };
   }
@@ -721,6 +764,17 @@ export class Voice {
     return null;
   }
 
+  /**
+   * The voice's words moved on: push within SAID_PUSH_MS (throttled, not per
+   * delta), and once more when the line has settled, so the caption ends on
+   * the whole line.
+   */
+  scheduleSaidPush() {
+    if (!this.modlink?.linked) return;
+    if (!this.timers.saidPush) this.timer("saidPush", () => this.pushModState(), SAID_PUSH_MS);
+    this.timer("saidSettle", () => this.pushModState(), CAPTION_SETTLE_MS);
+  }
+
   pushModState() {
     if (!this.modlink?.linked) return;
     try { this.modlink.setState(this.modUiState()); } catch (e) { this.log.warn("modlink.state_error", { message: e.message }); }
@@ -735,6 +789,8 @@ export class Voice {
     const was = this.modActive();
     const r = this.modlink.hello({ instance: b.instance, cli: typeof b.cli === "string" ? truncate(b.cli, 40) : null, sessionId: typeof b.session_id === "string" ? b.session_id : null });
     o.transport = "mod";
+    o.modSeen = true;
+    this.clear("linkWait");
     if (typeof b.session_id === "string" && b.session_id) o.session_id = b.session_id;
     if (!was) this.writeActiveFile();
     this.log.info("modlink.up", { instance: b.instance, cli: typeof b.cli === "string" ? truncate(b.cli, 40) : null, mod: typeof b.mod === "string" ? truncate(b.mod, 20) : null, relink: was });
@@ -996,6 +1052,11 @@ export class Voice {
       const warn = this.inboundWarning(req.session);
       if (warn) r = { ...r, message: `${r.message} ${warn}` };
     }
+    if ((turningOn || action === "status") && this.state !== "off" && this.owner
+        && req.session && this.owner.socket === req.session.socket) {
+      const why = this.linkReasonSentence();
+      if (why) r = { ...r, message: `${r.message} ${why}` };
+    }
     const out = { ok: r.ok, state: this.state, message: r.message };
     this.log.info("control.result", { action, ok: out.ok, state: out.state });
     // `confirm` (toggle.sh for /talk persona|voice <name>, so bin/sotto): a
@@ -1081,7 +1142,7 @@ export class Voice {
     const app = this.appNote();
     if (this.state === "off" || !this.owner) return `sotto: voice is off. ${u}.${app ? ` ${app}.` : ""}`;
     const st = this.state === "live" ? "ON" : this.state;
-    let m = `sotto: voice ${st} (${this.owner.project}) | ${u} | voice ${this.config.voice} | persona ${this.personaIdForStatus()} | ${this.policy} | link ${this.modActive() ? "mod" : "classic"}`;
+    let m = `sotto: voice ${st} (${this.owner.project}) | ${u} | voice ${this.config.voice} | persona ${this.personaIdForStatus()} | ${this.policy} | ${this.modActive() ? "link mod" : linkSuffix(this.owner.linkReason)}`;
     if (app) m += ` | ${app}`;
     if (this.lastError) m += ` | last error: ${this.lastError.message}`;
     return m;
@@ -1202,6 +1263,7 @@ export class Voice {
       this.log.info("owner.bind", { project: next.project, session_id: next.session_id });
     }
     this.writeActiveFile();
+    this.armLinkReason(next, same ? old : null);
     this.vocabularyFor(next);
     this.interval("liveness", () => { this.delegation.sweepStale(); this.checkLiveness(); }, LIVENESS_MS);
     this.interval("modlink", () => this.modlink.check(), MODLINK_CHECK_MS);
@@ -2591,6 +2653,7 @@ export class Voice {
         this.speech.onOutput(evt.delta, evt.start_ms, evt.end_ms);
         this.style.onOutput(evt.delta);
         this.onAssistantSpeech();
+        this.scheduleSaidPush();
         break;
       case "session.delegation.created": this.delegation.onCreated(evt); break;
       case "session.usage.updated": this.onUsage(sb.id, Number(evt.usage?.seconds)); break;

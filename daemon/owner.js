@@ -15,6 +15,10 @@ export function makeOwner(session, nowMs) {
     project_dir: s.project_dir || null,
     project,
     transcript_path: s.transcript_path || null,
+    // The session's Claude Code version and integration setting (toggle.sh),
+    // for the classic-link reason (§6.21 "Link reason").
+    cli: typeof s.cli_version === "string" && /^\d{1,4}\.\d{1,4}\.\d{1,6}$/.test(s.cli_version) ? s.cli_version : null,
+    integration: typeof s.integration === "string" && /^[a-z]{1,16}$/.test(s.integration) ? s.integration : null,
     // How voice messages and hook events travel (SPEC §6.21): "inbox" (the
     // classic shell hooks and the courier) until the session's mod links up.
     transport: "inbox",
@@ -31,6 +35,8 @@ export function ownerStatus(owner) {
     project: owner.project,
     cwd: owner.cwd,
     transport: owner.transport || "inbox",
+    cli: owner.cli || null,
+    link_reason: owner.linkReason?.code || null,
     since: new Date(owner.since).toISOString(),
   };
 }

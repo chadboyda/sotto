@@ -148,6 +148,23 @@ describe("toggle.sh cold start", () => {
     assert.equal(bodies[1].session.token, TOKEN);
   });
 
+  test("the CLI version and the integration setting are forwarded for the link reason (SPEC §6.21)", async () => {
+    const { D, env } = await setup();
+    const input = stdinFor("on");
+    const base = { ...env, CLAUDE_CODE_EXECPATH: "", AI_AGENT: "", SOTTO_INTEGRATION: "", CLAUDE_PLUGIN_OPTION_INTEGRATION: "" };
+    parseOut(await run(TOGGLE, { env: { ...base, CLAUDE_CODE_EXECPATH: "/u/.local/share/claude/versions/2.1.285" }, input }));
+    parseOut(await run(TOGGLE, { env: { ...base, CLAUDE_CODE_EXECPATH: "/usr/lib/node_modules/cli.js", AI_AGENT: "claude-code_2-1-296_agent", CLAUDE_PLUGIN_OPTION_INTEGRATION: "classic" }, input }));
+    parseOut(await run(TOGGLE, { env: { ...base, AI_AGENT: "other_1-2-3", SOTTO_INTEGRATION: 'x", "token": "y' }, input }));
+    const s = controlBodies(D).map((b) => b.session);
+    assert.equal(s[0].cli_version, "2.1.285");
+    assert.equal(s[0].integration, undefined);
+    assert.equal(s[1].cli_version, "2.1.296");
+    assert.equal(s[1].integration, "classic");
+    assert.equal(s[2].cli_version, undefined);
+    assert.equal(s[2].integration, undefined);
+    assert.equal(s[2].token, TOKEN);
+  });
+
   test("action mapping once the daemon is up", async () => {
     const { D, env } = await setup();
     parseOut(await run(TOGGLE, { env, input: stdinFor("on") })); // cold start

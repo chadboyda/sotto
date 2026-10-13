@@ -635,6 +635,17 @@ if [[ -n "$CLAUDE_CODE_MESSAGING_TOKEN" ]]; then json_escape -v v "$CLAUDE_CODE_
 [[ -n "$IN_CWD" ]] && add_field cwd "\"$IN_CWD\""
 if [[ -n "$CLAUDE_PROJECT_DIR" ]]; then json_escape -v v "$CLAUDE_PROJECT_DIR"; add_field project_dir "\"$v\""; fi
 [[ -n "$IN_TRANSCRIPT" ]] && add_field transcript_path "\"$IN_TRANSCRIPT\""
+# The CLI's version and the integration setting: a session that stays on the
+# classic link says why (SPEC §6.21 "Link reason"). The version is the
+# versions/<x.y.z> install dir, else AI_AGENT (claude-code_2-1-296_agent).
+CLI_VER="${CLAUDE_CODE_EXECPATH##*/}"
+if ! [[ "$CLI_VER" =~ ^[0-9]{1,4}\.[0-9]{1,4}\.[0-9]{1,6}$ ]]; then
+  CLI_VER=""
+  [[ "$AI_AGENT" =~ ^claude-code_([0-9]{1,4})-([0-9]{1,4})-([0-9]{1,6})(_|$) ]] && CLI_VER="${BASH_REMATCH[1]}.${BASH_REMATCH[2]}.${BASH_REMATCH[3]}"
+fi
+[[ -n "$CLI_VER" ]] && add_field cli_version "\"$CLI_VER\""
+INTEG="${SOTTO_INTEGRATION:-$CLAUDE_PLUGIN_OPTION_INTEGRATION}"
+[[ "$INTEG" =~ ^[a-z]{1,16}$ ]] && add_field integration "\"$INTEG\""
 # The session's permission mode: /talk on warns when Claude Code would hold
 # voice messages here (bypassPermissions without the courier, SPEC §6.9.2).
 [[ "$IN_MODE" =~ ^[A-Za-z]{1,32}$ ]] && add_field permission_mode "\"$IN_MODE\""
