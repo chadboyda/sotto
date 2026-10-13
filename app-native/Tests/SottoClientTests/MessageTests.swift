@@ -164,7 +164,7 @@ final class MessageTests: XCTestCase {
     func testEveryCommandNameEncodes() throws {
         // Same list, same order as daemon/native-proto.js COMMANDS (test/daemon/native-proto.test.js).
         let names = ["mute", "pause", "resume", "wake", "end", "set_voice", "set_persona", "set_policy", "set_wake", "set_window",
-                     "key_save", "key_remove", "get_voices", "echo_test", "open_browser", "set_earcon"]
+                     "key_save", "key_remove", "get_voices", "echo_test", "open_browser", "set_earcon", "set_call_hold"]
         for n in names {
             XCTAssertEqual(try obj(.cmd(id: "i", name: n, args: [:]))["name"], .string(n))
         }

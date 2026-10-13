@@ -3,7 +3,8 @@
 // whether choosing a persona also switches to its voice ("persona_voice",
 // default true) and the daily voice limit ("daily_cap_minutes", 0 =
 // unlimited; `sotto cap`, the window's Daily limit; beats userConfig) and the
-// earcon before an unprompted wake ("earcon", default true). Precedence for voice and window:
+// earcon before an unprompted wake ("earcon", default true) and the opt-in
+// call hold ("call_hold", default false). Precedence for voice and window:
 //   D/prefs.json  >  userConfig (CLAUDE_PLUGIN_OPTION_* via /control)  >  default
 // ("marin"; window "auto"). SOTTO_BROWSER still beats all of it for the window.
 // toggle.sh reads and (when no daemon runs) writes the same file with bash
@@ -40,6 +41,7 @@ export function readPrefs(paths, readFile = fs.readFileSync) {
     if (p) out.persona = p;
     if (typeof o.persona_voice === "boolean") out.persona_voice = o.persona_voice;
     if (typeof o.earcon === "boolean") out.earcon = o.earcon;
+    if (typeof o.call_hold === "boolean") out.call_hold = o.call_hold;
     const cap = normalizeCap(o.daily_cap_minutes);
     if (cap !== null) out.daily_cap_minutes = cap;
     return out;
@@ -89,6 +91,11 @@ export function resolveVoice({ prefs = {}, configVoice } = {}) {
 /** Whether an unprompted wake starts with the soft earcon (default yes; §6.15 "Earcon"). */
 export function earconOn(prefs = {}) {
   return prefs.earcon !== false;
+}
+
+/** Whether updates wait while another app uses the mic (a call; default no; §6.15 "Call hold"). */
+export function callHoldOn(prefs = {}) {
+  return prefs.call_hold === true;
 }
 
 /** Whether picking a persona also switches to its voice (default yes). */

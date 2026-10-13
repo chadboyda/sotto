@@ -196,6 +196,12 @@ public final class SettingsModel {
 
     public func setPolicy(_ p: String) { run("policy", value: p, command: "set_policy", args: ["policy": .string(p)]) }
     public func setWake(_ s: String) { run("wake", value: s, command: "set_wake", args: ["sensitivity": .string(s)]) }
+    /// The opt-in call hold (SPEC §6.15): the in-flight choice, else the daemon's (default off).
+    public var callHold: Bool {
+        if let p = pending["call_hold"] { return p == "on" }
+        return status?.call_hold ?? false
+    }
+    public func setCallHold(_ on: Bool) { run("call_hold", value: on ? "on" : "off", command: "set_call_hold", args: ["on": .bool(on)]) }
     public func setEarcon(_ on: Bool) { run("earcon", value: on ? "on" : "off", command: "set_earcon", args: ["on": .bool(on)]) }
     public func setCap(_ m: Int) { run("cap", value: String(m), command: "set_cap", args: ["minutes": .number(Double(m))]) }
     public func setAppearance(_ a: String) {

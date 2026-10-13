@@ -16,7 +16,7 @@ import { Narrator, elicitationSpeech, serverName, ToolLine, AgentTracker, TopLev
 import { Approvals, commandFingerprint, findRunning } from "./approvals.js";
 import { SpeechQueue, COMMENTARY_PREROLL_MS } from "./speaker.js";
 import { renderForPolicy, buildSeedInput, greeting, ownerSwitchInstruction, voiceSwitchGreeting, personaSwitchGreeting, vocabularyUpdateInstruction, updateGreeting, cantHearInstruction, RECENT_GREETING_MS } from "./prompt.js";
-import { readPrefs, writePrefs, normalizeCap, resolveCap, capLabel, resolveVoice, normalizeVoice, voiceListMessage, unknownVoiceMessage, normalizeWindow, resolveWindowPref, personaVoiceOn, earconOn } from "./prefs.js";
+import { readPrefs, writePrefs, normalizeCap, resolveCap, capLabel, resolveVoice, normalizeVoice, voiceListMessage, unknownVoiceMessage, normalizeWindow, resolveWindowPref, personaVoiceOn, earconOn, callHoldOn } from "./prefs.js";
 import { loadPersonas, findPersona, resolvePersona, personaSummary, personaListMessage, unknownPersonaMessage } from "./personas.js";
 import { collectVocabulary, renderVocabulary, vocabularyHint, TIER } from "./vocabulary.js";
 import { buildSessionBody, createLiveSession, Sideband } from "./live.js";
@@ -458,6 +458,8 @@ export class Voice {
       earcon: this.earconEnabled(),
       watches: this.watches.active().map((w) => w.description),
       away: this.awayCount(),
+      call_hold: this.callHoldEnabled(),
+      on_call: this.onCall(),
     };
   }
 
@@ -487,6 +489,37 @@ export class Voice {
 
   awayCount() { return [...this.carryResults, ...this.pendingResults].filter((r) => r.away).length; }
 
+  // ---- on-a-call hold (§6.15 "Call hold"): opt-in, off by default --------------------------
+  callHoldEnabled() { return callHoldOn(readPrefs(this.paths)); }
+
+  /** /talk callhold on|off, `sotto callhold`, the app's Settings toggle (persisted in prefs.json). */
+  setCallHold(on) {
+    try { writePrefs(this.paths, { call_hold: !!on }); } catch (e) { this.log.error("prefs.write_error", { message: e.message }); }
+    this.log.info("call_hold.set", { on: !!on });
+    this.changed();
+    // Turned off while updates wait for a call to end: say them now.
+    if (!on && this.awayCount() && this.state === "sleeping" && !this.outputAway()) this.requestWake("notify");
+    return { ok: true, on: !!on, message: on
+      ? "sotto: call hold on: while another app uses the microphone (a call), the voice holds its updates and says them when the call ends."
+      : "sotto: call hold off: updates are spoken even while another app uses the microphone." };
+  }
+
+  /** Another app has the mic (the app's `mic_busy`) and the user asked to be left alone on calls. */
+  onCall() { return this.callHoldEnabled() && this.appAttached() && !!this.micBusy; }
+
+  /** Why an update must wait instead of waking: "away" (nobody can hear), "call", or null. */
+  holdReason() { return this.outputAway() ? "away" : this.onCall() ? "call" : null; }
+
+  /** The app's `mic_busy` (native-session.js): another app started or stopped using the microphone. */
+  onMicBusy(busy, apps = []) {
+    const was = this.onCall();
+    this.micBusy = !!busy;
+    const now = this.onCall();
+    this.log.info("call.mic_busy", { busy: !!busy, apps: apps.slice(0, 3), hold: now });
+    if (was !== now) this.changed();
+    if (was && !now && this.awayCount() && this.state === "sleeping" && !this.outputAway()) this.requestWake("notify");
+  }
+
   /** The app's output changed (native-session.js `output`). Headphones back, or a device again: say what waited. */
   onOutputChanged(prev, next) {
     const was = this.outputAway();
@@ -497,7 +530,7 @@ export class Voice {
       this.log.info(away ? "away.start" : "away.end", { output: next ? next.name : null, held: this.awayCount() });
       this.changed();
     }
-    if (!away && this.awayCount() && this.state === "sleeping") this.requestWake("notify");
+    if (!away && !this.onCall() && this.awayCount() && this.state === "sleeping") this.requestWake("notify");
   }
 
   // ---- native app link (docs/NATIVE.md) ---------------------------------------------------
@@ -707,8 +740,10 @@ export class Voice {
     const wakeWorthy = kind === "commentary" && typeof content === "string" && (action.wake === true || wakesWhenAsleep(source));
     // Nobody there to hear it (§6.15 "Away hold"): keep it, offer it when the
     // output comes back or at the next wake ("While you were away: …").
-    const away = wakeWorthy && !this.sideband && this.state === "sleeping" && this.outputAway();
-    if (away) this.log.info("away.hold", { source, held: this.awayCount() + 1 });
+    // On a call (opt-in, §6.15 "Call hold"): the same, said when the call ends.
+    const holdWhy = wakeWorthy && !this.sideband && this.state === "sleeping" ? this.holdReason() : null;
+    const away = !!holdWhy;
+    if (away) this.log.info(holdWhy === "call" ? "call.hold" : "away.hold", { source, held: this.awayCount() + 1 });
     if (wakeWorthy && !away && !this.sideband && (this.state === "sleeping" || this.state === "connecting")) {
       this.wakeQueue.push({ kind, content, source: source || null });
       if (this.wakeQueue.length > MAX_WAKE_QUEUE) this.wakeQueue.shift();
@@ -733,7 +768,7 @@ export class Voice {
     if (kind === "commentary" && (RESULT_SOURCES.has(source) || wakeWorthy)) {
       this.pendingResult = { text: content, at: this.clock.now() };
       this.pendingResults = this.pendingResults.filter((r) => r.text !== content);
-      this.pendingResults.push({ text: content, at: this.pendingResult.at, source: source || null, ...(away ? { away: true } : {}) });
+      this.pendingResults.push({ text: content, at: this.pendingResult.at, source: source || null, ...(away ? { away: true, held: holdWhy } : {}) });
       if (this.pendingResults.length > MAX_WAKE_QUEUE) this.pendingResults.shift();
       this.emitPage({ type: "result_pending", text: content });
       this.log.info("result.pending", { source, content: truncate(content, 200) });
@@ -915,6 +950,7 @@ export class Voice {
       problem: this.modProblem(),
       watching: this.watches.list.length,
       away: this.awayCount(),
+      away_why: this.awayCount() ? ([...this.carryResults, ...this.pendingResults].some((r) => r.away && r.held !== "call") ? "away" : "call") : null,
     };
   }
 
@@ -1208,6 +1244,7 @@ export class Voice {
       case "window": r = this.setWindow(req.window); break;
       case "cap": r = req.cap == null || req.cap === "" ? { ok: true, message: this.capMessage() } : this.setCap(req.cap, via); break;
       case "watch": r = this.watchControl(req); break;
+      case "callhold": r = req.on == null ? { ok: true, message: `sotto: call hold ${this.callHoldEnabled() ? "on" : "off"}. Change it with /talk callhold on|off.` } : this.setCallHold(req.on === true || req.on === "on"); break;
       case "earcon": r = req.on == null ? { ok: true, message: `sotto: earcon ${this.earconEnabled() ? "on" : "off"}. Change it with /talk earcon on|off.` } : this.setEarcon(req.on === true || req.on === "on"); break;
       case "app": r = this.appControl(req); break;
       case "shutdown": {
@@ -3112,7 +3149,8 @@ export class Voice {
     const held = all.filter((r) => r.away && !seen.has(r.text)).sort((a, b) => (a.at || 0) - (b.at || 0));
     if (held.length) {
       for (const r of held) seen.add(r.text);
-      items.unshift({ kind: "commentary", content: relay("away", held.map((r) => materialOf(r.text)).join(" ")), source: "away" });
+      const why = held.every((r) => r.held === "call") ? "call" : "away";
+      items.unshift({ kind: "commentary", content: relay(why, held.map((r) => materialOf(r.text)).join(" ")), source: "away" });
     }
     for (const r of all.filter((x) => !x.away).sort((a, b) => (b.at || 0) - (a.at || 0))) add({ kind: "commentary", content: r.text, source: r.source });
     const queued = this.wakeQueue.length;

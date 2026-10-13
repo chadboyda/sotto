@@ -149,6 +149,8 @@ public enum SettingsText {
     }
     public static let wakeHelp = "How readily your voice wakes a sleeping session. Nothing is sent or billed until it wakes."
     public static let earconToggle = "Chime before updates"
+    public static let callHoldToggle = "Hold updates during calls"
+    public static let callHoldHelp = "While another app uses the microphone, updates wait and are told when the call ends. Off by default; Focus and Do Not Disturb never mute the voice."
     public static let earconHelp = "A soft chime plays before the voice wakes up to tell you something you didn't ask for, like a finished deploy."
     /// Daily limit choices in minutes (0 = unlimited), as the page's select.
     public static let capChoices = [0, 60, 120, 240, 480]

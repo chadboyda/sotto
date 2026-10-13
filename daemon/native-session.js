@@ -450,6 +450,12 @@ export class NativeController {
       // Exact digital silence on the unmuted mic (SPEC §6.16 "Silent mic"): the same handling as the old app page.
       case "mic_silent": v.handlePage({ type: "mic_silent", host: "app", source: "native", input_label: msg.input_label || this.micKey() || "", ms: msg.ms }); break;
       case "activity": v.handlePage({ type: "activity" }); break;
+      case "mic_busy": {
+        // Another app has an active input stream (a call): the opt-in call hold (§6.15).
+        const apps = Array.isArray(msg.apps) ? msg.apps.filter((x) => typeof x === "string").map((x) => truncate(x, 80)).slice(0, 5) : [];
+        v.onMicBusy?.(msg.busy === true, apps);
+        break;
+      }
       case "output": {
         // Reported in every mode, listen (sleeping) included, where `route`
         // has no output: whether a speaker or headphones are there to hear a wake.
@@ -569,6 +575,11 @@ export class NativeController {
         return r.status === 200 ? { ok: true, data: r.body } : { ok: false, code: r.body?.error?.code, message: r.body?.error?.message };
       }
       case "get_voices": return { ok: true, data: v.voices() };
+      case "set_call_hold": {
+        const r = v.setCallHold(args.on === true);
+        this.onBroadcast({ type: "status", status: v.pageStatus() }); // settings changed
+        return { ok: true, data: { on: r.on, message: r.message } };
+      }
       case "set_earcon": {
         const r = v.setEarcon(args.on === true);
         this.onBroadcast({ type: "status", status: v.pageStatus() }); // settings changed
@@ -698,6 +709,8 @@ export class NativeController {
     if (v.state !== "sleeping" || !v.owner) return;
     const cfg = v.governor.pageConfig(v.config.wake_sensitivity, true);
     if (!cfg.enabled || cooldownLeft(cfg, this.clock.now()) > 0 || this.echoTest) return;
+    // On a call with the call hold on (§6.15): the call's own speech is not the user talking to the voice.
+    if (v.onCall?.()) { this.log.debug("wake.on_call", {}); return; }
     const onsetAgoMs = ((w.vad.samples - r.onsetSample) / SAMPLE_RATE) * 1000;
     w.capturing = true;
     w.rec.startCapture(r.onsetSample - Math.round((ONSET_PAD_MS / 1000) * SAMPLE_RATE));

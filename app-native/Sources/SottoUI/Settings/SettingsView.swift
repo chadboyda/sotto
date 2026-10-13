@@ -65,6 +65,11 @@ public struct SettingsView: View {
             }
 
             VStack(alignment: .leading, spacing: 6) {
+                Toggle(SettingsText.callHoldToggle, isOn: Binding(get: { model.callHold }, set: { model.setCallHold($0) }))
+                FieldHelp(SettingsText.callHoldHelp, error: model.error("call_hold"))
+            }
+
+            VStack(alignment: .leading, spacing: 6) {
                 Picker("Daily limit", selection: Binding(get: { model.capMinutes }, set: { model.setCap($0) })) {
                     ForEach(model.capChoices, id: \.self) { Text(SettingsText.capLabel($0)).tag($0) }
                 }

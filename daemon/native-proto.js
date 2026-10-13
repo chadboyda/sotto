@@ -48,12 +48,12 @@ export const SERVER_TYPES = Object.freeze([
 ]);
 /** Text message types, app -> daemon. */
 export const CLIENT_TYPES = Object.freeze([
-  "hello", "cmd", "route", "audio_stats", "pong", "played", "log", "system", "mic_error", "mic_silent", "activity", "output",
+  "hello", "cmd", "route", "audio_stats", "pong", "played", "log", "system", "mic_error", "mic_silent", "activity", "output", "mic_busy",
 ]);
 /** `cmd` names (app -> daemon); each is answered by one `result` with the same id. */
 export const COMMANDS = Object.freeze([
   "mute", "pause", "resume", "wake", "end", "set_voice", "set_persona", "set_policy", "set_wake", "set_cap", "set_window",
-  "key_save", "key_remove", "get_voices", "echo_test", "open_browser", "set_earcon",
+  "key_save", "key_remove", "get_voices", "echo_test", "open_browser", "set_earcon", "set_call_hold",
 ]);
 /** Live server events forwarded as {type:"live", event} (transcript deltas go as `caption`). */
 export const LIVE_FORWARD = Object.freeze([

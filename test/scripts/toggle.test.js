@@ -187,7 +187,7 @@ describe("toggle.sh cold start", () => {
   test("bogus argument prints usage and never contacts the daemon", async () => {
     const { D, env } = await setup();
     const out = parseOut(await run(TOGGLE, { env, input: stdinFor("bogus") }));
-    assert.equal(out.stopReason, "sotto: usage: /talk [on|off|status|restart|quiet|milestones|walkthrough|voice [name]|persona [name]|app|window [auto|app|chrome]|cap [off|<minutes>]|earcon [on|off]|key]");
+    assert.equal(out.stopReason, "sotto: usage: /talk [on|off|status|restart|quiet|milestones|walkthrough|voice [name]|persona [name]|app|window [auto|app|chrome]|cap [off|<minutes>]|earcon [on|off]|callhold [on|off]|key]");
     assert.ok(!existsSync(join(D, "daemon.pid")));
   });
 });
@@ -730,6 +730,28 @@ describe("toggle.sh /talk earcon: the chime before an unprompted update (SPEC §
     parseOut(await run(TOGGLE, { env, input: stdinFor("earcon") }));
     const bodies = controlBodies(D).slice(1);
     assert.deepEqual(bodies.map((b) => [b.action, b.on]), [["earcon", false], ["earcon", undefined]]);
+  });
+});
+
+describe("toggle.sh /talk callhold: the opt-in call hold (SPEC §6.15)", () => {
+  test("daemon down: off by default; sets prefs.json call_hold and keeps the earcon", async () => {
+    const { D, env } = await setup();
+    let out = parseOut(await run(TOGGLE, { env, input: stdinFor("callhold") }));
+    assert.equal(out.stopReason, "sotto: call hold off. Change it with /talk callhold on|off.");
+    parseOut(await run(TOGGLE, { env, input: stdinFor("earcon off") }));
+    out = parseOut(await run(TOGGLE, { env, input: stdinFor("callhold on") }));
+    assert.match(out.stopReason, /^sotto: call hold on/);
+    assert.deepEqual(JSON.parse(readFileSync(join(D, "prefs.json"), "utf8")), { earcon: false, call_hold: true });
+    out = parseOut(await run(TOGGLE, { env, input: stdinFor("callhold sometimes") }));
+    assert.match(out.stopReason, /^sotto: ERROR say \/talk callhold on/);
+  });
+
+  test("daemon up: /control gets action callhold (+ on)", async () => {
+    const { D, env } = await setup();
+    parseOut(await run(TOGGLE, { env, input: stdinFor("on") }));
+    parseOut(await run(TOGGLE, { env, input: stdinFor("callhold on") }));
+    const bodies = controlBodies(D).slice(1);
+    assert.deepEqual(bodies.map((b) => [b.action, b.on]), [["callhold", true]]);
   });
 });
 

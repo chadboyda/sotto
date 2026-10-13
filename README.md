@@ -88,6 +88,7 @@ The symlink loads the plugin in place as `sotto@skills-dir`, so edits to the rep
 | `/talk window <auto\|app\|chrome>` | Where the voice window opens, saved like the voice. `/talk window` alone shows the current choice and whether the app is installed |
 | `/talk cap <off\|minutes\|hours h>` | The daily voice limit, for example `/talk cap off` (unlimited) or `/talk cap 4h`. Applies at once and resumes a voice paused on the limit; `sotto cap` and Settings > Daily limit do the same. `/talk cap` alone shows it and today's use |
 | `/talk earcon <on\|off>` | The soft chime before an update the voice wakes up to tell you (on by default); `sotto earcon` and Settings > "Chime before updates" do the same |
+| `/talk callhold <on\|off>` | Hold updates while another app uses the microphone (a call), off by default; `sotto callhold` and Settings > "Hold updates during calls" do the same |
 | `/talk key` | Which OpenAI API key is in use (its last four characters) and where it comes from; with no key, opens the window to add one |
 
 `/sotto:talk …` is the same command with its full name.
@@ -107,6 +108,7 @@ In the voice window: one lit string runs from the microphone button (the peg; cl
 
 - **"What did I miss?"** The voice keeps the last 20 updates it told you, with times, and gives a short recap when you ask ("catch me up", "any updates?").
 - **Away.** In the desktop app, if no speaker or headphones are connected, or you took off the headphones you were listening on, updates are held instead of spoken into an empty room. When the headphones come back, or you next talk to it, it starts with "While you were away…". The terminal band shows how many are waiting.
+- **Calls (opt-in).** `/talk callhold on` (or Settings > "Hold updates during calls") holds updates while another app uses the microphone, then tells you "While you were on your call…" when it hangs up. Off by default; an app that always keeps the mic open (a webcam utility) is ignored.
 - **Watches.** Say "tell me when the deploy finishes": Claude sets a watch (the `mcp__sotto__watch` tool, or `sotto watch "<what>"`), and when it happens the voice tells you, even asleep and even under `quiet`. `/talk status` lists active watches; each clears once it fires.
 
 ### Desktop app

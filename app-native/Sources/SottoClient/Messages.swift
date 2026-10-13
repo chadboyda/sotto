@@ -135,6 +135,10 @@ public struct PageStatus: Codable, Equatable, Sendable {
     public var watches: [String]?
     /// Updates held while no speaker or headphones were there (SPEC §6.15 "Away hold").
     public var away: Double?
+    /// Hold updates while another app uses the mic (SPEC §6.15 "Call hold"; opt-in, default off).
+    public var call_hold: Bool?
+    /// The call hold is holding now (another app has the mic).
+    public var on_call: Bool?
 
     public init(state: String) { self.state = state }
 }

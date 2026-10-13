@@ -206,6 +206,14 @@ async function main() {
     // The speaker a wake would use, reported at the link (SPEC §6.15 "Away hold").
     const out = await until(() => dlog().find((e) => e.ev === "native.output"), 5_000);
     check("the app reports its output device", !!out && out.device && typeof out.device.name === "string", JSON.stringify(out?.device ?? null));
+    // The opt-in call hold (SPEC §6.15): once on, the app watches the mic for other apps.
+    d.voice.setCallHold(true);
+    act("callbusy", { action: "mic_busy", busy: true });
+    const busy = await until(() => dlog().find((e) => e.ev === "call.mic_busy" && e.busy === true), 10_000);
+    act("callfree", { action: "mic_busy", busy: false });
+    const free = await until(() => dlog().find((e) => e.ev === "call.mic_busy" && e.busy === false), 10_000);
+    check("call hold: the app reports another app on the mic, then off", !!busy && !!free, JSON.stringify(busy?.apps ?? null));
+    d.voice.setCallHold(false);
     const startedA = L0.find((e) => e.ev === "session.started");
     const liveA = d.voice.status().live?.session_id;
     check("capture full in the app", alog().some((e) => e.ev === "capture" && e.to === "full"));

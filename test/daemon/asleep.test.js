@@ -205,6 +205,53 @@ test("away: speakers only from the start (no headphones ever) is not away; the p
   assert.equal(h.log.find("wake.request").length, 1);
 });
 
+// ---- on-a-call hold (opt-in) ------------------------------------------------------------
+test("call hold: off by default, another app on the mic changes nothing", async (t) => {
+  const h = await native(t);
+  await h.sleep(h.ws);
+  h.ctl.onMessage(h.link, { type: "mic_busy", busy: true, apps: ["us.zoom.xos"] });
+  assert.equal(h.voice.onCall(), false);
+  assert.equal(h.voice.pageStatus().call_hold, false);
+  h.voice.notifyUser("The deploy finished.");
+  assert.equal(h.log.find("wake.request").length, 1);
+});
+
+test("call hold on: updates wait while another app has the mic, then 'While you were on your call'", async (t) => {
+  const h = await native(t);
+  assert.match(h.voice.control({ action: "callhold", on: true }).message, /^sotto: call hold on/);
+  assert.equal(h.voice.pageStatus().call_hold, true);
+  await h.sleep(h.ws);
+  h.ctl.onMessage(h.link, { type: "mic_busy", busy: true, apps: ["us.zoom.xos"] });
+  assert.equal(h.voice.onCall(), true);
+  assert.equal(h.voice.pageStatus().on_call, true);
+  h.voice.notifyUser("The deploy finished.");
+  h.voice.notifyUser("Tests passed.");
+  await h.clock.advance(5000);
+  assert.equal(h.log.find("wake.request").length, 0, "no wake during the call");
+  assert.equal(h.log.find("call.hold").length, 2);
+  assert.match(bandLines(h.voice.modUiState(), 120)[1], /on a call: 2 updates waiting, said when it ends/);
+  h.ctl.onMessage(h.link, { type: "mic_busy", busy: false, apps: [] });
+  assert.equal(h.log.find("wake.request").length, 1, "the call ended: say them");
+  const ws = await h.startPrimary();
+  await h.clock.advance(3000);
+  assert.deepEqual(appends(ws, "commentary").map((e) => e.content), [relay("call", "The deploy finished. Tests passed.")]);
+});
+
+test("call hold: turning it off mid-call says what waited; the call's own speech never voice-wakes", async (t) => {
+  const h = await native(t);
+  h.voice.setCallHold(true);
+  await h.sleep(h.ws);
+  h.ctl.onMessage(h.link, { type: "mic_busy", busy: true, apps: ["com.apple.FaceTime"] });
+  h.voice.notifyUser("Build failed.");
+  assert.equal(h.log.find("wake.request").length, 0);
+  // A loud wake trigger during the call does not open a session.
+  h.ctl.wake = { vad: { samples: 48000 }, rec: { startCapture() {} }, near: 0, sensitivity: "medium" };
+  h.ctl.onWakeTrigger({ onsetSample: 0, voicedMs: 600, snrDb: 30, db: -20, floorDb: -70 });
+  assert.equal(h.log.find("wake.trigger").length, 0);
+  h.voice.setCallHold(false);
+  assert.equal(h.log.find("wake.request").length, 1);
+});
+
 // ---- what did I miss? -------------------------------------------------------------------
 test("recap: requests are recognized, and are no mirror to Claude", () => {
   for (const s of ["What did I miss?", "so what did I miss", "Catch me up.", "Any updates?", "what's new", "What happened while I was away?", "give me a recap"]) {

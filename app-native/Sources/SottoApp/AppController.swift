@@ -250,8 +250,11 @@ final class AppController: NSObject, NSApplicationDelegate, PanelControllerDeleg
             IconModel.input(status: status, into: &icon)
             sentOutput = nil // a new link: the daemon has not heard the output yet
             sendRoute()
+            sentMicBusy = nil
+            updateCallWatch(status)
         case .status(let s):
             IconModel.input(status: s, into: &icon)
+            updateCallWatch(s)
             if s.state == "live", let ms = options.testMuteAfterMs, !testMuteScheduled {
                 testMuteScheduled = true
                 DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(ms)) { [weak self] in
@@ -337,6 +340,11 @@ final class AppController: NSObject, NSApplicationDelegate, PanelControllerDeleg
                 let kind = obj["kind"] as? String
                 model.devicePicker = kind == "input" || kind == "output" ? kind : nil
                 log.log("test_action", ["action": action, "kind": orNull(model.devicePicker)])
+            case "mic_busy":
+                // Another app "uses the mic" (the call hold, SPEC §6.15); test mode only.
+                testMicBusy = obj["busy"] as? Bool ?? false
+                checkMicBusy()
+                log.log("test_action", ["action": action, "busy": testMicBusy])
             case "fake_devices":
                 // Extra fake devices that come and go (the picker and its fallback); fake audio only.
                 guard let fake = audio as? FakeAudioIO else { continue }
@@ -551,6 +559,46 @@ final class AppController: NSObject, NSApplicationDelegate, PanelControllerDeleg
     }
 
     private var sentOutput: RouteMessage.Device??
+
+    // MARK: on-a-call hold (SPEC §6.15 "Call hold"; opt-in, off by default)
+    private var micBusyTimer: Timer?
+    private var sentMicBusy: Bool?
+    private var testMicBusy = false
+    /// Apps already on the mic when the watch started (a webcam utility that always holds an
+    /// input stream: measured, OBSBOT Center does): not a call. Forgotten once they let go.
+    private var micBaseline: Set<String>?
+
+    /// Watch for other apps using the mic (every 2 s) only while the user turned the call hold on.
+    private func updateCallWatch(_ s: PageStatus?) {
+        let want = s?.call_hold == true && icon.linkUp
+        if want, micBusyTimer == nil {
+            let t = Timer(timeInterval: 2, repeats: true) { [weak self] _ in MainActor.assumeIsolated { self?.checkMicBusy() } }
+            RunLoop.main.add(t, forMode: .common)
+            micBusyTimer = t
+            micBaseline = nil
+            checkMicBusy()
+        } else if !want, let t = micBusyTimer {
+            t.invalidate()
+            micBusyTimer = nil
+            sentMicBusy = nil
+            micBaseline = nil
+        }
+    }
+
+    /// `mic_busy {busy, apps}` when another app starts or stops using the microphone. Test mode
+    /// never reads the system (a test action sets it).
+    private func checkMicBusy() {
+        let all: [String] = options.testMode ? (testMicBusy ? ["com.example.call"] : []) : (MicUsers.others() ?? [])
+        let now = Set(all)
+        if micBaseline == nil { micBaseline = options.testMode ? [] : now }
+        micBaseline = micBaseline?.intersection(now)
+        let apps = all.filter { !(micBaseline?.contains($0) ?? false) }
+        let busy = !apps.isEmpty
+        if busy == sentMicBusy { return }
+        sentMicBusy = busy
+        log.log("mic_busy", ["busy": busy, "apps": apps.count])
+        link?.send(.other(type: "mic_busy", fields: ["busy": .bool(busy), "apps": .array(apps.prefix(5).map { .string($0) })]))
+    }
 
     /// The speaker a wake would play through (`output`, docs/NATIVE.md §3.2): the user's chosen
     /// output if present, else the system default; nil when there is none. Sent in every mode
