@@ -223,7 +223,7 @@ test("usage is never summed across usage.updated events", async (t) => {
   assert.equal(h.voice.status().live.usage_seconds, 35);
 });
 
-test("paused: results wait in pendingResult and seed the resumed session", async (t) => {
+test("paused: results wait in pendingResult and are spoken by the resumed session, not seeded", async (t) => {
   const h = await makeHarness();
   t.after(() => h.cleanup());
   const ws = await h.goLive();
@@ -237,12 +237,16 @@ test("paused: results wait in pendingResult and seed the resumed session", async
   assert.equal(pending.text, relay("typed", "All tests pass."));
   const r = await h.voice.createSession({ sdp: "x", reason: "resume" });
   assert.equal(r.status, 201);
-  assert.match(h.fetchCalls[1].body.session.input[0].content[0].text, /Result that arrived while voice was paused: Claude finished something the user typed[^\n]* Claude said: All tests pass/);
+  // Seeded as text the model took it for context and never said it (live log
+  // 2026-10-13): the new session speaks it once ready instead.
+  assert.doesNotMatch(h.fetchCalls[1].body.session.input[0].content[0].text, /Result that arrived/);
   assert.equal(h.voice.pendingResult, null);
   const ws2 = h.WS.last();
   ws2.open();
   ws2.receive({ type: "session.started", session: {} });
   assert.match(appends(ws2, "instructions")[0].content, /^Say "I'm back\."/);
+  await h.clock.advance(5000);
+  assert.deepEqual(appends(ws2, "commentary").map((e) => e.content), [relay("typed", "All tests pass.")]);
 });
 
 test("SessionEnd: clear/resume ignored; exit of a dead owner turns voice off", async (t) => {

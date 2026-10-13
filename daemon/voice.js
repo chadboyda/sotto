@@ -68,6 +68,8 @@ const WAKE_NOTE_MS = 12000;
 /** A notify wake the page does not act on within this long is dropped (the result stays pending). */
 const NOTIFY_WATCH_MS = 30000;
 const MAX_WAKE_QUEUE = 10;
+/** At most this many queued or pending messages are spoken when a session goes live. */
+const MAX_FLUSH = 3;
 const SESSION_REASONS = ["start", "resume", "reconnect", "wake", "notify"];
 const LIVENESS_MS = 30000;
 const MODLINK_CHECK_MS = 5000;
@@ -200,6 +202,10 @@ export class Voice {
     this.keySetup = false;
     this.keySaving = false;
     this.pendingResult = null;
+    // Every result that arrived with no session open (newest last), and those
+    // handed to the next session to speak once it is ready (flushPending).
+    this.pendingResults = [];
+    this.carryResults = [];
     this.backlog = [];
     this.usage = readUsage(this.paths);
     this.usageSeen = new Map(); // live id → last usage.seconds
@@ -550,6 +556,8 @@ export class Voice {
       // Something for the model to say (a result, a note): the model needs a
       // moment to speak it, so it counts as activity for idle sleep (§6.15).
       if (kind !== "thinking") this.lastDeliverAt = this.clock.now();
+      // A result said after a voice wake makes it no false wake (§6.15).
+      if (kind === "commentary" && (RESULT_SOURCES.has(source) || wakeWorthy)) this.governor.onResultDelivered();
       for (const part of this.fitAppend(kind, content)) {
         try { this.sideband.append(kind, part, delegationId); } catch (e) { this.log.error("append.invalid", { message: String(e.message) }); }
       }
@@ -557,6 +565,9 @@ export class Voice {
     }
     if (kind === "commentary" && (RESULT_SOURCES.has(source) || wakeWorthy)) {
       this.pendingResult = { text: content, at: this.clock.now() };
+      this.pendingResults = this.pendingResults.filter((r) => r.text !== content);
+      this.pendingResults.push({ text: content, at: this.pendingResult.at, source: source || null });
+      if (this.pendingResults.length > MAX_WAKE_QUEUE) this.pendingResults.shift();
       this.emitPage({ type: "result_pending", text: content });
       this.log.info("result.pending", { source, content: truncate(content, 200) });
     } else if (kind === "thinking") {
@@ -2242,15 +2253,15 @@ export class Voice {
     if (this.owner !== owner || this.state !== "connecting" || (gen !== null && gen !== this.nativeGen)) {
       return { ok: false, status: 409, body: { error: { code: "not_active", message: "Voice was turned off." } } };
     }
-    // Queued messages are spoken right after the session is ready (flushed as
-    // commentary), so the pending result is not seeded a second time.
-    // The voice history goes in as assistant/user messages (already spoken);
-    // a pending result the voice already said is not handed over again.
-    const pending = this.pendingResult && !this.wakeQueue.length && !this.speech.wasSpoken(this.pendingResult.text) ? this.pendingResult.text : null;
+    // Pending results are spoken right after the session is ready
+    // (flushPending, as commentary), so they are not seeded as text: seeded,
+    // the model treated one as context and never said it (live log
+    // 2026-10-13 16:44, a voice wake that false-woke back to sleep).
+    // The voice history goes in as assistant/user messages (already spoken).
     const seed = buildSeedInput({
       project: owner.project, cwd: owner.cwd, branch, reason: why, exchanges,
       voiceHistory: this.transcript.recentLines(30),
-      pendingResult: pending,
+      pendingResult: null,
       backlog: this.backlog,
       awaiting: this.awaiting ? this.awaiting.text : null,
       estTokens,
@@ -2277,7 +2288,11 @@ export class Voice {
     this.live = { id, started_at: now, expires_at: Math.floor(now / 1000) + 7200, usage_seconds: 0, muted: false, reason: why, greeted: false, voice, persona: persona?.id ?? null, personaName: persona?.name ?? null, wakeHandled: false };
     this.governor.onWake(why === "wake" ? "voice" : why === "notify" ? "notify" : why);
     if (id) this.usageSeen.set(id, 0);
-    // pendingResult and backlog were seeded into the new session.
+    // The backlog was seeded into the new session; pending results are spoken
+    // by it once it is ready (flushPending). A session replaced before it got
+    // ready (a voice or persona switch) hands them on to the next one.
+    for (const r of this.pendingResults) if (!this.carryResults.some((c) => c.text === r.text)) this.carryResults.push(r);
+    this.pendingResults = [];
     this.pendingResult = null;
     this.backlog = [];
     if (this.lastError && /^openai_|page_timeout|mic_/.test(this.lastError.code)) this.lastError = null;
@@ -2557,7 +2572,7 @@ export class Voice {
       }
     }
     this.speech.resume();
-    this.flushWakeQueue();
+    this.flushPending();
     this.interval("idle", () => this.idleTick(), IDLE_TICK_MS);
     this.scheduleExpiry();
     this.changed();
@@ -2719,7 +2734,8 @@ export class Voice {
    * delegation, a request the daemon sent itself, a mirror turn), Claude is
    * mid-turn in the owner session at all (a typed turn too: its reply is on
    * the way), a handoff check is pending, or the voice told the user it is
-   * waiting with them while Claude is busy. Bounded by VOICE_WAIT_MAX_MS; the
+   * waiting with them while Claude is busy, or background work a voice or
+   * typed turn launched has not reported back. Bounded by VOICE_WAIT_MAX_MS; the
    * reply still wakes a sleeping voice (§6.15).
    */
   voiceIsWaiting() {
@@ -2734,6 +2750,11 @@ export class Voice {
     // the turn is blocked on an approval: nothing comes until the user acts at
     // the terminal, and the approval reminders wake the voice (§6.10.4).
     if (this.delegation.busyWithin(bound) && !this.approvals?.current()) return true;
+    // Background work a voice or typed turn launched is still running (no
+    // task-notification yet): its report is on the way, and the voice has
+    // usually just said so ("Claude'll bring you the rest"). Live log
+    // 2026-10-13 16:39: the voice slept with four agents still working.
+    if (this.delegation.backgroundWorkPending(bound)) return true;
     return !!(this.voiceWaitingAt && this.clock.now() - this.voiceWaitingAt <= bound && this.delegation.claudeBusy);
   }
 
@@ -2815,15 +2836,40 @@ export class Voice {
     this.log.info("wake.session", f);
   }
 
-  /** Speak what was queued while no session was open. */
-  flushWakeQueue() {
-    if (!this.wakeQueue.length || !this.sideband) return;
-    const q = this.wakeQueue;
+  /**
+   * Speak what was queued or left pending while no session was open, on every
+   * transition to live (start, resume, voice or notify wake, reconnect):
+   * deduped, newest first, at most MAX_FLUSH. Live log 2026-10-13 16:44: a
+   * voice wake went live with a background result pending, never said it,
+   * and false-woke back to sleep. A result said in this session also makes it
+   * no false wake (WakeGovernor.onResultDelivered): the user gets to hear it
+   * and answer.
+   */
+  flushPending() {
+    if (!this.sideband) return;
+    const items = [];
+    const seen = new Set();
+    const add = (m) => {
+      if (!m || typeof m.content !== "string" || seen.has(m.content)) return;
+      seen.add(m.content);
+      items.push(m);
+    };
+    // Newest first: the wake queue holds what woke us (questions, approvals, results).
+    for (const m of [...this.wakeQueue].reverse()) add(m);
+    for (const r of [...this.carryResults, ...this.pendingResults].sort((a, b) => (b.at || 0) - (a.at || 0))) {
+      if (!this.speech.wasSpoken(r.text)) add({ kind: "commentary", content: r.text, source: r.source });
+    }
+    const queued = this.wakeQueue.length;
     this.wakeQueue = [];
+    this.carryResults = [];
+    this.pendingResults = [];
     this.pendingResult = null;
-    this.log.info("wake.flush", { count: q.length });
+    if (!items.length) return;
+    const out = items.slice(0, MAX_FLUSH);
+    this.log.info("wake.flush", { count: out.length, queued, dropped: items.length - out.length });
+    if (out.some((m) => m.kind === "commentary")) this.governor.onResultDelivered();
     // Delegation ids of earlier sessions are unknown to this one: always null.
-    for (const m of q) this.deliver({ kind: m.kind, content: m.content, delegationId: null, source: m.source || undefined });
+    for (const m of out) this.deliver({ kind: m.kind, content: m.content, delegationId: null, source: m.source || undefined });
   }
 
   /**
@@ -3050,6 +3096,8 @@ export class Voice {
     this.muteWanted = false;
     this.mirror.dispose();
     this.wakeQueue = [];
+    this.carryResults = [];
+    this.pendingResults = [];
     this.governor.onEnd();
     this.clear("notifyWatch");
     this.modlink.release(reason === "shutdown" ? "shutdown" : "off");
@@ -3176,6 +3224,7 @@ export class Voice {
       last_user_speech_at: this.transcript.lastUserSpeechAt,
       last_assistant_speech_at: this.transcript.lastAssistantSpeechAt,
       pending_result: this.pendingResult,
+      pending_results: [...this.carryResults, ...this.pendingResults],
       backlog: [...this.backlog],
       counters: { ...this.counters },
       last_error: this.lastError,
@@ -3213,6 +3262,7 @@ export class Voice {
     this.transcript.lastUserSpeechAt = Number(snap.last_user_speech_at) || 0;
     this.transcript.lastAssistantSpeechAt = Number(snap.last_assistant_speech_at) || 0;
     this.pendingResult = snap.pending_result && typeof snap.pending_result.text === "string" ? snap.pending_result : null;
+    this.pendingResults = Array.isArray(snap.pending_results) ? snap.pending_results.filter((r) => r && typeof r.text === "string").slice(-MAX_WAKE_QUEUE) : this.pendingResult ? [{ ...this.pendingResult, source: null }] : [];
     this.backlog = Array.isArray(snap.backlog) ? snap.backlog.filter((b) => typeof b === "string").slice(-50) : [];
     if (snap.counters && typeof snap.counters === "object") {
       for (const k of Object.keys(this.counters)) if (Number.isFinite(snap.counters[k])) this.counters[k] = snap.counters[k];

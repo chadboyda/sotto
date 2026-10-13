@@ -355,20 +355,136 @@ test("a notify wake the page ignores times out and keeps the result pending", as
   assert.equal(h.voice.pendingResult.text, "Claude has a question for you.");
 });
 
-test("typed results while sleeping wake (§6.20 F); background work results do not", async (t) => {
+test("typed results while sleeping wake (§6.20 F); a routine completion does not", async (t) => {
   const h = await harness(t);
   const ws = await h.goLive({ config: { idle_seconds: 20 } });
   await sleepNow(h, ws, 20_000);
-  h.voice.deliver({ kind: "commentary", content: "Claude Code finished the build.", source: "background_result" });
+  h.voice.deliver({ kind: "commentary", content: "The build agent finished.", source: "completion" });
   await h.clock.advance(3000);
   assert.ok(!h.commands().includes("connect:notify"));
   assert.equal(h.voice.status().wake.queued, 0);
-  assert.equal(h.voice.pendingResult.text, "Claude Code finished the build.");
   h.voice.deliver({ kind: "commentary", content: "Claude Code finished: done.", source: "typed_result" });
   await h.clock.advance(3000); // released by the speech queue (§6.10.2)
   assert.ok(h.commands().includes("connect:notify"), h.commands().join(","));
   assert.equal(h.voice.status().wake.queued, 1);
   assert.equal(h.voice.pendingResult.text, "Claude Code finished: done.");
+});
+
+// ---- live log 2026-10-13: a continuation turn while asleep, a voice wake that dropped it ----
+const TASK_NOTE = (id) => `<task-notification>\n<task-id>t_${id}</task-id>\n<tool-use-id>${id}</tool-use-id>\n<status>completed</status>\n<summary>done</summary>\n</task-notification>`;
+
+test("a continuation turn (task report, no user prompt) wakes a sleeping voice under milestones and is spoken", async (t) => {
+  const h = await harness(t);
+  let ws = await h.goLive({ config: { idle_seconds: 20 } });
+  // The deploy watcher was launched before this voice session (as in the
+  // live log): its report arrives as a task turn while the voice sleeps.
+  await sleepNow(h, ws, 20_000);
+  h.voice.handleHook("UserPromptSubmit", { prompt: TASK_NOTE("toolu_D"), prompt_id: "p2" }, OWNER);
+  h.voice.handleHook("Stop", { prompt_id: "p2", last_assistant_message: "The deploy finished: 13 of 13 services are up." }, OWNER);
+  await h.clock.advance(3000);
+  assert.ok(h.commands().includes("connect:notify"), h.commands().join(","));
+  assert.equal(h.voice.status().wake.queued, 1);
+  ws = await h.goLive({ reason: "notify" });
+  await h.clock.advance(3000);
+  assert.match(appends(ws, "commentary").at(-1).content, /Background work the user started finished[\s\S]*13 of 13 services are up/);
+});
+
+test("a main-thread turn with no prompt seen wakes (continuation); a subagent's or a quiet one does not", async (t) => {
+  const h = await harness(t);
+  const ws = await h.goLive({ config: { idle_seconds: 20 } });
+  await sleepNow(h, ws, 20_000);
+  h.voice.handleHook("Stop", { prompt_id: "p_sub", agent_id: "a_helper", last_assistant_message: "Helper is done." }, OWNER);
+  await h.clock.advance(3000);
+  assert.ok(!h.commands().includes("connect:notify"), "a subagent's turn never wakes");
+  h.voice.handleHook("Stop", { prompt_id: "p_cont", last_assistant_message: "All four research agents reported. The plan is ready." }, OWNER);
+  await h.clock.advance(3000);
+  assert.ok(h.commands().includes("connect:notify"), h.commands().join(","));
+  assert.match(h.voice.pendingResult.text, /Claude finished some work[\s\S]*All four research agents reported\./);
+});
+
+test("quiet: a continuation turn while asleep never wakes", async (t) => {
+  const h = await harness(t);
+  const ws = await h.goLive({ config: { idle_seconds: 20, speaking_policy: "quiet" } });
+  await sleepNow(h, ws, 20_000);
+  h.voice.handleHook("Stop", { prompt_id: "p_cont", last_assistant_message: "The plan is ready." }, OWNER);
+  h.voice.handleHook("UserPromptSubmit", { prompt: TASK_NOTE("toolu_x"), prompt_id: "p2" }, OWNER);
+  h.voice.handleHook("Stop", { prompt_id: "p2", last_assistant_message: "The tests passed." }, OWNER);
+  await h.clock.advance(3000);
+  assert.ok(!h.commands().includes("connect:notify"), h.commands().join(","));
+  assert.equal(h.voice.status().wake.queued, 0);
+});
+
+test("a voice wake speaks the pending result first, and that keeps it from false-waking back to sleep", async (t) => {
+  const h = await harness(t, { transcript: "" });
+  let ws = await h.goLive({ config: { idle_seconds: 20 } });
+  await sleepNow(h, ws, 20_000);
+  // The notify wake is ignored (as in the live log: no session came), so the
+  // result is left pending when the user wakes the voice themselves.
+  h.voice.notifyUser("The deploy finished: 13 of 13 services are up.");
+  await h.clock.advance(30_000);
+  assert.equal(h.log.find("wake.request_timeout").length, 1);
+  assert.equal(h.voice.pendingResult.text, "The deploy finished: 13 of 13 services are up.");
+  ws = await h.goLive({ reason: "wake" });
+  const seed = h.fetchCalls.at(-1).body.session.input[0].content[0].text;
+  assert.doesNotMatch(seed, /Result that arrived/, "spoken, not seeded");
+  h.voice.handlePage({ type: "wake_audio", session_id: h.voice.live.id, audio: wavB64() });
+  await h.clock.advance(3000);
+  assert.deepEqual(appends(ws, "commentary").map((e) => e.content), ["The deploy finished: 13 of 13 services are up."]);
+  assert.equal(h.voice.pendingResult, null);
+  assert.equal(h.log.find("wake.flush").at(-1).count, 1);
+  // Empty clip, nobody talking: without the result this false-woke at 15 s.
+  await h.clock.advance(MIN_AWAKE_MS);
+  assert.equal(ws.sentOfType("session.close").length, 0, "no false wake with a result spoken");
+  await h.clock.advance(10_000); // a normal idle period after the result
+  assert.equal(ws.sentOfType("session.close").length, 1);
+  assert.equal(h.log.find("idle.close").at(-1).detail, "idle");
+  assert.equal(h.voice.status().wake.false_wakes, 0);
+});
+
+test("several results pending: deduped, newest first, at most three, on any transition to live", async (t) => {
+  const h = await harness(t);
+  let ws = await h.goLive({ config: { idle_seconds: 20 } });
+  await sleepNow(h, ws, 20_000);
+  for (const [i, text] of ["First.", "Second.", "First.", "Third.", "Fourth."].entries()) {
+    h.voice.deliver({ kind: "commentary", content: text, source: "typed_result" });
+    await h.clock.advance(1000 + i);
+  }
+  await h.clock.advance(30_000); // the notify wake times out
+  assert.deepEqual(h.voice.pendingResults.map((r) => r.text), ["Second.", "First.", "Third.", "Fourth."]);
+  ws = await h.goLive({ reason: "resume" });
+  await h.clock.advance(15_000);
+  assert.deepEqual(appends(ws, "commentary").map((e) => e.content), ["Fourth.", "Third.", "First."]);
+  assert.deepEqual(h.voice.pendingResults, []);
+});
+
+test("background work a voice or typed turn launched holds the voice awake until it reports, bounded", async (t) => {
+  const h = await harness(t);
+  const ws = await h.goLive({ config: { idle_seconds: 20 } });
+  h.voice.handleHook("UserPromptSubmit", { prompt: "plan the feature with a workflow", prompt_id: "p1" }, OWNER);
+  h.voice.handleHook("PreToolUse", { prompt_id: "p1", tool_name: "Workflow", tool_use_id: "toolu_W", tool_input: { description: "plan completion nudges" } }, OWNER);
+  h.voice.handleHook("Stop", { prompt_id: "p1", last_assistant_message: "The planning workflow is running." }, OWNER);
+  await h.clock.advance(5 * 60_000);
+  assert.equal(ws.sentOfType("session.close").length, 0, "the workflow is still running: stay awake");
+  assert.equal(h.voice.delegation.backgroundWorkPending(), true);
+  h.voice.handleHook("UserPromptSubmit", { prompt: TASK_NOTE("toolu_W"), prompt_id: "p2" }, OWNER);
+  assert.equal(h.voice.delegation.backgroundWorkPending(), false, "its task-notification ends the hold");
+  h.voice.handleHook("Stop", { prompt_id: "p2", last_assistant_message: "The plan is ready: three emails." }, OWNER);
+  await h.clock.advance(3000);
+  assert.match(appends(ws, "commentary").at(-1).content, /The plan is ready: three emails\./);
+  await h.clock.advance(25_000);
+  assert.equal(ws.sentOfType("session.close").length, 1, "then it sleeps normally");
+});
+
+test("the background-work hold ends after VOICE_WAIT_MAX_MS even with no report", async (t) => {
+  const h = await harness(t);
+  const ws = await h.goLive({ config: { idle_seconds: 20 } });
+  h.voice.handleHook("UserPromptSubmit", { prompt: "research it in the background", prompt_id: "p1" }, OWNER);
+  h.voice.handleHook("PreToolUse", { prompt_id: "p1", tool_name: "Agent", tool_use_id: "toolu_A", tool_input: { description: "research", prompt: "x" } }, OWNER);
+  h.voice.handleHook("Stop", { prompt_id: "p1", last_assistant_message: "Started a research agent." }, OWNER);
+  await h.clock.advance(9 * 60_000);
+  assert.equal(ws.sentOfType("session.close").length, 0);
+  await h.clock.advance(2 * 60_000);
+  assert.equal(ws.sentOfType("session.close").length, 1, "bounded at about 10 minutes");
 });
 
 test("notifyUser while live speaks at once", async (t) => {

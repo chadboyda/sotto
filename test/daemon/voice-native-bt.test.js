@@ -40,7 +40,15 @@ async function setup(t) {
     return link;
   };
   h.startPrimary = async (id = `live_prim_${h.WS.instances.length}`) => {
+    // The session create awaits real I/O (git branch, transcript, vocabulary
+    // scan) before it opens the socket: under a parallel npm test that can
+    // outlast one fake-clock tick, so wait for a socket not opened yet.
+    const end = Date.now() + 10_000;
     await h.clock.advance(0);
+    while (!(h.WS.last() && h.WS.last().readyState === 0) && Date.now() < end) {
+      await new Promise((r) => setTimeout(r, 5));
+      await h.clock.advance(0);
+    }
     const ws = h.WS.last();
     ws.open();
     ws.receive({ type: "session.started", session: { id, expires_at: Math.floor(h.clock.now() / 1000) + 7200 } });

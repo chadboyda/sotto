@@ -48,9 +48,15 @@ export const WAKE_SENSITIVITIES = Object.freeze(["off", "low", "medium", "high"]
  * mid-turn sat silent in pendingResult). It only wakes when the speaking
  * policy routes it as commentary (milestones, walkthrough); under "quiet" it
  * is a thinking note and sendAppend() never wakes for those.
+ * `background_result` too: a task turn (Claude reporting background work this
+ * session started) only comes from the owner's main thread (delegation.js
+ * onStop), and is news like a typed reply (live log 2026-10-13 16:43: it sat
+ * in pendingResult while the voice slept). Quiet routes it as thinking, so it
+ * never wakes there. A continuation `other_result` wakes by its action's
+ * `wake` flag (policy.js), so a subagent's turn never does.
  * Routine completions only wait as pendingResult.
  */
-export const WAKE_SOURCES = Object.freeze(new Set(["voice_result", "mirror_result", "typed_result", "background_voice", "voice_notice", "permission", "approval_reminder", "question", "attention", "notify"]));
+export const WAKE_SOURCES = Object.freeze(new Set(["voice_result", "mirror_result", "typed_result", "background_result", "background_voice", "voice_notice", "permission", "approval_reminder", "question", "attention", "notify"]));
 
 /**
  * Should the live session go to sleep now?
@@ -103,13 +109,14 @@ export class WakeGovernor {
 
   /** A session was created. kind: "voice" | "notify" | "manual". */
   onWake(kind) {
-    this.current = { kind, at: this.clock.now(), heard: false };
+    this.current = { kind, at: this.clock.now(), heard: false, result: false };
     if (kind === "voice") this.stats.wakes_voice++;
     else if (kind === "notify") this.stats.wakes_notify++;
   }
 
   get wokeBy() { return this.current ? this.current.kind : null; }
-  get heardUser() { return !!this.current?.heard; }
+  /** Words heard, or a pending result spoken (onResultDelivered): either way, no false wake. */
+  get heardUser() { return !!(this.current?.heard || this.current?.result); }
 
   /** User words arrived in the current session. */
   onHeardUser() {
@@ -120,6 +127,16 @@ export class WakeGovernor {
       this.boostDb = Math.max(0, this.boostDb - BOOST_STEP_DB / 2);
       this.notBefore = 0;
     }
+  }
+
+  /**
+   * A result waiting for the user was spoken in the current session: it is
+   * not a false wake (the user is given an idle period to hear and answer),
+   * but no proof the wake detector was right either, so the boost and
+   * cooldown stay as they are.
+   */
+  onResultDelivered() {
+    if (this.current) this.current.result = true;
   }
 
   /** The session went to sleep (idle close). reason: "idle" | "false_wake". */

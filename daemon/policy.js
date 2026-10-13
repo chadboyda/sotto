@@ -92,9 +92,15 @@ export function route(source, policy, payload = {}, ctx = {}) {
       return [act("commentary", null, relay("typed", said || "Done.")), ...R.map((r) => act("thinking", null, r))];
     }
     case "other_result": {
-      // A turn nobody asked for as far as we know (no UserPromptSubmit seen, or
-      // a system-originated prompt): context only, except in walkthrough.
+      // A turn no prompt we saw started. A continuation of the owner's main
+      // thread (payload.continuation: Claude carrying on after background
+      // work) is announced like a typed reply under milestones and
+      // walkthrough, and wakes a sleeping voice; anything else is context
+      // only, except in walkthrough.
       const { sum, S, R } = resultParts(payload.text);
+      if (payload.continuation && p !== "quiet" && sum) {
+        return [{ ...act("commentary", null, relay("other", clip(firstSentences(sum, 1), SHORT_SUMMARY_CHARS))), wake: true }, ...R.map((r) => act("thinking", null, r))];
+      }
       if (p !== "walkthrough" || !sum) return [act("thinking", null, BG + S)];
       return [act("commentary", null, relay("other", clip(firstSentences(sum, 1), SHORT_SUMMARY_CHARS))), ...R.map((r) => act("thinking", null, r))];
     }
