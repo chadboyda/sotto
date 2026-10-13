@@ -102,6 +102,9 @@ case "$ARG" in
   # /talk earcon [on|off]: the soft chime before an update the voice wakes up to tell (prefs.json).
   earcon|chime)                 ACTION=earcon
                                 EARCON_ARG="$(printf '%s' "$ARG2" | tr '[:upper:]' '[:lower:]')" ;;
+  # /talk callhold [on|off]: hold updates while another app uses the mic (a call; opt-in, prefs.json).
+  callhold|call-hold|call_hold) ACTION=callhold
+                                EARCON_ARG="$(printf '%s' "$ARG2" | tr '[:upper:]' '[:lower:]')" ;;
   # /talk key shows where the API key comes from. Anything typed after it
   # (or a bare /talk sk-...) is never read: it opens the setup window instead.
   key|keys|apikey|api-key|api_key)
@@ -113,7 +116,7 @@ esac
 shopt -u nocasematch
 
 if [[ "$ACTION" == usage ]]; then
-  finish "sotto: usage: /talk [on|off|status|restart|quiet|milestones|walkthrough|voice [name]|persona [name]|app|window [auto|app|chrome]|cap [off|<minutes>]|earcon [on|off]|key]"
+  finish "sotto: usage: /talk [on|off|status|restart|quiet|milestones|walkthrough|voice [name]|persona [name]|app|window [auto|app|chrome]|cap [off|<minutes>]|earcon [on|off]|callhold [on|off]|key]"
 fi
 
 # --- config (SPEC §4.1/§4.2); unset, empty or invalid -> default ---------------
@@ -207,6 +210,11 @@ pref_earcon() { # prints true/false when prefs.json sets earcon, else nothing
   [[ -r "$PREFS" ]] && p="$(<"$PREFS")"
   if [[ "$p" =~ $re ]]; then printf '%s' "${BASH_REMATCH[1]}"; fi
 }
+pref_call_hold() { # prints true/false when prefs.json sets call_hold, else nothing
+  local p="" re='"call_hold"[[:space:]]*:[[:space:]]*(true|false)'
+  [[ -r "$PREFS" ]] && p="$(<"$PREFS")"
+  if [[ "$p" =~ $re ]]; then printf '%s' "${BASH_REMATCH[1]}"; fi
+}
 pref_cap() { # prints the daily limit (minutes, 0 = unlimited) from prefs.json, or nothing
   local p="" re='"daily_cap_minutes"[[:space:]]*:[[:space:]]*([0-9]+)'
   [[ -r "$PREFS" ]] && p="$(<"$PREFS")"
@@ -220,7 +228,8 @@ pref_window() { # prints the valid window mode from prefs.json, or nothing
 # write_prefs VOICE WINDOW [PERSONA [PERSONA_VOICE]]: rewrite prefs.json (any may be empty).
 # Without a PERSONA argument the saved persona is kept; persona_voice is kept
 # unless PERSONA_VOICE (true/false) is given; the daily limit is kept unless
-# CAP_NEW is set; the earcon is kept unless EARCON_NEW (true/false) is set.
+# CAP_NEW is set; the earcon and the call hold are kept unless EARCON_NEW /
+# CALL_HOLD_NEW (true/false) is set.
 write_prefs() {
   local body="" persona pv
   if (( $# >= 3 )); then persona=$3; else persona="$(pref_persona)"; fi
@@ -233,6 +242,8 @@ write_prefs() {
   [[ -n "$cap" ]] && body="${body:+$body,}\"daily_cap_minutes\":$cap"
   local ec="${EARCON_NEW:-$(pref_earcon)}"
   [[ -n "$ec" ]] && body="${body:+$body,}\"earcon\":$ec"
+  local ch="${CALL_HOLD_NEW:-$(pref_call_hold)}"
+  [[ -n "$ch" ]] && body="${body:+$body,}\"call_hold\":$ch"
   printf '{%s}\n' "$body" > "$PREFS.tmp" && chmod 600 "$PREFS.tmp" && mv -f "$PREFS.tmp" "$PREFS"
 }
 
@@ -394,6 +405,18 @@ earcon_local() {
     *) finish "sotto: ERROR say /talk earcon on or /talk earcon off." ;;
   esac
 }
+callhold_local() {
+  local cur
+  cur="$(pref_call_hold)"; [[ "$cur" == true ]] && cur=on || cur=off
+  case "$EARCON_ARG" in
+    "") finish "sotto: call hold $cur. Change it with /talk callhold on|off." ;;
+    on|yes|true) CALL_HOLD_NEW=true write_prefs "$(pref_voice)" "$(pref_window)" || fail prefs_write "sotto: ERROR could not save the call hold to $PREFS."
+                 finish "sotto: call hold on: while another app uses the microphone (a call), the voice holds its updates and says them when the call ends." ;;
+    off|no|false) CALL_HOLD_NEW=false write_prefs "$(pref_voice)" "$(pref_window)" || fail prefs_write "sotto: ERROR could not save the call hold to $PREFS."
+                  finish "sotto: call hold off: updates are spoken even while another app uses the microphone." ;;
+    *) finish "sotto: ERROR say /talk callhold on or /talk callhold off." ;;
+  esac
+}
 voice_local() {
   local cur own pv=""
   cur="$(effective_voice)"
@@ -500,6 +523,7 @@ if [[ -n "$H" ]]; then
     [[ "$ACTION" == window ]] && window_local
     [[ "$ACTION" == cap ]] && cap_local
     [[ "$ACTION" == earcon ]] && earcon_local
+    [[ "$ACTION" == callhold ]] && callhold_local
     if [[ "$ACTION" == on || "$ACTION" == toggle || "$ACTION" == app ]]; then
       # Replace it with ours: ask it to shut down, wait for the port, then spawn.
       OKEY=""; [[ -r "$KEYFILE" ]] && OKEY="$(<"$KEYFILE")"
@@ -546,6 +570,7 @@ daemon_down() {
     window)     window_local ;;
     cap)        cap_local ;;
     earcon)     earcon_local ;;
+    callhold)   callhold_local ;;
   esac
   # on/toggle/app/key continue: key needs a daemon to serve the setup window.
 }
@@ -688,8 +713,8 @@ if [[ ( "$ACTION" == voice && -n "$VOICE_ARG" ) || ( "$ACTION" == persona && -n 
   CTL_MAX_S=8
 fi
 [[ "$ACTION" == window && -n "$WINDOW_ARG" ]] && BODY+=",\"window\":\"$WINDOW_ARG\""
-if [[ "$ACTION" == earcon && -n "$EARCON_ARG" ]]; then
-  case "$EARCON_ARG" in on|yes|true) BODY+=",\"on\":true" ;; off|no|false) BODY+=",\"on\":false" ;; *) finish "sotto: ERROR say /talk earcon on or /talk earcon off." ;; esac
+if [[ ( "$ACTION" == earcon || "$ACTION" == callhold ) && -n "$EARCON_ARG" ]]; then
+  case "$EARCON_ARG" in on|yes|true) BODY+=",\"on\":true" ;; off|no|false) BODY+=",\"on\":false" ;; *) finish "sotto: ERROR say /talk $ACTION on or /talk $ACTION off." ;; esac
 fi
 if [[ "$ACTION" == cap && -n "$CAP_ARG" ]]; then
   [[ "$CAP_ARG" =~ ^[a-z0-9]{1,12}$ ]] || finish "sotto: ERROR the daily limit is off (unlimited), or minutes from 1 to 1440 (e.g. \`sotto cap 240\` or \`sotto cap 4h\`)."

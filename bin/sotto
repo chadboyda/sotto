@@ -14,6 +14,7 @@
 #   sotto cap              the daily voice limit and today's use
 #   sotto cap off|<min>|<h>h  set it (off = unlimited; applies at once)
 #   sotto earcon [on|off]  the soft chime before an update the voice wakes up to tell
+#   sotto callhold [on|off]  hold updates while another app uses the mic (a call); off by default
 #   sotto watch "<what>"   tell the user when it happens (SPEC §6.15 "Watches"):
 #                          spoken even while the voice sleeps or is set to quiet
 #   sotto watch            list the watches
@@ -41,7 +42,7 @@ done
 ROOT="$(cd "${SELF%/*}/.." && pwd)"
 
 usage() {
-  printf 'usage: sotto voice [name] | sotto persona [name] | sotto status | sotto restart | sotto window [auto|app|chrome] | sotto app | sotto cap [off|<minutes>|<hours>h] | sotto earcon [on|off] | sotto watch ["<what>" | done <id> [text] | clear [<id>|all]] | sotto debug capture on|off|status\n' >&2
+  printf 'usage: sotto voice [name] | sotto persona [name] | sotto status | sotto restart | sotto window [auto|app|chrome] | sotto app | sotto cap [off|<minutes>|<hours>h] | sotto earcon [on|off] | sotto callhold [on|off] | sotto watch ["<what>" | done <id> [text] | clear [<id>|all]] | sotto debug capture on|off|status\n' >&2
   exit 2
 }
 
@@ -54,6 +55,7 @@ case "$1" in
   app)          ARGS="app" ;;
   cap|limit)    ARGS="cap${2:+ $2}" ;;
   earcon|chime) ARGS="earcon${2:+ $2}" ;;
+  callhold|call-hold) ARGS="callhold${2:+ $2}" ;;
   watch|watches) ARGS="watch" ;;
   debug)        [[ "$2" == capture && "$3" =~ ^(on|off|status)$ ]] || usage; ARGS="debug" ;;
   -h|--help|help|"") usage ;;

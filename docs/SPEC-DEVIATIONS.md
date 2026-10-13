@@ -667,3 +667,8 @@ The user: "I want to be able to just listen to Claude in the background sometime
 5. **Earcon, recap, away hold, watches** are new (§6.15). Focus / Do Not Disturb is deliberately not read or honored (the user is "almost always in DnD but I still want voice"); holding while the mic is in use by a call is not implemented (it would be opt-in, off by default).
 6. **Watch matching** is keyword plus an "it ended" word; Claude's explicit `op done` is the reliable path, and the voice context tells Claude to use it.
 
+## The opt-in call hold (feat/call-hold, 0.6.7)
+1. **Detection is Core Audio's per-process input state**, not Focus, the camera, or a list of call apps: any other process running an input stream counts. That makes it opt-in, off by default.
+2. **Apps already on the mic when the watch starts are a baseline, not a call** (measured on the maintainer's Mac: OBSBOT Center holds an input stream permanently). They count again once they let go and come back. A call already running when voice starts is therefore not held until it reconnects; the user can still pause voice.
+3. **No voice wake during a held call:** the call's own speech would trigger the wake detector.
+

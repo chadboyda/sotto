@@ -169,6 +169,7 @@ Usage and timers are derived by the app: the header's Session / Today / Cost rea
 | `hello` | §1 | handshake |
 | `route` | `mode, input:{id,name,bluetooth}, output:{id,name,bluetooth,headphones}, echo_cancellation`, optional `reason` (the plan's reason plus `default_changed`/`device_removed`/`choice_changed`, `vpio_failed`) | log `native.route`; kept for `/status`; the daemon re-settles its mic analysis (SPEC §6.19) |
 | `output` | `device: {name, bluetooth, headphones}` or `null` | the speaker a wake would play through (the chosen output if present, else the system default; none = null), sent at every link (welcome) and whenever it changes, in every mode: listen's `route` has no output. Log `native.output`; the daemon holds updates nobody could hear (SPEC §6.15 "Away hold"). Added in 0.6.6 |
+| `mic_busy` | `busy` (bool), `apps` (bundle ids, ≤ 5) | another process started or stopped running an input stream (Core Audio process objects, polled every 2 s only while PageStatus `call_hold` is on; apps already on the mic when the watch starts are ignored until they let go; test mode: test action `mic_busy {busy}`). `voice.onMicBusy`: the opt-in call hold (SPEC §6.15). Added in 0.6.7 |
 | `audio_stats` | §2.5 | stats/log |
 | `pong` | `t` | RTT |
 | `played` | `what` (`sample`\|`echo_test`), `voice` | same as page `played` → `onPagePlayed` (the echo filter learns the sample's words) |
@@ -199,6 +200,7 @@ Each is answered by `result` with the same `id` within 10 s (the app times out a
 | `echo_test` | — | run the echo measurement (§4.5): the daemon sends `command {command:"play_echo_sample"}`, measures the mic against it, and answers | `{verdict, leak_db, corr, level}` |
 | `open_browser` | — | open the Chrome page as a manual fallback (window.js `open()` with want `chrome`). The daemon drops the app as audio client first | `{mode}` |
 | `set_earcon` | `on` (bool) | `voice.setEarcon(on)`: the chime before an unprompted update (prefs.json `earcon`; SPEC §6.15 "Earcon"); a `status` broadcast follows | `{on, message}` (added in 0.6.6) |
+| `set_call_hold` | `on` (bool) | `voice.setCallHold(on)` (prefs.json `call_hold`, default off; SPEC §6.15 "Call hold"); a `status` broadcast follows | `{on, message}` (added in 0.6.7) |
 
 These are handled **in the app**, with no daemon command: mic/speaker list and choice (CoreAudio), echo cancellation Automatic/Always/Never (UserDefaults), "Open logs" (opens `<data_dir>/logs/daemon.log` via NSWorkspace), hotkeys, panel geometry, stay-in-menu-bar.
 **Voice preview** uses the existing HTTP route: `GET /api/voice-preview?voice=<v>` with `X-Sotto-Page` (WAV). The app plays it through its output unit (so VPIO has the reference) and then sends `played {what:"sample", voice}`.
@@ -551,3 +553,8 @@ Screenshots, light and dark, panel 420 x 640, large 640 x 900 and the 320 x 96 s
 - Client message `output` (§3.2) and command `set_earcon` (§3.3). `AudioIO.onDevicesChanged` fires on every device-list or default change (the route is rebuilt only when the plan changes, and in listen mode the output is not part of the plan), so the app re-sends `output`.
 - The earcon reaches the app mixed into the session's speaker frames as they stream, ahead of the model's first words in a `notify` session: no new message, no extra frames (no jitter-buffer overrun), and the test-mode WAV carries it.
 - PageStatus gains `earcon` (bool), `watches` (descriptions) and `away` (held updates). Settings has the "Chime before updates" toggle under Voice wake.
+
+## 0.6.7: the opt-in call hold (SPEC §6.15)
+- `MicUsers.others()` (SottoAudio): other processes with an active input stream, from `kAudioHardwarePropertyProcessObjectList`; this process excluded by pid. A plain property query: no TCC prompt.
+- The app polls it every 2 s while PageStatus `call_hold` is on and sends `mic_busy` on a change. PageStatus gains `call_hold` and `on_call`; Settings has "Hold updates during calls" (off by default).
+

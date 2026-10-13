@@ -250,7 +250,8 @@ export function bandRows(s, cols) {
   while (extras.length && width([name, { text: ` · ${phase}` }, ...extras]) > w) extras.pop();
   const head = [name, { text: ` · ${fit(phase, w - 8)}`, ...(p ? { warn: true } : {}) }, ...extras];
   // Updates held while no speaker or headphones were there (§6.15 "Away hold").
-  const away = s.away > 0 ? `while you were away: ${s.away} update${s.away === 1 ? "" : "s"} waiting, said at the next wake` : "";
+  const n = s.away > 0 ? `${s.away} update${s.away === 1 ? "" : "s"}` : "";
+  const away = !n ? "" : s.away_why === "call" ? `on a call: ${n} waiting, said when it ends` : `while you were away: ${n} waiting, said at the next wake`;
   const body = p ? p.text : away || (s.said ? `"${s.said}"` : s.activity || "");
   return body ? [head, [{ text: fit(body, w), ...(p ? { warn: true } : { dim: true }) }]] : [head];
 }

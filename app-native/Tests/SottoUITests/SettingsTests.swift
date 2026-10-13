@@ -228,6 +228,19 @@ final class SettingsModelTests: XCTestCase {
         XCTAssertEqual(decoded?.away, 2)
     }
 
+    func testCallHoldToggleIsOptInAndSendsSetCallHold() async {
+        let (m, rec) = make()
+        XCTAssertFalse(m.callHold, "off by default (SPEC §6.15 Call hold)")
+        m.setCallHold(true)
+        XCTAssertTrue(m.callHold)
+        await settle()
+        XCTAssertEqual(rec.calls.map(\.0), ["set_call_hold"])
+        XCTAssertEqual(rec.calls[0].1["on"], .bool(true))
+        let decoded = try? JSONDecoder().decode(PageStatus.self, from: Data(#"{"state":"sleeping","call_hold":true,"on_call":true}"#.utf8))
+        XCTAssertEqual(decoded?.call_hold, true)
+        XCTAssertEqual(decoded?.on_call, true)
+    }
+
     func testVoiceSwitchShowsDaemonMessageAndErrors() async {
         let (m, rec) = make()
         m.settings = NativeSettings(voices: .init(voices: ["marin", "cedar"], current: "marin"))
