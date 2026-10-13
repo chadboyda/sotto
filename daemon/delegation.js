@@ -208,6 +208,22 @@ export class DelegationEngine {
     return this.pendingMirrorTurns(maxAgeMs) > 0;
   }
 
+  /**
+   * Background work (Agent, Workflow, background Bash) that a voice or typed
+   * turn of the owner session launched and that has not reported back yet
+   * (no task-notification), launched at most maxAgeMs ago. Live log
+   * 2026-10-13 16:38: the voice answered "it's running, Claude'll bring you
+   * the rest", idle-slept two minutes later with four agents still working,
+   * and the follow-up then had nothing awake to speak it.
+   */
+  backgroundWorkPending(maxAgeMs = VOICE_WAIT_MAX_MS) {
+    const now = this.clock.now();
+    for (const l of this.launches.values()) {
+      if (!l.done && (l.origin === "voice" || l.origin === "typed") && now - l.at <= maxAgeMs) return true;
+    }
+    return false;
+  }
+
   /** Mirror turns Claude started and has not ended, younger than maxAgeMs. */
   pendingMirrorTurns(maxAgeMs = VOICE_WAIT_MAX_MS) {
     const now = this.clock.now();
@@ -469,6 +485,7 @@ export class DelegationEngine {
       // is routed by who launched the work (onStop).
       const t = this.turnFor(pid, "task");
       t.tasks.push(...notes);
+      for (const n of notes) { const l = n.toolUseId && this.launches.get(n.toolUseId); if (l) l.done = true; }
       const said = notes.map((n) => clip(n.summary || `task ${n.status || "finished"}`, 160)).join("; ");
       this.fx.append("thinking", `${BG}Background task update: ${said}`, null);
       return;
@@ -581,7 +598,7 @@ export class DelegationEngine {
     // A launch from a task turn inherits the origin of the work that turn reports.
     const inherited = t && t.origin === "task" ? this.taskOrigin(t) : null;
     const origin = rec ? "voice" : inherited ? inherited.origin : t ? t.origin : "unknown";
-    this.launches.set(body.tool_use_id, { origin, requestText: rec ? rec.text : inherited ? inherited.requestText : "" });
+    this.launches.set(body.tool_use_id, { origin, requestText: rec ? rec.text : inherited ? inherited.requestText : "", at: this.clock.now(), done: false });
     while (this.launches.size > MAX_LAUNCHES) this.launches.delete(this.launches.keys().next().value);
   }
 
@@ -625,11 +642,21 @@ export class DelegationEngine {
       const t = this.turns.get(pid || "_");
       let source = "typed_result";
       const payload = { text };
-      if (pid && !t) source = "other_result";
-      else if (t && t.origin === "mirror") source = "mirror_result";
+      // A main-thread turn of the owner session that no prompt of the user
+      // started (a continuation: Claude reporting background agents, a task
+      // notification, a Monitor event) is news the user is waiting for, like
+      // a typed reply: it wakes a sleeping voice unless the policy is quiet
+      // (live log 2026-10-13 16:43: a task turn's result sat in
+      // pendingResult while the voice slept). A subagent's Stop is never one.
+      if (pid && !t) {
+        source = "other_result";
+        if (!isSubagent(body)) payload.continuation = true;
+      } else if (t && t.origin === "mirror") source = "mirror_result";
       else if (t && t.origin === "task") {
+        // Unknown origin (launched before voice was on, or a launch we never
+        // saw): still work this session started, reported by its main thread.
         const o = this.taskOrigin(t);
-        source = o.origin === "voice" ? "background_voice" : o.origin === "typed" ? "background_result" : "other_result";
+        source = o.origin === "voice" ? "background_voice" : "background_result";
         payload.requestText = o.requestText;
       }
       if (pid) this.turns.delete(pid);

@@ -88,11 +88,13 @@ test("clipWantsDelegation: questions and requests yes; fillers, mic checks, voic
   for (const s of ["Hello?", "hello", "okay", "slow down", "testing one two", "", "Hmm?"]) assert.equal(clipWantsDelegation(s), false, s);
 });
 
-test("mirror_result and typed_result wake a sleeping voice (D, F); background work does not", () => {
+test("mirror_result, typed_result and background work reports wake a sleeping voice (D, F); other turns do not by source", () => {
   assert.ok(WAKE_SOURCES.has("mirror_result"));
   assert.ok(WAKE_SOURCES.has("voice_result"));
   assert.ok(WAKE_SOURCES.has("typed_result"));
-  assert.ok(!WAKE_SOURCES.has("background_result"));
+  assert.ok(WAKE_SOURCES.has("background_result"));
+  // A continuation other_result wakes by its action's flag, so a subagent's never does.
+  assert.ok(!WAKE_SOURCES.has("other_result"));
 });
 
 // ---- A: a spoken handoff with no delegation --------------------------------------------

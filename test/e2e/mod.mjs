@@ -16,7 +16,8 @@
 //            the ordered uplink (UserPromptSubmit, PreToolUse with tool_name
 //            Bash from the adapter, Stop, turn start/complete). Both runs: a
 //            typed turn holds a sleeping-capable voice awake and its reply
-//            queues a notify wake (§6.20 F).
+//            queues a notify wake (§6.20 F); a background launch holds it and
+//            the continuation turn on its task-notification wakes it (§6.20 G).
 //   classic  SOTTO_INTEGRATION=classic keeps the mod inert: no hello, the same
 //            message goes through the courier and the shell hooks, as in v0.4.9.
 // Needs the CLI >= 2.1.287 on PATH and a signed-in Claude Code. Costs a few
@@ -188,6 +189,22 @@ async function run(mode) {
     if (!await waitFor(() => log.find("wake.queue").slice(wakesBefore).some((w) => w.source === "typed_result") && voice.wakeQueue.some((q) => q.source === "typed_result" && q.content.includes(W7)), 15000, "the typed reply to wake the voice")) return;
     if (!log.find("wake.request").length) return fail("no wake request for the typed reply");
     console.log(`[${mode}] typed turn held the voice; its reply (${W7}) queued a notify wake, connect:notify sent`);
+    voice.clear("notifyWatch");
+    voice.wakeQueue = [];
+
+    // 8. A continuation (live log 2026-10-13): background work a typed turn
+    // launched holds the voice while it runs; the turn Claude takes on its
+    // task-notification (no user prompt) wakes a sleeping voice to report it.
+    const W8 = `FOXTROT${tag()}`;
+    const before8 = results().length;
+    const wakes8 = log.find("wake.queue").length;
+    say(`Run this Bash command in the background (run_in_background: true): sleep 6; echo ${W8}. Reply with just the word STARTED and do not wait for it. When it finishes, reply with just the word it printed.`);
+    if (!await waitFor(() => results().length > before8, 90000, "the background launch turn")) return;
+    if (!voice.delegation.backgroundWorkPending()) return fail("a running background launch does not hold the voice");
+    voice.setState("sleeping");
+    if (!await waitFor(() => log.find("wake.queue").slice(wakes8).some((w) => w.source === "background_result"), 120000, "the continuation turn to wake the voice")) return;
+    if (voice.delegation.backgroundWorkPending()) return fail("the reported launch still holds the voice");
+    console.log(`[${mode}] background launch held the voice; the continuation turn (${results().slice(before8 + 1).at(-1)?.slice(0, 40)}) queued a notify wake`);
     voice.sse.clients.delete(page);
     voice.clear("notifyWatch");
     voice.wakeQueue = [];

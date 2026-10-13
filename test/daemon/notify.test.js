@@ -139,6 +139,16 @@ test("route: background turns and turns nobody asked for", () => {
   assert.deepEqual(route("other_result", "quiet", { text }).map((a) => a.kind), ["thinking"]);
   assert.deepEqual(route("other_result", "milestones", { text }).map((a) => a.kind), ["thinking"], "thinking-only when the user did not ask");
   assert.equal(route("other_result", "walkthrough", { text })[0].content, relay("other", "The agent found 3 files."));
+  // A continuation of the owner's main thread (no user prompt started it):
+  // announced like a typed reply and flagged to wake; never under quiet.
+  assert.deepEqual(route("other_result", "quiet", { text, continuation: true }).map((a) => a.kind), ["thinking"]);
+  for (const p of ["milestones", "walkthrough"]) {
+    const c = route("other_result", p, { text, continuation: true });
+    assert.equal(c[0].kind, "commentary", p);
+    assert.equal(c[0].wake, true, p);
+    assert.equal(c[0].content, relay("other", "The agent found 3 files."), p);
+  }
+  assert.equal(route("other_result", "walkthrough", { text })[0].wake, undefined, "not a continuation: no wake flag");
 });
 
 test("route: typed_result under milestones is one short sentence", () => {
@@ -428,7 +438,7 @@ test("background task turn: a voice-launched agent's completion is spoken as an 
   assert.match(c[0].content, /^Background work for the user's earlier request "Ask Claude to count the files in the background" finished\. [\s\S]*\nClaude said: The helper counted 3 files\./);
 });
 
-test("background task turn: typed launch spoken briefly under milestones; unknown launch is context only", async (t) => {
+test("background task turn: typed launch and unknown launch both spoken briefly under milestones", async (t) => {
   const { h, ws, hook } = await live(t);
   hook("UserPromptSubmit", { prompt: "run the tests in the background", prompt_id: "p1" });
   hook("PreToolUse", { prompt_id: "p1", tool_name: "Bash", tool_use_id: "toolu_B", tool_input: { command: "npm test", run_in_background: true } });
@@ -443,7 +453,9 @@ test("background task turn: typed launch spoken briefly under milestones; unknow
   hook("UserPromptSubmit", { prompt: "<task-notification>\n<task-id>c</task-id>\n<tool-use-id>toolu_unknown</tool-use-id>\n<status>completed</status>\n<summary>x</summary>\n</task-notification>", prompt_id: "p3" });
   hook("Stop", { prompt_id: "p3", last_assistant_message: "Something finished." });
   await h.clock.advance(3000);
-  assert.equal(appends(ws, "commentary").length, n, "work we did not see launched: thinking only");
+  // Work we did not see launched (before voice was on) is still this
+  // session's main thread reporting: a continuation, spoken like typed work.
+  assert.deepEqual(appends(ws, "commentary").slice(n).map((e) => e.content), [relay("bgwork", "Something finished.")]);
 });
 
 test("Notification idle_prompt and Elicitation reach the voice through handleHook", async (t) => {
