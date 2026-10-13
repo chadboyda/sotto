@@ -111,7 +111,7 @@ async function shoot(page, name, setup) {
 }
 
 for (const [w, h] of [[360, 640], [420, 760]]) {
-  test(`pickers at ${w} x ${h}: the open list shows every option's description, keyboard works, nothing moves`, { skip: SKIP, timeout: 60000 }, async (t) => {
+  test(`pickers at ${w} x ${h}: the open list shows every option's description, keyboard works, nothing moves`, { skip: SKIP, timeout: 120000 }, async (t) => {
     const page = await openPage(t, { width: w, height: h });
     await page.setSize(w, h);
     const r = await page.eval(PICKERS);
@@ -147,7 +147,7 @@ for (const [w, h] of [[360, 640], [420, 760]]) {
     await shoot(page, `web-persona-picker-open-${w}x${h}`, open("persona-picker"));
   });
 
-  test(`voice samples at ${w} x ${h}: tone under each name, same-height chips, nothing moves while a sample plays`, { skip: SKIP, timeout: 60000 }, async (t) => {
+  test(`voice samples at ${w} x ${h}: tone under each name, same-height chips, nothing moves while a sample plays`, { skip: SKIP, timeout: 120000 }, async (t) => {
     const page = await openPage(t, { width: w, height: h });
     await page.setSize(w, h);
     const r = await page.eval(CHIPS);

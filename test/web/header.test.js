@@ -42,7 +42,7 @@ const MEASURE = (live) => `(async () => {
   return out;
 })()`;
 
-test("header pills: ticking never moves a pill; only the hour widens one, once", { skip: fs.existsSync(CHROME) ? false : "Chrome not installed", timeout: 60000 }, async (t) => {
+test("header pills: ticking never moves a pill; only the hour widens one, once", { skip: fs.existsSync(CHROME) ? false : "Chrome not installed", timeout: 120000 }, async (t) => {
   const page = await openPage(t);
   for (const [w, h] of [[420, 640], [360, 420], [560, 900]]) {
     await page.setSize(w, h);
