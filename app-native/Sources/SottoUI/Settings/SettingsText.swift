@@ -148,6 +148,8 @@ public enum SettingsText {
         switch s { case "off": return "Off"; case "low": return "Low"; case "medium": return "Medium"; case "high": return "High"; default: return s.capitalized }
     }
     public static let wakeHelp = "How readily your voice wakes a sleeping session. Nothing is sent or billed until it wakes."
+    public static let earconToggle = "Chime before updates"
+    public static let earconHelp = "A soft chime plays before the voice wakes up to tell you something you didn't ask for, like a finished deploy."
     /// Daily limit choices in minutes (0 = unlimited), as the page's select.
     public static let capChoices = [0, 60, 120, 240, 480]
     public static func capLabel(_ m: Int) -> String {

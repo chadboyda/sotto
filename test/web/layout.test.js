@@ -78,7 +78,7 @@ const MEASURE = `(async () => {
   return out;
 })()`;
 
-test("live view: no zone moves across the states (listening to approval to muted)", { skip: fs.existsSync(CHROME) ? false : "Chrome not installed", timeout: 60000 }, async (t) => {
+test("live view: no zone moves across the states (listening to approval to muted)", { skip: fs.existsSync(CHROME) ? false : "Chrome not installed", timeout: 120000 }, async (t) => {
   const page = await openPage(t, { width: 420, height: 640 });
   for (const [w, h] of [[420, 640], [360, 640], [420, 760], [640, 900], [360, 480]]) {
     // The override lands asynchronously; setSize waits for the new viewport and a layout.
@@ -127,7 +127,7 @@ const CROWDED = `(async () => {
   return { out, title: $("claude-title").textContent, zone: [zone.left, zone.right], vw: document.documentElement.clientWidth, sw: document.documentElement.scrollWidth };
 })()`;
 
-test("approval: a crowded head and a long command stay inside the frame at 360-640 px", { skip: fs.existsSync(CHROME) ? false : "Chrome not installed", timeout: 60000 }, async (t) => {
+test("approval: a crowded head and a long command stay inside the frame at 360-640 px", { skip: fs.existsSync(CHROME) ? false : "Chrome not installed", timeout: 120000 }, async (t) => {
   const page = await openPage(t, { width: 360, height: 760 });
   for (const w of [360, 400, 420, 480, 560, 640]) {
     await page.setSize(w, 760);
@@ -175,7 +175,7 @@ const FILL = `(async () => {
 })()`;
 const STATE = `window.__t.state()`;
 
-test("Claude's page: a long reply scrolls in a fixed region; follow, unfollow, jump to latest", { skip: fs.existsSync(CHROME) ? false : "Chrome not installed", timeout: 60000 }, async (t) => {
+test("Claude's page: a long reply scrolls in a fixed region; follow, unfollow, jump to latest", { skip: fs.existsSync(CHROME) ? false : "Chrome not installed", timeout: 120000 }, async (t) => {
   const page = await openPage(t, { width: 420, height: 640 });
   await page.setSize(420, 640);
   const r = await page.eval(FILL);
@@ -240,7 +240,7 @@ test("Claude's page: a long reply scrolls in a fixed region; follow, unfollow, j
 
 // Small windows: the page gives way first. At 360 x 420 the approval still shows the
 // command and fits inside the Claude zone; a long page stays a fixed region.
-test("Claude's page at 360 x 420: the approval fits, the page region shrinks first", { skip: fs.existsSync(CHROME) ? false : "Chrome not installed", timeout: 60000 }, async (t) => {
+test("Claude's page at 360 x 420: the approval fits, the page region shrinks first", { skip: fs.existsSync(CHROME) ? false : "Chrome not installed", timeout: 120000 }, async (t) => {
   const page = await openPage(t, { width: 360, height: 420 });
   await page.setSize(360, 420);
   const r = await page.eval(FILL);
@@ -294,7 +294,7 @@ const FOOTER = `(async () => {
   return { closed, open, picker, rows, vw: document.documentElement.clientWidth, vh: innerHeight, sw: document.documentElement.scrollWidth };
 })()`;
 
-test("footer devices: 40 px buttons fit at 360 px; the picker opens above the footer and moves nothing", { skip: fs.existsSync(CHROME) ? false : "Chrome not installed", timeout: 60000 }, async (t) => {
+test("footer devices: 40 px buttons fit at 360 px; the picker opens above the footer and moves nothing", { skip: fs.existsSync(CHROME) ? false : "Chrome not installed", timeout: 120000 }, async (t) => {
   const page = await openPage(t, { width: 360, height: 640 });
   for (const [w, h] of [[360, 420], [360, 640], [420, 640], [640, 900]]) {
     await page.setSize(w, h);

@@ -64,7 +64,9 @@ test("sleepDecision: idle, min awake, speaking grace, busy, disabled, false wake
   assert.equal(sleepDecision(fw), "false_wake");
   assert.equal(sleepDecision({ ...fw, now: MIN_AWAKE_MS - 1 }), null);
   assert.equal(sleepDecision({ ...fw, heardUser: true }), null, "words heard: a normal idle period");
-  assert.equal(sleepDecision({ ...fw, wokeBy: "notify" }), null, "notify wakes are never false");
+  assert.equal(sleepDecision({ ...fw, wokeBy: "notify" }), "notify_done", "a notify wake nobody answers sleeps once said, never as false");
+  assert.equal(sleepDecision({ ...fw, wokeBy: "notify", lastAssistantAt: MIN_AWAKE_MS - 2000 }), null, "it just spoke: time to answer");
+  assert.equal(sleepDecision({ ...fw, wokeBy: "notify", heardWords: true }), null, "the user answered: a normal idle period");
   assert.equal(sleepDecision({ ...fw, busy: true }), null);
   // An empty clip is not proof: while the local mic still hears speech the
   // session stays; it is false only after FALSE_WAKE_QUIET_MS of local quiet.
@@ -355,18 +357,21 @@ test("a notify wake the page ignores times out and keeps the result pending", as
   assert.equal(h.voice.pendingResult.text, "Claude has a question for you.");
 });
 
-test("typed results while sleeping wake (§6.20 F); a routine completion does not", async (t) => {
+test("updates while sleeping wake (asleep never means silent): batched into one wake; routine progress does not", async (t) => {
   const h = await harness(t);
   const ws = await h.goLive({ config: { idle_seconds: 20 } });
   await sleepNow(h, ws, 20_000);
-  h.voice.deliver({ kind: "commentary", content: "The build agent finished.", source: "completion" });
-  await h.clock.advance(3000);
-  assert.ok(!h.commands().includes("connect:notify"));
+  h.voice.deliver({ kind: "commentary", content: "Claude's still working on the tests.", source: "progress_text" });
+  await h.clock.advance(5000);
+  assert.ok(!h.commands().includes("connect:notify"), "routine progress stays asleep");
   assert.equal(h.voice.status().wake.queued, 0);
+  h.voice.deliver({ kind: "commentary", content: "The build agent finished.", source: "completion" });
+  await h.clock.advance(1000);
+  assert.ok(!h.commands().includes("connect:notify"), "waits for more updates");
   h.voice.deliver({ kind: "commentary", content: "Claude Code finished: done.", source: "typed_result" });
-  await h.clock.advance(3000); // released by the speech queue (§6.10.2)
-  assert.ok(h.commands().includes("connect:notify"), h.commands().join(","));
-  assert.equal(h.voice.status().wake.queued, 1);
+  await h.clock.advance(4000); // the speech queue (§6.10.2), then the batch window
+  assert.equal(h.commands().filter((c) => c === "connect:notify").length, 1, h.commands().join(","));
+  assert.equal(h.voice.status().wake.queued, 2);
   assert.equal(h.voice.pendingResult.text, "Claude Code finished: done.");
 });
 
@@ -485,6 +490,50 @@ test("the background-work hold ends after VOICE_WAIT_MAX_MS even with no report"
   assert.equal(ws.sentOfType("session.close").length, 0);
   await h.clock.advance(2 * 60_000);
   assert.equal(ws.sentOfType("session.close").length, 1, "bounded at about 10 minutes");
+});
+
+// Asleep never means silent (§6.15): no update the policy would say while
+// live may end in pendingResult without a wake. Every route() source, under
+// every policy, with a payload that makes it speak where it can.
+const SAMPLE = {
+  voice_result: { text: "The tests pass." }, stale_result: { text: "Old.", requestText: "x" },
+  typed_result: { text: "Deployed. All 13 services are up." }, other_result: { text: "The plan is ready.", continuation: true },
+  mirror_result: { text: "Got it, switching to the new name." }, background_voice: { text: "It found 3 files.", requestText: "count" },
+  background_result: { text: "The deploy finished." }, progress_text: { text: "Reading the config." },
+  question: { text: "Which branch should I use?" }, attention: { text: "Slack needs your input." }, notice: { text: "Voice time is almost used up." },
+  context: { text: "x" }, completion: { items: [{ what: "the deploy", detail: "13 of 13 up", level: "milestones" }] },
+  idle: { speak: true, variant: 0 }, tool_failure: { label: "run tests", variant: 0 },
+  agents_done: { items: [{ label: "fixing the wake", result: "It works." }], speak: true, variant: 0 },
+  tool_milestone: { labels: ["Reading files"] }, permission: { label: "run a shell command", variant: 0 },
+  approval_reminder: { items: [{ label: "run a shell command", agent: null }], variant: 0 }, policy_change: { policy: "quiet" },
+  watch: { text: "The deploy finished: all 13 services are up.", watch: "the deploy finishes" },
+};
+test("invariant: every announceable source wakes a sleeping voice; nothing it would say is left only pending", async (t) => {
+  const { route, ROUTE_SOURCES } = await import("../../daemon/policy.js");
+  const { ASLEEP_SILENT_SOURCES } = await import("../../daemon/wake.js");
+  assert.deepEqual([...ROUTE_SOURCES].sort(), Object.keys(SAMPLE).sort(), "a new route() source needs a SAMPLE (and a decision here)");
+  const cases = [];
+  for (const policy of ["quiet", "milestones", "walkthrough"]) {
+    for (const source of ROUTE_SOURCES) {
+      for (const a of route(source, policy, SAMPLE[source], { canSpeakProgress: true, canSpeakLongProgress: true, canSpeakFailure: true })) {
+        if (a.kind === "commentary") cases.push({ policy, source, a });
+      }
+    }
+  }
+  // Sources that never pass through route().
+  for (const source of ["voice_notice", "notify", "owner_switch", "watch", undefined]) cases.push({ policy: "milestones", source, a: { kind: "commentary", content: `Update from ${source}.`, delegationId: null } });
+  assert.ok(cases.length > 30, `${cases.length} cases`);
+  for (const { policy, source, a } of cases) {
+    const h = await harness(t);
+    const ws = await h.goLive({ config: { idle_seconds: 20, speaking_policy: policy } });
+    await sleepNow(h, ws, 20_000);
+    h.voice.deliver({ ...a, source });
+    await h.clock.advance(10_000);
+    const woke = h.commands().includes("connect:notify");
+    if (ASLEEP_SILENT_SOURCES.has(source)) assert.ok(!woke, `${policy}/${source}: routine chatter stays asleep`);
+    else assert.ok(woke && h.log.find("wake.queue").length >= 1, `${policy}/${source}: an announceable update was left pending without a wake`);
+    await h.cleanup();
+  }
 });
 
 test("notifyUser while live speaks at once", async (t) => {

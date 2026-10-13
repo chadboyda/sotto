@@ -32,6 +32,7 @@
 import {
   FORWARDED, adaptPreToolUse, baseOf, forwardBody, markerFor, parseActive, ownsSession, Seen, Uplink, Delivery, appendText,
   optionEnv, isTalkCommand, transcriptPathFor, expansionInput, toggleText, contextOf, bandRows,
+  WATCH_TOOL_DESCRIPTION, WATCH_TOOL_SCHEMA, watchBody,
 } from "./modcore.mjs";
 
 const MOD_VERSION = "2";
@@ -325,6 +326,7 @@ async function registerTools($) {
     await $.tool.register({ name: "voice", description: "Sotto (the user's spoken voice assistant): switch the voice it speaks with, or list the voices. Use it only when the user's own words clearly ask for a different voice; a yes to a voice the voice assistant offered counts.", inputSchema: name });
     await $.tool.register({ name: "persona", description: "Sotto (the user's spoken voice assistant): switch its persona (its personality), or list the personas with a line each. Use it only when the user clearly asks for a different persona or personality.", inputSchema: name });
     await $.tool.register({ name: "status", description: "Sotto (the user's spoken voice assistant): its state, voice, persona and today's usage, in one line.", inputSchema: { type: "object", properties: {} } });
+    await $.tool.register({ name: "watch", description: WATCH_TOOL_DESCRIPTION, inputSchema: WATCH_TOOL_SCHEMA });
   } catch { toolsUp = false; }
 }
 
@@ -332,11 +334,17 @@ async function registerTools($) {
 async function answerTool($, e) {
   const action = String(e.tool).slice(TOOL_PREFIX.length);
   if (!link) return { result: "sotto: voice is off in this session. The user turns it on with /talk." };
+  if (action === "watch") return controlCall($, watchBody(e, link.socket));
   const arg = typeof e.name === "string" ? e.name.trim().toLowerCase() : "";
   if (arg && !/^[a-z0-9_-]{1,40}$/.test(arg)) return { result: `sotto: unknown ${action}.` };
   const body = { action, via: "cli", session: { socket: link.socket } };
   if (action === "voice") { body.voice = arg; body.confirm = !!arg; }
   if (action === "persona") { body.persona = arg; body.confirm = !!arg; }
+  return controlCall($, body);
+}
+
+/** POST /control with the daemon key; the answer's message as the tool result. */
+async function controlCall($, body) {
   try {
     const r = await $.http.fetch(`${link.base}/control`, { method: "POST", headers: headers(true), body: JSON.stringify(body) });
     const j = JSON.parse(r.text);

@@ -187,7 +187,8 @@ async function run(mode) {
     if (!voice.delegation.claudeBusy || !voice.voiceIsWaiting()) return fail(`a typed turn does not hold the voice (busy ${voice.delegation.claudeBusy})`);
     if (!await waitFor(() => results().slice(before7).some((t) => t.includes(W7)), 90000, `the typed reply (${W7})`)) return;
     if (!await waitFor(() => log.find("wake.queue").slice(wakesBefore).some((w) => w.source === "typed_result") && voice.wakeQueue.some((q) => q.source === "typed_result" && q.content.includes(W7)), 15000, "the typed reply to wake the voice")) return;
-    if (!log.find("wake.request").length) return fail("no wake request for the typed reply");
+    // Updates other than direct answers wait NOTIFY_BATCH_MS for company before the wake.
+    if (!await waitFor(() => log.find("wake.request").length > 0, 10000, "a wake request for the typed reply")) return;
     console.log(`[${mode}] typed turn held the voice; its reply (${W7}) queued a notify wake, connect:notify sent`);
     voice.clear("notifyWatch");
     voice.wakeQueue = [];
@@ -205,6 +206,31 @@ async function run(mode) {
     if (!await waitFor(() => log.find("wake.queue").slice(wakes8).some((w) => w.source === "background_result"), 120000, "the continuation turn to wake the voice")) return;
     if (voice.delegation.backgroundWorkPending()) return fail("the reported launch still holds the voice");
     console.log(`[${mode}] background launch held the voice; the continuation turn (${results().slice(before8 + 1).at(-1)?.slice(0, 40)}) queued a notify wake`);
+    voice.clear("notifyWatch");
+    voice.wakeQueue = [];
+
+    // 9. Watches (SPEC §6.15): "tell me when the build finishes" → Claude sets
+    // a watch (mcp__sotto__watch with the mod, `sotto watch` in Bash without),
+    // then reports it done; the watch fires, wakes the sleeping voice and clears.
+    voice.setState(stateBefore);
+    const before9 = results().length;
+    say(mode === "mod"
+      ? "I want Sotto to tell me out loud when the build finishes. Register that with the mcp__sotto__watch tool (load it with ToolSearch if needed), op add, description: the build finishes. Then reply with just the word WATCHING."
+      // The repo's own CLI by path: another sotto install's bin may come first on PATH.
+      : `I want Sotto to tell me out loud when the build finishes. Register that by running this Bash command: ${REPO}/bin/sotto watch the build finishes. Then reply with just the word WATCHING.`);
+    if (!await waitFor(() => results().length > before9, 120000, "the watch turn")) return;
+    const w9 = voice.watches.active();
+    if (w9.length !== 1 || !/build/i.test(w9[0].description)) return fail(`no watch registered: ${JSON.stringify(w9)} ${results().at(-1)}`);
+    voice.setState("sleeping");
+    const wakes9 = log.find("wake.queue").length;
+    const before9b = results().length;
+    say(mode === "mod"
+      ? `The build has finished and passed. Mark the watch done with the mcp__sotto__watch tool (op done, id ${w9[0].id}, text: the build passed). Then reply with just the word NOTED.`
+      : `The build has finished and passed. Run this Bash command: ${REPO}/bin/sotto watch done ${w9[0].id} the build passed. Then reply with just the word NOTED.`);
+    if (!await waitFor(() => results().length > before9b, 120000, "the watch done turn")) return;
+    if (!await waitFor(() => log.find("watch.fire").length >= 1 && log.find("wake.queue").slice(wakes9).some((w) => w.source === "watch"), 15000, "the watch to fire and wake the voice")) return;
+    if (voice.watches.active().length) return fail("the fired watch was not cleared");
+    console.log(`[${mode}] watch "${w9[0].description}" registered, fired (${log.find("watch.fire").at(-1).via}) and woke the voice`);
     voice.sse.clients.delete(page);
     voice.clear("notifyWatch");
     voice.wakeQueue = [];

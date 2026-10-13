@@ -129,6 +129,12 @@ public struct PageStatus: Codable, Equatable, Sendable {
     public var last_error: LastError?
     public var key: Key?
     public var audio_client: String?
+    /// The soft chime before an update the voice wakes up to tell (SPEC §6.15 "Earcon"); default on.
+    public var earcon: Bool?
+    /// What the voice will tell the user when it happens (SPEC §6.15 "Watches").
+    public var watches: [String]?
+    /// Updates held while no speaker or headphones were there (SPEC §6.15 "Away hold").
+    public var away: Double?
 
     public init(state: String) { self.state = state }
 }

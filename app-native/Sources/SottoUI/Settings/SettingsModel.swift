@@ -169,6 +169,11 @@ public final class SettingsModel {
         pending["wake"] ?? (status?.wake?.enabled == false ? "off" : status?.wake?.sensitivity) ?? "medium"
     }
     public var window: String { pending["window"] ?? settings?.window ?? "auto" }
+    /// The earcon before an unprompted update (SPEC §6.15): the in-flight choice, else the daemon's (default on).
+    public var earcon: Bool {
+        if let p = pending["earcon"] { return p == "on" }
+        return status?.earcon ?? true
+    }
     /// The daily limit in minutes (0 = unlimited): the in-flight choice, else the daemon's.
     public var capMinutes: Int { pending["cap"].flatMap { Int($0) } ?? status?.today?.cap_minutes.map { Int($0) } ?? 120 }
     /// The picker's choices, plus the current limit when it was set elsewhere (`sotto cap 90`).
@@ -191,6 +196,7 @@ public final class SettingsModel {
 
     public func setPolicy(_ p: String) { run("policy", value: p, command: "set_policy", args: ["policy": .string(p)]) }
     public func setWake(_ s: String) { run("wake", value: s, command: "set_wake", args: ["sensitivity": .string(s)]) }
+    public func setEarcon(_ on: Bool) { run("earcon", value: on ? "on" : "off", command: "set_earcon", args: ["on": .bool(on)]) }
     public func setCap(_ m: Int) { run("cap", value: String(m), command: "set_cap", args: ["minutes": .number(Double(m))]) }
     public func setAppearance(_ a: String) {
         let v = ViewText.normalizeTheme(a)

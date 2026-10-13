@@ -38,6 +38,8 @@ const quoteReq = (t, max) => clip(String(t || ""), max).replace(/"/g, "'");
  *   typed       a turn the user started by typing
  *   bgwork      background work started in a typed turn
  *   other       a turn nobody asked for out loud
+ *   watch       something the user asked to be told about happened ({requestText}: the watch)
+ *   away        updates held while no output device was there (§6.15 "Away hold")
  *   progress    Claude's own words mid-turn
  */
 export function relay(kind, material, { requestText = "" } = {}) {
@@ -55,6 +57,10 @@ export function relay(kind, material, { requestText = "" } = {}) {
       return `Background work the user started finished. ${ONE_LINE}\n${RELAY_MARK}${m}`;
     case "other":
       return `Claude finished some work. ${ONE_LINE}\n${RELAY_MARK}${m}`;
+    case "watch":
+      return `The user asked to be told when this happens: "${quoteReq(requestText, 120)}". It just did. ${RELAY_RULES}\n${RELAY_MARK}${m}`;
+    case "away":
+      return `While the user was away (no headphones or speaker connected), this came in. Start with "While you were away", then ${RELAY_RULES.charAt(0).toLowerCase()}${RELAY_RULES.slice(1)}\n${RELAY_MARK}${m}`;
     case "progress":
       return `Claude's still working. If you mention it, one short sentence in your own words, no paths or formatting.\n${RELAY_MARK}${m}`;
     case "answer":

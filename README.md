@@ -87,6 +87,7 @@ The symlink loads the plugin in place as `sotto@skills-dir`, so edits to the rep
 | `/talk app` | Use the Sotto desktop app: install it now if it is missing (or retry a failed install), open the voice in it, and remember the choice |
 | `/talk window <auto\|app\|chrome>` | Where the voice window opens, saved like the voice. `/talk window` alone shows the current choice and whether the app is installed |
 | `/talk cap <off\|minutes\|hours h>` | The daily voice limit, for example `/talk cap off` (unlimited) or `/talk cap 4h`. Applies at once and resumes a voice paused on the limit; `sotto cap` and Settings > Daily limit do the same. `/talk cap` alone shows it and today's use |
+| `/talk earcon <on\|off>` | The soft chime before an update the voice wakes up to tell you (on by default); `sotto earcon` and Settings > "Chime before updates" do the same |
 | `/talk key` | Which OpenAI API key is in use (its last four characters) and where it comes from; with no key, opens the window to add one |
 
 `/sotto:talk …` is the same command with its full name.
@@ -100,7 +101,13 @@ When voice is on:
 
 In the voice window: one lit string runs from the microphone button (the peg; click it or press **M** or Space to mute) across the panel and moves with whoever is talking, and the line under it shows the latest words, yours or the voice's. Below that is Claude's page: its messages for this turn and the recent ones, in a region that scrolls and follows the newest words (scroll up to read back; "Jump to latest" brings you down again). When Claude needs an approval, the question takes that page inside a gold frame. The footer has the persona (it opens Settings), the microphone and speaker in use (click either to switch devices), Pause, End voice and Settings, where the voice, persona, wake sensitivity and echo tools live. **Space** resumes after a pause.
 
-**Sleep and wake.** After a minute with nobody talking (and nothing pending for Claude), the paid Live session closes and the window shows "Sleeping — just start talking". The mic stays open *locally*: a small voice detector in the page listens, nothing is sent and nothing is billed. When you speak again, a new session starts in about 1.2 s with the conversation so far; the words you said before it connected are transcribed and handed to the model, so it answers the whole sentence. When Claude finishes a voice request or needs your approval while voice sleeps, it wakes up to tell you. **M** while sleeping stops listening; the Wake picker sets sensitivity (Off = click or Space to resume).
+**Sleep and wake.** After a minute with nobody talking (and nothing pending for Claude), the paid Live session closes and the window shows "Sleeping — just start talking". The mic stays open *locally*: a small voice detector in the page listens, nothing is sent and nothing is billed. When you speak again, a new session starts in about 1.2 s with the conversation so far; the words you said before it connected are transcribed and handed to the model, so it answers the whole sentence. **M** while sleeping stops listening; the Wake picker sets sensitivity (Off = click or Space to resume).
+
+**Asleep never means silent.** Anything the voice would tell you while awake, it wakes up to tell you while asleep, then goes back to sleep: a finished deploy, tests that passed or failed, Claude's answer, a question, an approval. Updates that finish within a few seconds of each other come in one wake, and a soft two-note chime plays first (turn it off with `/talk earcon off` or in Settings). If nobody answers, it sleeps again about 15 seconds after it stops talking, so you pay only while it speaks. Only routine progress ("reading files") and `quiet` stay silent. Do Not Disturb / Focus does not mute it.
+
+- **"What did I miss?"** The voice keeps the last 20 updates it told you, with times, and gives a short recap when you ask ("catch me up", "any updates?").
+- **Away.** In the desktop app, if no speaker or headphones are connected, or you took off the headphones you were listening on, updates are held instead of spoken into an empty room. When the headphones come back, or you next talk to it, it starts with "While you were away…". The terminal band shows how many are waiting.
+- **Watches.** Say "tell me when the deploy finishes": Claude sets a watch (the `mcp__sotto__watch` tool, or `sotto watch "<what>"`), and when it happens the voice tells you, even asleep and even under `quiet`. `/talk status` lists active watches; each clears once it fires.
 
 ### Desktop app
 

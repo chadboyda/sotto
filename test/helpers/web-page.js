@@ -52,9 +52,12 @@ export async function openPage(t, { width = 420, height = 760 } = {}) {
     server.close();
     await stopChrome(chrome, userDir);
   });
-  const devPort = await until(() => fs.readFileSync(path.join(userDir, "DevToolsActivePort"), "utf8").split("\n")[0].trim(), 10000);
+  // 30 s, not 10: npm test runs every file in parallel, and on a busy CI runner
+  // (macOS, 3 cores) Chrome's first page target took longer than 10 s (PR #47:
+  // "no page target" while the daemon suites ran beside it).
+  const devPort = await until(() => fs.readFileSync(path.join(userDir, "DevToolsActivePort"), "utf8").split("\n")[0].trim(), 30000);
   const target = await until(async () => (await (await fetch(`http://127.0.0.1:${devPort}/json/list`)).json())
-    .find((x) => x.type === "page" && x.url.startsWith(base)), 10000);
+    .find((x) => x.type === "page" && x.url.startsWith(base)), 30000);
   if (!target) throw new Error("no page target");
   ws = new WebSocket(target.webSocketDebuggerUrl);
   await new Promise((resolve, reject) => { ws.onopen = resolve; ws.onerror = reject; });

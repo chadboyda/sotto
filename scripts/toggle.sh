@@ -99,6 +99,9 @@ case "$ARG" in
   # /talk cap [off|unlimited|<minutes>|<hours>h]: the daily voice limit (prefs.json).
   cap|limit)                    ACTION=cap
                                 CAP_ARG="$(printf '%s' "$ARG2" | tr '[:upper:]' '[:lower:]')" ;;
+  # /talk earcon [on|off]: the soft chime before an update the voice wakes up to tell (prefs.json).
+  earcon|chime)                 ACTION=earcon
+                                EARCON_ARG="$(printf '%s' "$ARG2" | tr '[:upper:]' '[:lower:]')" ;;
   # /talk key shows where the API key comes from. Anything typed after it
   # (or a bare /talk sk-...) is never read: it opens the setup window instead.
   key|keys|apikey|api-key|api_key)
@@ -110,7 +113,7 @@ esac
 shopt -u nocasematch
 
 if [[ "$ACTION" == usage ]]; then
-  finish "sotto: usage: /talk [on|off|status|restart|quiet|milestones|walkthrough|voice [name]|persona [name]|app|window [auto|app|chrome]|cap [off|<minutes>]|key]"
+  finish "sotto: usage: /talk [on|off|status|restart|quiet|milestones|walkthrough|voice [name]|persona [name]|app|window [auto|app|chrome]|cap [off|<minutes>]|earcon [on|off]|key]"
 fi
 
 # --- config (SPEC §4.1/§4.2); unset, empty or invalid -> default ---------------
@@ -199,6 +202,11 @@ pref_persona_voice() { # prints true/false when prefs.json sets persona_voice, e
   [[ -r "$PREFS" ]] && p="$(<"$PREFS")"
   if [[ "$p" =~ $re ]]; then printf '%s' "${BASH_REMATCH[1]}"; fi
 }
+pref_earcon() { # prints true/false when prefs.json sets earcon, else nothing
+  local p="" re='"earcon"[[:space:]]*:[[:space:]]*(true|false)'
+  [[ -r "$PREFS" ]] && p="$(<"$PREFS")"
+  if [[ "$p" =~ $re ]]; then printf '%s' "${BASH_REMATCH[1]}"; fi
+}
 pref_cap() { # prints the daily limit (minutes, 0 = unlimited) from prefs.json, or nothing
   local p="" re='"daily_cap_minutes"[[:space:]]*:[[:space:]]*([0-9]+)'
   [[ -r "$PREFS" ]] && p="$(<"$PREFS")"
@@ -212,7 +220,7 @@ pref_window() { # prints the valid window mode from prefs.json, or nothing
 # write_prefs VOICE WINDOW [PERSONA [PERSONA_VOICE]]: rewrite prefs.json (any may be empty).
 # Without a PERSONA argument the saved persona is kept; persona_voice is kept
 # unless PERSONA_VOICE (true/false) is given; the daily limit is kept unless
-# CAP_NEW is set.
+# CAP_NEW is set; the earcon is kept unless EARCON_NEW (true/false) is set.
 write_prefs() {
   local body="" persona pv
   if (( $# >= 3 )); then persona=$3; else persona="$(pref_persona)"; fi
@@ -223,6 +231,8 @@ write_prefs() {
   [[ -n "$pv" ]] && body="${body:+$body,}\"persona_voice\":$pv"
   local cap="${CAP_NEW:-$(pref_cap)}"
   [[ -n "$cap" ]] && body="${body:+$body,}\"daily_cap_minutes\":$cap"
+  local ec="${EARCON_NEW:-$(pref_earcon)}"
+  [[ -n "$ec" ]] && body="${body:+$body,}\"earcon\":$ec"
   printf '{%s}\n' "$body" > "$PREFS.tmp" && chmod 600 "$PREFS.tmp" && mv -f "$PREFS.tmp" "$PREFS"
 }
 
@@ -372,6 +382,18 @@ cap_local() {
   if [[ "$n" == 0 ]]; then finish "sotto: daily voice limit off (unlimited)."; fi
   finish "sotto: daily voice limit set to $(cap_label "$n") a day."
 }
+earcon_local() {
+  local cur
+  cur="$(pref_earcon)"; [[ "$cur" == false ]] && cur=off || cur=on
+  case "$EARCON_ARG" in
+    "") finish "sotto: earcon $cur. Change it with /talk earcon on|off." ;;
+    on|yes|true) EARCON_NEW=true write_prefs "$(pref_voice)" "$(pref_window)" || fail prefs_write "sotto: ERROR could not save the earcon to $PREFS."
+                 finish "sotto: earcon on: a soft chime plays before an update the voice wakes up to tell you." ;;
+    off|no|false) EARCON_NEW=false write_prefs "$(pref_voice)" "$(pref_window)" || fail prefs_write "sotto: ERROR could not save the earcon to $PREFS."
+                  finish "sotto: earcon off: no chime before an update the voice wakes up to tell you." ;;
+    *) finish "sotto: ERROR say /talk earcon on or /talk earcon off." ;;
+  esac
+}
 voice_local() {
   local cur own pv=""
   cur="$(effective_voice)"
@@ -477,6 +499,7 @@ if [[ -n "$H" ]]; then
     [[ "$ACTION" == persona ]] && persona_local
     [[ "$ACTION" == window ]] && window_local
     [[ "$ACTION" == cap ]] && cap_local
+    [[ "$ACTION" == earcon ]] && earcon_local
     if [[ "$ACTION" == on || "$ACTION" == toggle || "$ACTION" == app ]]; then
       # Replace it with ours: ask it to shut down, wait for the port, then spawn.
       OKEY=""; [[ -r "$KEYFILE" ]] && OKEY="$(<"$KEYFILE")"
@@ -522,6 +545,7 @@ daemon_down() {
     persona)    persona_local ;;
     window)     window_local ;;
     cap)        cap_local ;;
+    earcon)     earcon_local ;;
   esac
   # on/toggle/app/key continue: key needs a daemon to serve the setup window.
 }
@@ -664,6 +688,9 @@ if [[ ( "$ACTION" == voice && -n "$VOICE_ARG" ) || ( "$ACTION" == persona && -n 
   CTL_MAX_S=8
 fi
 [[ "$ACTION" == window && -n "$WINDOW_ARG" ]] && BODY+=",\"window\":\"$WINDOW_ARG\""
+if [[ "$ACTION" == earcon && -n "$EARCON_ARG" ]]; then
+  case "$EARCON_ARG" in on|yes|true) BODY+=",\"on\":true" ;; off|no|false) BODY+=",\"on\":false" ;; *) finish "sotto: ERROR say /talk earcon on or /talk earcon off." ;; esac
+fi
 if [[ "$ACTION" == cap && -n "$CAP_ARG" ]]; then
   [[ "$CAP_ARG" =~ ^[a-z0-9]{1,12}$ ]] || finish "sotto: ERROR the daily limit is off (unlimited), or minutes from 1 to 1440 (e.g. \`sotto cap 240\` or \`sotto cap 4h\`)."
   BODY+=",\"cap\":\"$CAP_ARG\""

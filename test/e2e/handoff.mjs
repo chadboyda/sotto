@@ -13,9 +13,13 @@
 //   3. Claude picks it up (UserPromptSubmit) and works longer than the idle
 //      window: the voice stays awake for the (shortened) wait bound, then sleeps;
 //   4. Claude's Stop arrives while it sleeps: a notify wake, and the answer is
-//      spoken (assistant captions and speaker frames).
+//      spoken (assistant captions and speaker frames);
+//   5. nobody answers: it sleeps again soon after (notify_done), nothing pending;
+//   6. asleep never means silent (SPEC §6.15): a Claude turn ends on its own (no
+//      user prompt: a continuation), the voice wakes with the earcon, says it,
+//      and sleeps again with nothing left pending.
 // Silent: no speakers, no microphone, no browser, no window, no privacy prompt.
-// Cost: three short Live sessions, about 50-70 billed seconds.
+// Cost: four short Live sessions, about 70-100 billed seconds.
 // Never prints the API key or any token.
 //
 //   node test/e2e/handoff.mjs
@@ -39,8 +43,9 @@ const SOCK = `/tmp/clv-ho-${process.pid}.sock`;
 const IDLE_S = 8;
 const WAIT_BOUND_MS = 12_000; // SOTTO_VOICE_WAIT_MS: the 10 min hold, shortened
 const ANSWER = "The build is green and all 42 tests pass.";
-const WALL_BUDGET_MS = 180_000;
-const BILLED_MAX_S = 110;
+const CONTINUATION = "The deploy finished. All 13 services are up and healthy.";
+const WALL_BUDGET_MS = 260_000;
+const BILLED_MAX_S = 150;
 
 const results = [];
 const log = (...a) => console.log("[handoff-e2e]", ...a);
@@ -172,6 +177,32 @@ async function main() {
     await sleep(2000);
     const peak = pcmPeak(Buffer.concat(app.speaker.slice(nSpeaker)));
     check("speaker frames hold speech", peak > 1200, `peak ${peak}`);
+
+    // 5. Nobody answers: back to sleep once it has been said.
+    const tSaid = Date.now();
+    const slept3 = await poll(() => d.voice.state === "sleeping", 40_000);
+    const close3 = readLog().filter((e) => e.ev === "idle.close").at(-1);
+    // notify_done, or idle when idle_seconds (8 here) is shorter than the notify linger.
+    check("sleeps again after saying it", !!slept3 && ["notify_done", "idle"].includes(close3?.detail), `${((Date.now() - tSaid) / 1000).toFixed(1)} s, ${close3?.detail}`);
+    check("nothing left pending", d.voice.pendingResults.length === 0 && !d.voice.pendingResult, JSON.stringify(d.voice.pendingResults.map((r) => r.text.slice(0, 40))));
+    if (!slept3) return finish(1);
+    await sleep(1500);
+
+    // 6. A turn Claude takes on its own (no user prompt) while the voice sleeps.
+    const tCont = Date.now();
+    const nCap6 = app.ofType("caption").length;
+    const nSpk6 = app.speaker.length;
+    d.voice.handleHook("Stop", { last_assistant_message: CONTINUATION, prompt_id: "e2e-cont", session_id: "e2e-handoff" }, SOCK);
+    const woke6 = await poll(() => readLog().some((e) => e.ev === "wake.request" && Date.parse(e.ts) >= tCont), 15_000);
+    check("a continuation turn wakes the voice", !!woke6);
+    const chimed = await poll(() => readLog().some((e) => e.ev === "earcon.play" && Date.parse(e.ts) >= tCont), 20_000);
+    check("the earcon plays first", !!chimed);
+    const spoken6 = await poll(() => /deploy|thirteen|13|services/i.test(app.ofType("caption").slice(nCap6).filter((c) => c.role === "assistant").map((c) => c.text).join("")), 30_000);
+    const said6 = app.ofType("caption").slice(nCap6).filter((c) => c.role === "assistant").map((c) => c.text).join("").trim();
+    check("the continuation is spoken", !!spoken6, JSON.stringify(said6.slice(0, 160)));
+    check("speaker frames hold the chime and speech", pcmPeak(Buffer.concat(app.speaker.slice(nSpk6))) > 1200);
+    const slept6 = await poll(() => d.voice.state === "sleeping", 40_000);
+    check("then sleeps again, nothing pending", !!slept6 && d.voice.pendingResults.length === 0 && !d.voice.pendingResult, `${((Date.now() - tCont) / 1000).toFixed(1)} s after the turn`);
     const end = await app.cmd("end", {}).catch(() => null);
     await app.waitType("live", 10_000, (m) => m.event.type === "session.closed").catch(() => null);
     check("cmd end", !!end?.ok);

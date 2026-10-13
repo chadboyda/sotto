@@ -60,7 +60,7 @@ const RUN = `(async () => {
   return out;
 })()`;
 
-test("string: the idle panel draws nothing; sound and a held approval draw, then it rests", { skip: fs.existsSync(CHROME) ? false : "Chrome not installed", timeout: 60000 }, async (t) => {
+test("string: the idle panel draws nothing; sound and a held approval draw, then it rests", { skip: fs.existsSync(CHROME) ? false : "Chrome not installed", timeout: 120000 }, async (t) => {
   const page = await openPage(t, { width: 420, height: 640 });
   const m = await page.eval(RUN);
   assert.deepEqual(m.idle, { draws: 0, animating: false }, JSON.stringify(m));

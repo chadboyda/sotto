@@ -11,6 +11,7 @@ public final class RealAudioIO: AudioIO, @unchecked Sendable {
     public var onLevels: ((_ mic: Float, _ speaker: Float) -> Void)?
     public var onError: ((AudioIOError) -> Void)?
     public var onMicSilence: ((Bool) -> Void)?
+    public var onDevicesChanged: (() -> Void)?
     public var muted: Bool {
         get { emitter.muted.value != 0 }
         set { emitter.muted.store(newValue ? 1 : 0) }
@@ -93,6 +94,7 @@ public final class RealAudioIO: AudioIO, @unchecked Sendable {
         watcher = DeviceWatcher { [weak self] in
             guard let self = self else { return }
             self.scheduleReevaluate(force: self.inputRateChanged(), delay: 0.4)
+            DispatchQueue.main.async { self.onDevicesChanged?() }
         }
         watchCurrentDevices()
         let t = Timer(timeInterval: 1.0 / 30, repeats: true) { [weak self] _ in self?.tick() }

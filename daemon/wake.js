@@ -37,26 +37,33 @@ export const MAX_BOOST_DB = 6;
 export const FALSE_WAKE_QUIET_MS = 10_000;
 export const WAKE_SENSITIVITIES = Object.freeze(["off", "low", "medium", "high"]);
 /**
- * Sources whose message is worth waking a sleeping session for (voice.js
- * sendAppend()): answers to voice requests and anything Claude is blocked on.
- * `mirror_result` too (§6.20 D): Claude answering words the user said to the
- * voice is a reply the user is waiting for (live log 2026-09-28: the voice
- * slept while Claude answered a mirrored "So, what's the verdict?"); a mere
- * "Noted." routes as thinking only and never wakes.
- * `typed_result` too (§6.20 F): a reply to a prompt the user typed is news
- * they are waiting for (live log 2026-10-02: every reply after the voice slept
- * mid-turn sat silent in pendingResult). It only wakes when the speaking
- * policy routes it as commentary (milestones, walkthrough); under "quiet" it
- * is a thinking note and sendAppend() never wakes for those.
- * `background_result` too: a task turn (Claude reporting background work this
- * session started) only comes from the owner's main thread (delegation.js
- * onStop), and is news like a typed reply (live log 2026-10-13 16:43: it sat
- * in pendingResult while the voice slept). Quiet routes it as thinking, so it
- * never wakes there. A continuation `other_result` wakes by its action's
- * `wake` flag (policy.js), so a subagent's turn never does.
- * Routine completions only wait as pendingResult.
+ * Asleep never means silent (§6.15 "Asleep never means silent"): every
+ * commentary the speaking policy would say while live wakes a sleeping voice
+ * to say it (voice.js sendAppend()), then the voice sleeps again. The policy
+ * already decided what is worth saying (quiet routes results as thinking, and
+ * thinking never wakes); only routine chatter stays asleep: walkthrough's
+ * mid-turn progress lines and milestone batches, a mid-turn tool failure (the
+ * turn's result reports it) and "Claude is waiting for you". Live log
+ * 2026-10-13 ("why can't it just wake up to tell me, then go back to
+ * sleep?"): updates that sat in pendingResult until the user spoke again.
  */
-export const WAKE_SOURCES = Object.freeze(new Set(["voice_result", "mirror_result", "typed_result", "background_result", "background_voice", "voice_notice", "permission", "approval_reminder", "question", "attention", "notify"]));
+export const ASLEEP_SILENT_SOURCES = Object.freeze(new Set(["progress_text", "tool_milestone", "tool_failure", "idle"]));
+/** Does a commentary from `source` wake a sleeping voice? */
+export function wakesWhenAsleep(source) { return !ASLEEP_SILENT_SOURCES.has(source); }
+/**
+ * Sources the user is waiting on or Claude is blocked on: their wake is
+ * requested at once. Every other update waits NOTIFY_BATCH_MS for more
+ * (several results finishing together are one wake, not a flapping session).
+ */
+export const WAKE_SOURCES = Object.freeze(new Set(["voice_result", "mirror_result", "background_voice", "voice_notice", "permission", "approval_reminder", "question", "attention", "notify", "watch"]));
+/** Updates that arrive within this long of each other share one notify wake. */
+export const NOTIFY_BATCH_MS = 2_500;
+/**
+ * A notify wake in which the user says nothing sleeps this long after the
+ * voice last spoke (or the last update arrived): long enough to answer it,
+ * and it bills only while it speaks.
+ */
+export const NOTIFY_LINGER_MS = 15_000;
 
 /**
  * Should the live session go to sleep now?
@@ -70,13 +77,14 @@ export const WAKE_SOURCES = Object.freeze(new Set(["voice_result", "mirror_resul
  * @param {boolean} o.busy            a delegation is collecting or Claude works on a voice request
  * @param {string|null} o.wokeBy      "voice" when this session was woken by local voice detection
  * @param {boolean} o.heardUser       any user words in this session (live transcript or wake clip)
+ * @param {boolean} [o.heardWords]  user words in this session (not counting a spoken result)
  * @param {number} [o.lastLocalSpeechAt] latest speech the local mic detector heard (page or app)
  * @param {number} [o.minAwakeMs]
- * @returns {null|"idle"|"false_wake"}
+ * @returns {null|"idle"|"false_wake"|"notify_done"}
  */
 export function sleepDecision({
   now, idleMs, liveStartedAt = 0, lastUserAt = 0, lastAssistantAt = 0, lastPageActivityAt = 0,
-  busy = false, wokeBy = null, heardUser = false, lastLocalSpeechAt = 0, minAwakeMs = MIN_AWAKE_MS,
+  busy = false, wokeBy = null, heardUser = false, heardWords = heardUser, lastLocalSpeechAt = 0, minAwakeMs = MIN_AWAKE_MS,
 }) {
   if (!(idleMs > 0) || busy) return null;
   if (now - liveStartedAt < minAwakeMs) return null;
@@ -88,6 +96,9 @@ export function sleepDecision({
   // the quiet is counted from the model's last words too: whatever it just said
   // (a "Yes?", a finished-work announcement) the user gets time to answer.
   if (wokeBy === "voice" && !heardUser && now - Math.max(liveStartedAt, lastLocalSpeechAt, lastAssistantAt) >= FALSE_WAKE_QUIET_MS) return "false_wake";
+  // Woken to say something and the user never answered: back to sleep once
+  // it has been said (§6.15 "Asleep never means silent").
+  if (wokeBy === "notify" && !heardWords && now - Math.max(liveStartedAt, lastLocalSpeechAt, lastAssistantAt, lastPageActivityAt) >= NOTIFY_LINGER_MS) return "notify_done";
   const last = Math.max(lastUserAt, lastAssistantAt, lastPageActivityAt, liveStartedAt);
   return now - last >= idleMs ? "idle" : null;
 }
@@ -117,6 +128,8 @@ export class WakeGovernor {
   get wokeBy() { return this.current ? this.current.kind : null; }
   /** Words heard, or a pending result spoken (onResultDelivered): either way, no false wake. */
   get heardUser() { return !!(this.current?.heard || this.current?.result); }
+  /** User words in the current session (a spoken result does not count). */
+  get heardWords() { return !!this.current?.heard; }
 
   /** User words arrived in the current session. */
   onHeardUser() {

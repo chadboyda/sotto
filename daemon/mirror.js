@@ -23,6 +23,7 @@
 // watermark a delegation collects from.
 //
 // Pure apart from the injected effects; time comes from `clock`.
+import { isRecapRequest } from "./recap.js";
 import { groupFragments, joinUserFragments, normalizeWords } from "./transcript.js";
 import { MIRROR_MODES } from "./config.js";
 
@@ -97,7 +98,7 @@ const DECISION = new RegExp("\\b(?:" + [
 
 /**
  * What a user line is, for the mirror.
- * @returns {"noise"|"filler"|"mic_check"|"voice_only"|"fragment"|"decision"|"other"}
+ * @returns {"noise"|"filler"|"mic_check"|"voice_only"|"recap"|"fragment"|"decision"|"other"}
  */
 export function classifyLine(text, { awaiting = false } = {}) {
   const w = normalizeWords(text);
@@ -109,6 +110,8 @@ export function classifyLine(text, { awaiting = false } = {}) {
   if (w.length <= 8 && w.every((x) => BACKCHANNEL.has(x) || FUNCTION.has(x))) return "filler";
   if (w.length <= MIC_MAX_WORDS && MIC_ANCHOR.test(joined) && w.every((x) => MIC_WORDS.has(x) || BACKCHANNEL.has(x) || FUNCTION.has(x))) return "mic_check";
   if (w.length <= VOICE_ONLY_MAX_WORDS && VOICE_ONLY.test(joined)) return "voice_only";
+  // "What did I miss?": the voice recaps what it already told the user (recap.js).
+  if (isRecapRequest(text)) return "recap";
   if (DECISION.test(joined)) return "decision";
   // A few words that are no decision are the start of a thought cut by a
   // pause ("Should the", 9 s before the rest in the real session): the rest,
@@ -145,6 +148,7 @@ export class Mirror {
    *   sent({text, content, lines, dropped, ok})      after the write (log, note to the model)
    *   vocabularyHint(text) → one-line note or null    (optional)
    *   micCheck({text, at}) a mic check was heard (not mirrored); `at` = wall time of its last words (optional)
+   *   recap({text, at})   "what did I miss?" was heard (not mirrored) (optional)
    * @param {object} [o.log]
    */
   constructor({ clock, transcript, delegation, effects, log }) {
@@ -203,6 +207,7 @@ export class Mirror {
     const kept = [];
     const dropped = {};
     let mic = null; // the latest mic check: the voice answers it (voice.js answerMicCheck)
+    let recap = null; // the latest "what did I miss?": the voice recaps (voice.js answerRecap)
     for (const line of groupFragments(frags)) {
       const members = frags.filter((f) => f.start_ms >= line.start_ms && f.end_ms <= line.end_ms);
       // Echo of the assistant (§6.8.1): a line that is all echo is dropped;
@@ -214,11 +219,13 @@ export class Mirror {
       if (mirrorWants(cls, mode)) kept.push({ text, line });
       else dropped[cls] = (dropped[cls] || 0) + 1;
       if (cls === "mic_check") mic = { text, at: members.reduce((m, f) => Math.max(m, f.at || 0), 0) };
+      if (cls === "recap") recap = { text, at: members.reduce((m, f) => Math.max(m, f.at || 0), 0) };
     }
     this.checkedMs = endMs;
     // Never silently: a mic check is not Claude's business, but the user must get
     // an answer (live 2026-09-25: "I'm here / Do you hear me? / Hello?" got 30 s of silence).
     if (mic) { try { this.fx.micCheck?.(mic); } catch { /* ignore */ } }
+    if (recap) { try { this.fx.recap?.(recap); } catch { /* ignore */ } }
     if (!kept.length) {
       // Nothing worth a Claude turn. The words stay unconsumed, so a later
       // delegation still carries them as context (its 90 s lookback).

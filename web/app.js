@@ -541,6 +541,10 @@ function handleDaemonMessage(msg) {
         renderCaptions();
       }
       break;
+    case "earcon":
+      // A soft chime ahead of an update the voice woke up to tell (SPEC §6.15 "Earcon").
+      playEarcon();
+      break;
     case "result_pending":
       S.pendingResult = msg.text || null;
       if (msg.text) S.summary = lib.truncate(msg.text, 420);
@@ -3443,3 +3447,38 @@ startEvents();
 // Enter animations (banners, cards, Claude's lines) only once the first render has
 // settled: whatever is on screen when the window opens is simply there.
 setTimeout(() => requestAnimationFrame(() => (document.documentElement.dataset.motion = "on")), 600);
+
+/**
+ * The earcon (SPEC §6.15): two soft rising notes, about -26 dBFS, a third of a
+ * second, played by an <audio> element on the voice's speaker (never through
+ * the AudioContext: the page has no WebAudio playback path). Never throws.
+ */
+let earconUrl = null;
+function playEarcon() {
+  try {
+    if (!earconUrl) {
+      const rate = 24000, notes = [[659.25, 0.09], [987.77, 0.15]], gap = 0.03, tail = 0.06;
+      const n = Math.round((notes[0][1] + notes[1][1] + gap + tail) * rate);
+      const pcm = new Int16Array(n);
+      let i = 0;
+      for (const [k, [f, d]] of notes.entries()) {
+        const len = Math.round(d * rate), edge = Math.round(0.012 * rate);
+        for (let j = 0; j < len; j++, i++) {
+          const env = j < edge ? 0.5 - 0.5 * Math.cos((Math.PI * j) / edge) : j > len - edge ? 0.5 - 0.5 * Math.cos((Math.PI * (len - j)) / edge) : 1;
+          pcm[i] = Math.round(1650 * env * Math.exp(-2.2 * (j / len)) * Math.sin((2 * Math.PI * f * j) / rate));
+        }
+        if (k === 0) i += Math.round(gap * rate);
+      }
+      const head = new DataView(new ArrayBuffer(44));
+      const str = (o, t) => { for (let c = 0; c < t.length; c++) head.setUint8(o + c, t.charCodeAt(c)); };
+      str(0, "RIFF"); head.setUint32(4, 36 + n * 2, true); str(8, "WAVE"); str(12, "fmt "); head.setUint32(16, 16, true);
+      head.setUint16(20, 1, true); head.setUint16(22, 1, true); head.setUint32(24, rate, true); head.setUint32(28, rate * 2, true);
+      head.setUint16(32, 2, true); head.setUint16(34, 16, true); str(36, "data"); head.setUint32(40, n * 2, true);
+      earconUrl = URL.createObjectURL(new Blob([head, pcm.buffer], { type: "audio/wav" }));
+    }
+    const a = new Audio(earconUrl);
+    const sink = el.audio && el.audio.sinkId;
+    if (sink && typeof a.setSinkId === "function") a.setSinkId(sink).catch(() => {});
+    a.play().catch(() => {});
+  } catch { /* no audio: the update is still spoken */ }
+}

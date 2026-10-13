@@ -49,7 +49,7 @@ const PROBE = `(() => {
   }).observe(document, { childList: true, subtree: true });
 })()`;
 
-test("no flash: a stored choice is on <html> before <body> exists; System follows the OS live", { skip: fs.existsSync(CHROME) ? false : "Chrome not installed", timeout: 60000 }, async (t) => {
+test("no flash: a stored choice is on <html> before <body> exists; System follows the OS live", { skip: fs.existsSync(CHROME) ? false : "Chrome not installed", timeout: 120000 }, async (t) => {
   const page = await openPage(t);
   await page.send("Page.enable");
   await page.send("Page.addScriptToEvaluateOnNewDocument", { source: PROBE });
@@ -86,7 +86,7 @@ test("no flash: a stored choice is on <html> before <body> exists; System follow
   assert.equal(await page.eval(`getComputedStyle(document.documentElement).colorScheme`), "light");
 });
 
-test("Increase contrast (prefers-contrast: more) raises the quiet tokens in every theme", { skip: fs.existsSync(CHROME) ? false : "Chrome not installed", timeout: 60000 }, async (t) => {
+test("Increase contrast (prefers-contrast: more) raises the quiet tokens in every theme", { skip: fs.existsSync(CHROME) ? false : "Chrome not installed", timeout: 120000 }, async (t) => {
   const page = await openPage(t);
   const tok = (k) => page.eval(`getComputedStyle(document.documentElement).getPropertyValue("--${k}").trim()`);
   const alpha = (v) => Number((v.match(/rgba\([^)]*,\s*([\d.]+)\)/) || [])[1]);

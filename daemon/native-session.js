@@ -24,6 +24,7 @@ import { createHearingMonitor } from "../web/lib.js";
 import { createLeakEstimator, classifyLeak, echoTestVerdict } from "../web/echo.js";
 import { createUplinkAgc, createMicProfiles } from "./agc.js";
 import { writeAtomic } from "./statefiles.js";
+import { earconPcm } from "./earcon.js";
 import { createDebugCapture } from "./debugcapture.js";
 
 /** Speaker frames at or above this peak count as audible speech (same bar as preview.js). */
@@ -100,6 +101,9 @@ export class NativeController {
     this.stats = null; // last audio_stats
     this.statsLoggedAt = 0;
     this.route = null;
+    // The speaker the app would play through (`output`, §6.15 "Away hold"):
+    // {known:false} until the app reports it; device null = none connected.
+    this.output = { known: false, device: null };
     this.rttMs = null;
     this.counters = { mic_frames: 0, speaker_frames: 0, speaker_dropped: 0, flushes: 0, wake_triggers: 0, wake_near: 0, cmds: 0 };
     this.lastAudibleAt = 0; // daemon ms when the assistant was last audible at the app (send time + buffer)
@@ -263,10 +267,40 @@ export class NativeController {
     }
   }
 
+  /**
+   * The earcon (§6.15 "Earcon"): a soft chime the app plays ahead of an
+   * unprompted update. It is mixed into the session's own speaker frames as
+   * they stream (the Live primary socket sends audio continuously, silence
+   * included, and the model's first words come about a second later), so it
+   * plays in real time: sent as extra frames all at once it would sit on top
+   * of the app's jitter buffer and be trimmed as an overrun. The app's
+   * playout, and its test-mode WAV, carry it.
+   */
+  playEarcon() {
+    if (!this.link || !this.session) return false;
+    this.earcon = { pcm: earconPcm(SAMPLE_RATE), off: 0 };
+    this.counters.earcons = (this.counters.earcons || 0) + 1;
+    this.log.info("earcon.play", { ms: Math.round((this.earcon.pcm.length / 2 / SAMPLE_RATE) * 1000) });
+    return true;
+  }
+
+  /** Mix the rest of the earcon into one outgoing speaker frame (in place, clipped). */
+  mixEarcon(frame) {
+    const e = this.earcon;
+    if (!e) return frame;
+    const out = Buffer.from(frame);
+    for (let i = 0; i + 1 < out.length && e.off + 1 < e.pcm.length; i += 2, e.off += 2) {
+      out.writeInt16LE(Math.max(-32768, Math.min(32767, out.readInt16LE(i) + e.pcm.readInt16LE(e.off))), i);
+    }
+    if (e.off + 1 >= e.pcm.length) this.earcon = null;
+    return out;
+  }
+
   /** The session ended or was replaced (voice.js): stop the uplink, flush the app's playout. */
   sessionGone(sb, reason = "session_end") {
     if (!sb || this.session !== sb) return;
     this.session = null;
+    this.earcon = null;
     this.pacer.stop();
     this.hearing.stop();
     this.rechunker = createRechunker(); // the tail is dropped, not played (the app flushes)
@@ -280,7 +314,8 @@ export class NativeController {
     if (this.session !== sb || !this.link) return;
     const now = this.clock.now();
     const bufMs = Number(this.stats?.buffer_ms) || 60;
-    for (const frame of this.rechunker.push(pcm)) {
+    for (const raw of this.rechunker.push(pcm)) {
+      const frame = this.mixEarcon(raw);
       const flags = this.afterFlush ? FLAG.AFTER_FLUSH : 0;
       const { peak, pow } = framePeakRms(frame);
       // The Live primary socket streams audio continuously (silence included),
@@ -415,6 +450,16 @@ export class NativeController {
       // Exact digital silence on the unmuted mic (SPEC §6.16 "Silent mic"): the same handling as the old app page.
       case "mic_silent": v.handlePage({ type: "mic_silent", host: "app", source: "native", input_label: msg.input_label || this.micKey() || "", ms: msg.ms }); break;
       case "activity": v.handlePage({ type: "activity" }); break;
+      case "output": {
+        // Reported in every mode, listen (sleeping) included, where `route`
+        // has no output: whether a speaker or headphones are there to hear a wake.
+        const d = msg.device && typeof msg.device === "object" ? { name: truncate(String(msg.device.name ?? ""), 80), bluetooth: msg.device.bluetooth === true, headphones: msg.device.headphones === true } : null;
+        const prev = this.output.known ? this.output.device : undefined;
+        this.output = { known: true, device: d };
+        this.log.info("native.output", { device: d });
+        v.onOutputChanged?.(prev, d);
+        break;
+      }
       default: break;
     }
   }
@@ -524,6 +569,11 @@ export class NativeController {
         return r.status === 200 ? { ok: true, data: r.body } : { ok: false, code: r.body?.error?.code, message: r.body?.error?.message };
       }
       case "get_voices": return { ok: true, data: v.voices() };
+      case "set_earcon": {
+        const r = v.setEarcon(args.on === true);
+        this.onBroadcast({ type: "status", status: v.pageStatus() }); // settings changed
+        return { ok: true, data: { on: r.on, message: r.message } };
+      }
       case "echo_test": return this.runEchoTest();
       case "open_browser": {
         const r = await v.openBrowserFromApp();

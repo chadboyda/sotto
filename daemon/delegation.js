@@ -650,7 +650,9 @@ export class DelegationEngine {
       // pendingResult while the voice slept). A subagent's Stop is never one.
       if (pid && !t) {
         source = "other_result";
-        if (!isSubagent(body)) payload.continuation = true;
+        // A subagent's turn is a helper's: context only, never announced.
+        if (isSubagent(body)) payload.subagent = true;
+        else payload.continuation = true;
       } else if (t && t.origin === "mirror") source = "mirror_result";
       else if (t && t.origin === "task") {
         // Unknown origin (launched before voice was on, or a launch we never

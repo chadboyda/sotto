@@ -203,6 +203,9 @@ async function main() {
     timings.on_to_live_ms = Date.now() - t0;
     const L0 = dlog();
     check("window.choose picked the app", L0.some((e) => e.ev === "window.choose" && e.mode === "app"));
+    // The speaker a wake would use, reported at the link (SPEC §6.15 "Away hold").
+    const out = await until(() => dlog().find((e) => e.ev === "native.output"), 5_000);
+    check("the app reports its output device", !!out && out.device && typeof out.device.name === "string", JSON.stringify(out?.device ?? null));
     const startedA = L0.find((e) => e.ev === "session.started");
     const liveA = d.voice.status().live?.session_id;
     check("capture full in the app", alog().some((e) => e.ev === "capture" && e.to === "full"));
