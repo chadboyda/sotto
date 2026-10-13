@@ -55,6 +55,25 @@ export function groupFragments(fragments, gapMs = GAP_MS) {
   return lines;
 }
 
+// The terminal band's caption (SPEC §6.21 "Terminal UI"): a line still
+// streaming in and shorter than this many words keeps the previous line up,
+// so a push that lands on the first delta ("Of" from "Of course...") never
+// shows a fragment; a line is complete once it ends a sentence or has been
+// quiet for CAPTION_SETTLE_MS.
+export const CAPTION_MIN_WORDS = 4;
+export const CAPTION_SETTLE_MS = 1000;
+
+/** The voice's words for the band from grouped lines at wall time `now`. */
+export function captionOf(lines, now, { minWords = CAPTION_MIN_WORDS, settleMs = CAPTION_SETTLE_MS } = {}) {
+  const said = lines.filter((l) => l.role === "assistant" && l.text.trim());
+  const last = said[said.length - 1];
+  if (!last) return "";
+  const text = last.text.trim();
+  const complete = /[.!?\u2026]["'\u201d)\]]*$/.test(text) || now - last.at >= settleMs;
+  if (complete || text.split(/\s+/).length >= minWords) return text;
+  return said.length > 1 ? said[said.length - 2].text.trim() : "";
+}
+
 export class Transcript {
   constructor({ clock }) {
     this.clock = clock;
@@ -160,6 +179,9 @@ export class Transcript {
   userFragmentsAfter(afterMs) {
     return this.fragments.filter((f) => f.role === "user" && f.end_ms > afterMs);
   }
+
+  /** The band caption now (captionOf). */
+  caption() { return captionOf(this.lines(), this.clock.now()); }
 
   /** The most recent assistant line (grouped), or null. */
   lastAssistantLine() {

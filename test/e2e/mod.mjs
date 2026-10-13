@@ -96,7 +96,7 @@ async function run(mode) {
     let socket = null;
     await waitFor(() => (socket = [`/tmp/cc-socks/${claude.pid}.sock`, `/tmp/cc-socks-${process.getuid()}/${claude.pid}.sock`].find((s) => fs.existsSync(s))), 30000, "the session's inbox socket");
     assertNotInherited(socket);
-    const r = voice.control({ action: "on", session: { socket, session_id: null, cwd: TMP, project_dir: TMP, permission_mode: "bypassPermissions" }, config: {} });
+    const r = voice.control({ action: "on", session: { socket, session_id: null, cwd: TMP, project_dir: TMP, permission_mode: "bypassPermissions", ...(mode === "classic" ? { integration: "classic" } : {}) }, config: {} });
     if (!voice.owner) return fail(`could not bind the owner: ${r.message}`);
     if (voice.owner.socket !== socket) return fail(`owner socket ${voice.owner.socket} is not the test session's ${socket}`);
     const marker = voiceMarker(voice.nonce);
@@ -217,7 +217,7 @@ async function run(mode) {
     const talk = results().at(-1);
     const fromHook = talk.startsWith("Operation stopped by hook");
     if (mode === "mod" && (fromHook || !talk.includes("link mod"))) return fail(`/talk status in mod mode: ${talk}`);
-    if (mode === "classic" && (!fromHook || !talk.includes("link classic"))) return fail(`/talk status in classic mode: ${talk}`);
+    if (mode === "classic" && (!fromHook || !talk.includes("link classic (integration=classic)"))) return fail(`/talk status in classic mode: ${talk}`);
     console.log(`[${mode}] /talk status: ${talk.slice(0, 160)}`);
 
     if (mode === "mod") {
