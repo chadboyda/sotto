@@ -210,6 +210,24 @@ final class SettingsModelTests: XCTestCase {
         XCTAssertEqual(m.window, "chrome")
     }
 
+    func testEarconToggleSendsSetEarconAndFollowsStatus() async {
+        let (m, rec) = make()
+        XCTAssertTrue(m.earcon, "on by default (SPEC §6.15 Earcon)")
+        m.setEarcon(false)
+        XCTAssertFalse(m.earcon, "shows the choice while the command is in flight")
+        await settle()
+        XCTAssertEqual(rec.calls.map(\.0), ["set_earcon"])
+        XCTAssertEqual(rec.calls[0].1["on"], .bool(false))
+        var st = PageStatus(state: "sleeping")
+        st.earcon = false
+        let (m2, _) = make(st)
+        XCTAssertFalse(m2.earcon, "the daemon's setting")
+        let decoded = try? JSONDecoder().decode(PageStatus.self, from: Data(#"{"state":"sleeping","earcon":true,"watches":["the deploy finishes"],"away":2}"#.utf8))
+        XCTAssertEqual(decoded?.earcon, true)
+        XCTAssertEqual(decoded?.watches, ["the deploy finishes"])
+        XCTAssertEqual(decoded?.away, 2)
+    }
+
     func testVoiceSwitchShowsDaemonMessageAndErrors() async {
         let (m, rec) = make()
         m.settings = NativeSettings(voices: .init(voices: ["marin", "cedar"], current: "marin"))

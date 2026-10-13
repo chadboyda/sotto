@@ -13,6 +13,12 @@
 #   sotto app              same as /talk app (install and use the desktop app)
 #   sotto cap              the daily voice limit and today's use
 #   sotto cap off|<min>|<h>h  set it (off = unlimited; applies at once)
+#   sotto earcon [on|off]  the soft chime before an update the voice wakes up to tell
+#   sotto watch "<what>"   tell the user when it happens (SPEC §6.15 "Watches"):
+#                          spoken even while the voice sleeps or is set to quiet
+#   sotto watch            list the watches
+#   sotto watch done <id> [what happened]   it happened: the voice says so now
+#   sotto watch clear [<id>|all]
 #   sotto debug capture on|off|status
 #                          record the app mic's raw and uplink audio as WAVs
 #                          in <data dir>/debug for 10 minutes at most (off
@@ -35,7 +41,7 @@ done
 ROOT="$(cd "${SELF%/*}/.." && pwd)"
 
 usage() {
-  printf 'usage: sotto voice [name] | sotto persona [name] | sotto status | sotto restart | sotto window [auto|app|chrome] | sotto app | sotto cap [off|<minutes>|<hours>h] | sotto debug capture on|off|status\n' >&2
+  printf 'usage: sotto voice [name] | sotto persona [name] | sotto status | sotto restart | sotto window [auto|app|chrome] | sotto app | sotto cap [off|<minutes>|<hours>h] | sotto earcon [on|off] | sotto watch ["<what>" | done <id> [text] | clear [<id>|all]] | sotto debug capture on|off|status\n' >&2
   exit 2
 }
 
@@ -47,6 +53,8 @@ case "$1" in
   window|windows) ARGS="window${2:+ $2}" ;;
   app)          ARGS="app" ;;
   cap|limit)    ARGS="cap${2:+ $2}" ;;
+  earcon|chime) ARGS="earcon${2:+ $2}" ;;
+  watch|watches) ARGS="watch" ;;
   debug)        [[ "$2" == capture && "$3" =~ ^(on|off|status)$ ]] || usage; ARGS="debug" ;;
   -h|--help|help|"") usage ;;
   *) usage ;;
@@ -123,6 +131,37 @@ if [[ "$1" == debug ]]; then
       printf 'sotto: debug capture %s, %s recording file(s) in %s\n' "$S" "$N" "$DBG" ;;
   esac
   exit 0
+fi
+
+# --- watches: free text, so straight to the daemon's /control ------------------------
+# json_str TEXT: a JSON string literal (quotes, backslashes, control characters).
+json_str() {
+  local s="$1"
+  s="${s//\\/\\\\}"; s="${s//\"/\\\"}"; s="${s//$'\n'/ }"; s="${s//$'\t'/ }"; s="${s//[$'\001'-$'\037']/}"
+  printf '"%s"' "$s"
+}
+if [[ "$1" == watch || "$1" == watches ]]; then
+  shift
+  case "$1" in
+    "" | list) BODY='{"action":"watch","op":"list"' ;;
+    done)  [[ -n "$2" ]] || usage; BODY="{\"action\":\"watch\",\"op\":\"done\",\"id\":$(json_str "$2"),\"text\":$(json_str "${*:3}")" ;;
+    clear) BODY="{\"action\":\"watch\",\"op\":\"clear\",\"id\":$(json_str "${2:-all}")" ;;
+    *)     BODY="{\"action\":\"watch\",\"op\":\"add\",\"description\":$(json_str "$*")" ;;
+  esac
+  BODY+=",\"via\":\"cli\",\"session\":{\"socket\":$(json_str "$CLAUDE_CODE_MESSAGING_SOCKET")}}"
+  [[ "$PORT" =~ ^[0-9]+$ && -r "$D/daemon.key" ]] || { printf 'sotto: voice is off, so there is nobody to tell. The user turns it on with /talk.\n'; exit 1; }
+  KEY="$(<"$D/daemon.key")"; KEY="${KEY%%[[:space:]]*}"
+  OUT="$(printf '%s' "$BODY" | curl -s -m 3 -X POST -H 'Content-Type: application/json' \
+    -H @<(printf 'X-Sotto-Key: %s\n' "$KEY") --data-binary @- "http://127.0.0.1:$PORT/control")"
+  re='"message":"((\\.|[^"\\])*)"'
+  if [[ "$OUT" =~ $re ]]; then
+    MSG="${BASH_REMATCH[1]}"; MSG="${MSG//\\\"/\"}"; MSG="${MSG//\\\\/\\}"
+    printf '%s\n' "$MSG"
+    [[ "$OUT" == *'"ok":true'* ]] && exit 0
+    exit 1
+  fi
+  printf 'sotto: ERROR the voice daemon did not answer.\n'
+  exit 1
 fi
 
 # --- run the /talk handler --------------------------------------------------------

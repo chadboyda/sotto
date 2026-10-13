@@ -242,16 +242,49 @@ export function bandRows(s, cols) {
   const w = Math.max(10, Number(cols) || 80);
   const p = s.problem && PROBLEM_WORDS[s.problem.kind] ? s.problem : null;
   const phase = p ? PROBLEM_WORDS[p.kind] : `${phaseOf(s)}${s.approval ? `: ${s.approval}` : ""}`;
-  const extras = [s.persona, s.voice].filter(Boolean).map((t) => ({ text: ` · ${t}`, dim: true }));
+  // Watches the voice will report (§6.15 "Watches") come before the persona and voice.
+  const watching = s.watching > 0 ? `watching ${s.watching}` : "";
+  const extras = [watching, s.persona, s.voice].filter(Boolean).map((t) => ({ text: ` · ${t}`, dim: true }));
   const name = { text: "sotto", bold: true };
   const width = (segs) => segs.reduce((n, g) => n + [...g.text].length, 0);
   while (extras.length && width([name, { text: ` · ${phase}` }, ...extras]) > w) extras.pop();
   const head = [name, { text: ` · ${fit(phase, w - 8)}`, ...(p ? { warn: true } : {}) }, ...extras];
-  const body = p ? p.text : s.said ? `"${s.said}"` : s.activity || "";
+  // Updates held while no speaker or headphones were there (§6.15 "Away hold").
+  const away = s.away > 0 ? `while you were away: ${s.away} update${s.away === 1 ? "" : "s"} waiting, said at the next wake` : "";
+  const body = p ? p.text : away || (s.said ? `"${s.said}"` : s.activity || "");
   return body ? [head, [{ text: fit(body, w), ...(p ? { warn: true } : { dim: true }) }]] : [head];
 }
 
 /** The band's rows as plain text (tests, logs). */
 export function bandLines(s, cols) {
   return bandRows(s, cols).map((row) => row.map((g) => g.text).join(""));
+}
+
+// ---- watches (SPEC §6.15 "Watches"): mcp__sotto__watch ----------------------------
+export const WATCH_TOOL_DESCRIPTION = "Sotto (the user's spoken voice assistant): tell the user out loud when something happens, even while the voice sleeps or is set to quiet. " +
+  "Use op add with a short description when the user asks to be told when something finishes or happens (\"tell me when the deploy finishes\"); " +
+  "op done with the watch id and a one-sentence text when it has happened; op list to see the watches; op clear to drop one (id) or all.";
+export const WATCH_TOOL_SCHEMA = {
+  type: "object",
+  properties: {
+    op: { type: "string", enum: ["add", "done", "list", "clear"], description: "add (default with a description), done, list or clear." },
+    description: { type: "string", description: "What to wait for, in a few words: \"the deploy finishes\"." },
+    keywords: { type: "array", items: { type: "string" }, description: "Optional: one to three words your report will contain when it happens (\"deploy\")." },
+    id: { type: "string", description: "The watch id (from add or list), for done and clear." },
+    text: { type: "string", description: "For done: what happened, in one sentence." },
+  },
+};
+
+/** The /control body for a watch tool call (only plain strings pass). */
+export function watchBody(call, socket) {
+  // The tool's input arrives on the call itself (as `name` does for voice), or under `input`.
+  const e = call && typeof call.input === "object" && call.input ? { ...call.input, ...call } : call || {};
+  const str = (v, max) => (typeof v === "string" ? v.replace(/[\u0000-\u001f]+/g, " ").trim().slice(0, max) : "");
+  const op = ["add", "done", "list", "clear"].includes(e?.op) ? e.op : str(e?.description, 1) ? "add" : "list";
+  const body = { action: "watch", op, via: "cli", session: { socket } };
+  if (str(e?.description, 160)) body.description = str(e.description, 160);
+  if (Array.isArray(e?.keywords)) body.keywords = e.keywords.map((k) => str(k, 40)).filter(Boolean).slice(0, 4);
+  if (str(e?.id, 40)) body.id = str(e.id, 40);
+  if (str(e?.text, 600)) body.text = str(e.text, 600);
+  return body;
 }

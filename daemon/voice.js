@@ -10,13 +10,13 @@ import { writeActive, removeActive, createPendingContext, removePendingContext, 
 import { Transcript, CAPTION_SETTLE_MS } from "./transcript.js";
 import { DelegationEngine, parseTaskNotifications } from "./delegation.js";
 import { Mirror, MIRROR_MODES } from "./mirror.js";
-import { materialOf } from "./phrasing.js";
+import { materialOf, relay } from "./phrasing.js";
 import { StyleWatch } from "./stylewatch.js";
 import { Narrator, elicitationSpeech, serverName, ToolLine, AgentTracker, TopLevelWork, reportSentence, isBackgroundLaunch, agentsText, cardText, permissionLabel, reminderSpeech } from "./policy.js";
 import { Approvals, commandFingerprint, findRunning } from "./approvals.js";
 import { SpeechQueue, COMMENTARY_PREROLL_MS } from "./speaker.js";
 import { renderForPolicy, buildSeedInput, greeting, ownerSwitchInstruction, voiceSwitchGreeting, personaSwitchGreeting, vocabularyUpdateInstruction, updateGreeting, cantHearInstruction, RECENT_GREETING_MS } from "./prompt.js";
-import { readPrefs, writePrefs, normalizeCap, resolveCap, capLabel, resolveVoice, normalizeVoice, voiceListMessage, unknownVoiceMessage, normalizeWindow, resolveWindowPref, personaVoiceOn } from "./prefs.js";
+import { readPrefs, writePrefs, normalizeCap, resolveCap, capLabel, resolveVoice, normalizeVoice, voiceListMessage, unknownVoiceMessage, normalizeWindow, resolveWindowPref, personaVoiceOn, earconOn } from "./prefs.js";
 import { loadPersonas, findPersona, resolvePersona, personaSummary, personaListMessage, unknownPersonaMessage } from "./personas.js";
 import { collectVocabulary, renderVocabulary, vocabularyHint, TIER } from "./vocabulary.js";
 import { buildSessionBody, createLiveSession, Sideband } from "./live.js";
@@ -25,7 +25,9 @@ import { PreviewCache, recordPreview, previewText } from "./preview.js";
 import { readTranscriptTail, readAbsorbed, gitBranch } from "./claude-context.js";
 import { truncate } from "./log.js";
 import { usageToday } from "./format.js";
-import { WakeGovernor, WAKE_SOURCES, sleepDecision, idleSecondsOf } from "./wake.js";
+import { Watches } from "./watch.js";
+import { UpdateLog, isRecapRequest, recapSeedLine, recapCommentary, RECAP_ANSWER_MS } from "./recap.js";
+import { WakeGovernor, WAKE_SOURCES, NOTIFY_BATCH_MS, wakesWhenAsleep, sleepDecision, idleSecondsOf } from "./wake.js";
 import { QUIET_MS } from "./update.js";
 import { decodeWavB64, wavDurationMs, transcribeWithFallback, wakeInstruction } from "./transcribe.js";
 import { normalizeKeyInput, validateKey, keyWhere } from "./apikey.js";
@@ -69,6 +71,12 @@ const WAKE_NOTE_MS = 12000;
 /** A notify wake the page does not act on within this long is dropped (the result stays pending). */
 const NOTIFY_WATCH_MS = 30000;
 const MAX_WAKE_QUEUE = 10;
+/** Main-thread turn results a watch can report (§6.15 "Watches"). */
+const TURN_RESULTS = new Set(["voice_result", "stale_result", "typed_result", "other_result", "mirror_result", "background_voice", "background_result"]);
+/** A watch Claude marked done mid-turn waits this long for the turn's result before it is spoken on its own. */
+const WATCH_FIRE_WAIT_MS = 60_000;
+/** Commentary that is no update for "what did I miss?" (recap.js). */
+const UNLOGGED_SOURCES = new Set(["recap", "owner_switch", "approval_reminder", "voice_notice", "mic_check"]);
 /** At most this many queued or pending messages are spoken when a session goes live. */
 const MAX_FLUSH = 3;
 const SESSION_REASONS = ["start", "resume", "reconnect", "wake", "notify"];
@@ -210,6 +218,11 @@ export class Voice {
     // handed to the next session to speak once it is ready (flushPending).
     this.pendingResults = [];
     this.carryResults = [];
+    // "What did I miss?" (§6.15 "Recap"): updates said in this owner session.
+    this.updates = new UpdateLog();
+    // "Tell me when the deploy finishes" (§6.15 "Watches"): fired once, spoken under every policy.
+    this.watches = new Watches({ clock: this.clock });
+    this.watchFiring = null; // {watch, message, at}: Claude said it happened mid-turn; the turn's result speaks it
     this.backlog = [];
     this.usage = readUsage(this.paths);
     this.usageSeen = new Map(); // live id → last usage.seconds
@@ -327,7 +340,7 @@ export class Voice {
         // With a delegation id it is about a voice request (an error, a held
         // message): that ranks with answers in the speech queue.
         append: (kind, content, id) => this.deliver({ kind, content, delegationId: id, source: id != null ? "voice_notice" : undefined }),
-        route: (source, payload) => this.narrator.route(source, payload),
+        route: (source, payload) => this.routeResult(source, payload),
         // hook.sh's PreToolUse fallback; the mod frames its appends itself (§6.21).
         createPendingContext: () => { if (!this.modActive()) createPendingContext(this.paths); },
         removePendingContext: () => removePendingContext(this.paths),
@@ -362,6 +375,7 @@ export class Voice {
         sent: (r) => this.onMirrorSent(r),
         vocabularyHint: (text) => vocabularyHint(text, this.vocab.terms),
         micCheck: (m) => this.answerMicCheck(m),
+        recap: (m) => this.armRecap(m),
       },
     });
     this.statusFile = new StatusFileWriter({ paths: this.paths, clock: this.clock, get: () => this.status() });
@@ -408,6 +422,8 @@ export class Voice {
       counters: { ...this.counters },
       last_error: this.lastError ? { ...this.lastError } : null,
       wake: { ...this.governor.status(this.config.wake_sensitivity), queued: this.wakeQueue.length },
+      watches: this.watches.active(),
+      updates: this.updates.recent(5).map((u) => ({ text: u.text, at: iso(u.at) })),
       api_key: { source: this.keyInfo().source },
       echo: this.echoState ? { ...this.echoState } : null,
       audio_client: this.pageStatus().audio_client,
@@ -439,7 +455,49 @@ export class Voice {
       last_error: this.lastError ? { code: this.lastError.code, message: this.lastError.message } : null,
       key: { ...this.keyInfo(), setup: this.keySetup },
       audio_client: this.appAttached() ? "app" : this.audioClient === "page" ? "page" : null,
+      earcon: this.earconEnabled(),
+      watches: this.watches.active().map((w) => w.description),
+      away: this.awayCount(),
     };
+  }
+
+  // ---- earcon and away hold (§6.15) -------------------------------------------------------
+  earconEnabled() { return earconOn(readPrefs(this.paths)); }
+
+  /** /talk earcon on|off, `sotto earcon`, the app's Settings toggle (persisted in prefs.json). */
+  setEarcon(on) {
+    try { writePrefs(this.paths, { earcon: !!on }); } catch (e) { this.log.error("prefs.write_error", { message: e.message }); }
+    this.log.info("earcon.set", { on: !!on });
+    this.changed();
+    return { ok: true, on: !!on, message: `sotto: earcon ${on ? "on" : "off"}: ${on ? "a soft chime plays" : "no chime"} before an update the voice wakes up to tell you.` };
+  }
+
+  /**
+   * Nobody can hear a wake now (§6.15 "Away hold"): the app reports no output
+   * device at all, or the headphones the voice was heard on were removed (it
+   * would talk into an empty room through the laptop speakers). Only the app
+   * knows; with the page this is never true.
+   */
+  outputAway() {
+    if (!this.appAttached()) return false;
+    const o = this.native?.output;
+    if (!o || !o.known) return false;
+    return !o.device || (!!this.headphonesGone && !o.device.headphones);
+  }
+
+  awayCount() { return [...this.carryResults, ...this.pendingResults].filter((r) => r.away).length; }
+
+  /** The app's output changed (native-session.js `output`). Headphones back, or a device again: say what waited. */
+  onOutputChanged(prev, next) {
+    const was = this.outputAway();
+    if (prev && prev.headphones && (!next || !next.headphones)) this.headphonesGone = true;
+    if (next && next.headphones) this.headphonesGone = false;
+    const away = this.outputAway();
+    if (was !== away) {
+      this.log.info(away ? "away.start" : "away.end", { output: next ? next.name : null, held: this.awayCount() });
+      this.changed();
+    }
+    if (!away && this.awayCount() && this.state === "sleeping") this.requestWake("notify");
   }
 
   // ---- native app link (docs/NATIVE.md) ---------------------------------------------------
@@ -538,6 +596,101 @@ export class Voice {
     this.deliver({ kind: "commentary", content: "Yes, I can hear you.", delegationId: null });
   }
 
+  /**
+   * "What did I miss?" heard (mirror class `recap`, or the wake clip): the
+   * voice should recap from the seed's update list; if it has said nothing
+   * and delegated nothing RECAP_ANSWER_MS later, the daemon hands it the
+   * recap to say (§6.15 "Recap").
+   */
+  armRecap({ text = "", at = 0 } = {}) {
+    if (!this.sideband || this.state !== "live") return;
+    const asked = at || this.clock.now();
+    this.log.info("recap.asked", { chars: text.length, updates: this.updates.size });
+    this.timer("recap", () => {
+      if (!this.sideband || this.state !== "live") return;
+      if ((this.transcript.lastAssistantSpeechAt || 0) >= asked || this.delegation.lastCreatedAt >= asked) return; // answered or delegated
+      this.log.info("recap.answer", { updates: this.updates.size });
+      this.deliver({ kind: "commentary", content: recapCommentary(this.updates.recent()), delegationId: null, source: "recap" });
+    }, RECAP_ANSWER_MS);
+  }
+
+  /**
+   * A main-thread turn's result (delegation.js onStop): a watch it reports
+   * (§6.15 "Watches") turns it into the watch's update, spoken under every
+   * policy; then watches set during that turn are armed.
+   */
+  routeResult(source, payload = {}) {
+    const turn = TURN_RESULTS.has(source) && !payload.subagent;
+    if (!turn) return this.narrator.route(source, payload);
+    let w = null;
+    let message = "";
+    if (this.watchFiring) {
+      ({ watch: w, message } = this.watchFiring);
+      this.watchFiring = null;
+      this.clear("watchFire");
+    } else {
+      w = this.watches.match(payload.text);
+    }
+    this.watches.turnEnded();
+    if (!w) return this.narrator.route(source, payload);
+    this.watches.remove(w);
+    this.log.info("watch.fire", { id: w.id, via: message ? "done" : "match", source, watches: this.watches.list.length });
+    this.changed();
+    // An answer to a voice request is spoken anyway, with its delegation id.
+    if (source === "voice_result" || source === "stale_result") return this.narrator.route(source, payload);
+    return this.narrator.route("watch", { ...payload, watch: w.description, message });
+  }
+
+  /** /control watch (mcp__sotto__watch, `sotto watch`): add, list, done, clear. */
+  watchControl(req = {}) {
+    const op = ["add", "list", "done", "clear"].includes(req.op) ? req.op : req.description ? "add" : "list";
+    if (!this.owner || this.state === "off") return { ok: false, message: "sotto: voice is off, so there is nobody to tell. The user turns it on with /talk." };
+    if (op === "add") {
+      const w = this.watches.add({ description: req.description, keywords: req.keywords, duringTurn: this.delegation.claudeBusy });
+      if (!w) return { ok: false, message: "sotto: a watch needs a description of what to wait for." };
+      this.log.info("watch.add", { id: w.id, keywords: w.keywords.length, watches: this.watches.list.length });
+      this.changed();
+      return { ok: true, message: `sotto: watching for "${w.description}" (${w.id}). When it happens, say so in your reply, or run sotto watch done ${w.id}; the voice tells the user even while asleep or set to quiet.` };
+    }
+    if (op === "list") {
+      const a = this.watches.active();
+      return { ok: true, message: a.length ? `sotto: watching for ${a.map((w) => `${w.id} "${w.description}"`).join(", ")}.` : "sotto: no watches." };
+    }
+    if (op === "clear") {
+      if (!req.id || req.id === "all") { const n = this.watches.clear(); this.changed(); return { ok: true, message: `sotto: cleared ${n} watch${n === 1 ? "" : "es"}.` }; }
+      const w = this.watches.find(req.id);
+      if (!w) return { ok: false, message: `sotto: no watch "${String(req.id).slice(0, 60)}".` };
+      this.watches.remove(w);
+      this.changed();
+      return { ok: true, message: `sotto: cleared the watch for "${w.description}".` };
+    }
+    // done: Claude says it happened.
+    const w = this.watches.find(req.id || req.description);
+    if (!w) return { ok: false, message: "sotto: no such watch; sotto watch lists them." };
+    const message = String(req.text || "").trim().slice(0, 600);
+    this.log.info("watch.done", { id: w.id, busy: this.delegation.claudeBusy });
+    if (this.delegation.claudeBusy) {
+      // Mid-turn: the turn's own result is the update (one spoken line, not two).
+      this.watchFiring = { watch: w, message, at: this.clock.now() };
+      this.timer("watchFire", () => this.fireWatchNow(), WATCH_FIRE_WAIT_MS);
+    } else {
+      this.watchFiring = { watch: w, message, at: this.clock.now() };
+      this.fireWatchNow();
+    }
+    return { ok: true, message: `sotto: the voice will tell the user that "${w.description}" happened.` };
+  }
+
+  /** A "done" watch whose turn result never came: speak its message itself. */
+  fireWatchNow() {
+    const f = this.watchFiring;
+    if (!f) return;
+    this.watchFiring = null;
+    this.watches.remove(f.watch);
+    this.log.info("watch.fire", { id: f.watch.id, via: "done", source: null, watches: this.watches.list.length });
+    this.changed();
+    this.narrator.route("watch", { text: f.message, watch: f.watch.description, message: f.message || "It happened." });
+  }
+
   deliver(action) {
     if (action.kind === "commentary") { this.speech.enqueue(action); return; }
     this.sendAppend(action);
@@ -546,15 +699,24 @@ export class Voice {
   /** Send one append. Without a Live session, results wait in pendingResult. */
   sendAppend(action) {
     const { kind, content, delegationId = null, source } = action;
-    // Something the user must hear while no session is open (§6.15): queue it
-    // and wake a session to say it. It is still stored as pendingResult below,
-    // so the page shows it and a failed wake loses nothing.
-    const wakeWorthy = kind === "commentary" && typeof content === "string" && (WAKE_SOURCES.has(source) || action.wake === true);
-    if (wakeWorthy && !this.sideband && (this.state === "sleeping" || this.state === "connecting")) {
+    // Asleep never means silent (§6.15): anything the policy says while live
+    // (every commentary but routine chatter) is queued and wakes a session to
+    // say it. It is still stored as pendingResult below, so the page shows it
+    // and a failed wake loses nothing. Urgent sources wake at once; other
+    // updates wait NOTIFY_BATCH_MS so several share one wake.
+    const wakeWorthy = kind === "commentary" && typeof content === "string" && (action.wake === true || wakesWhenAsleep(source));
+    // Nobody there to hear it (§6.15 "Away hold"): keep it, offer it when the
+    // output comes back or at the next wake ("While you were away: …").
+    const away = wakeWorthy && !this.sideband && this.state === "sleeping" && this.outputAway();
+    if (away) this.log.info("away.hold", { source, held: this.awayCount() + 1 });
+    if (wakeWorthy && !away && !this.sideband && (this.state === "sleeping" || this.state === "connecting")) {
       this.wakeQueue.push({ kind, content, source: source || null });
       if (this.wakeQueue.length > MAX_WAKE_QUEUE) this.wakeQueue.shift();
       this.log.info("wake.queue", { source, queued: this.wakeQueue.length, content: truncate(content, 200) });
-      if (this.state === "sleeping") this.requestWake("notify");
+      if (this.state === "sleeping") {
+        if (WAKE_SOURCES.has(source) || action.urgent === true) { this.clear("wakeBatch"); this.requestWake("notify"); }
+        else if (!this.timers.wakeBatch) this.timer("wakeBatch", () => { if (this.wakeQueue.length) this.requestWake("notify"); }, NOTIFY_BATCH_MS);
+      }
     }
     if (this.sideband && this.sideband.state !== "closed") {
       // Something for the model to say (a result, a note): the model needs a
@@ -562,6 +724,7 @@ export class Voice {
       if (kind !== "thinking") this.lastDeliverAt = this.clock.now();
       // A result said after a voice wake makes it no false wake (§6.15).
       if (kind === "commentary" && (RESULT_SOURCES.has(source) || wakeWorthy)) this.governor.onResultDelivered();
+      if (kind === "commentary" && source && !UNLOGGED_SOURCES.has(source) && wakesWhenAsleep(source)) this.updates.add(content, this.clock.now(), source);
       for (const part of this.fitAppend(kind, content)) {
         try { this.sideband.append(kind, part, delegationId); } catch (e) { this.log.error("append.invalid", { message: String(e.message) }); }
       }
@@ -570,7 +733,7 @@ export class Voice {
     if (kind === "commentary" && (RESULT_SOURCES.has(source) || wakeWorthy)) {
       this.pendingResult = { text: content, at: this.clock.now() };
       this.pendingResults = this.pendingResults.filter((r) => r.text !== content);
-      this.pendingResults.push({ text: content, at: this.pendingResult.at, source: source || null });
+      this.pendingResults.push({ text: content, at: this.pendingResult.at, source: source || null, ...(away ? { away: true } : {}) });
       if (this.pendingResults.length > MAX_WAKE_QUEUE) this.pendingResults.shift();
       this.emitPage({ type: "result_pending", text: content });
       this.log.info("result.pending", { source, content: truncate(content, 200) });
@@ -602,13 +765,16 @@ export class Voice {
     if (this.state !== "sleeping" || !this.owner || this.capReached() || !this.hasListener()) return false;
     if (this.timers.notifyWatch) return true; // already asked
     this.log.info("wake.request", { kind, queued: this.wakeQueue.length });
-    if (this.appAttached()) this.startNativeSession(kind === "wake" ? "wake" : "notify");
-    else this.command("connect", kind);
+    // The watch is armed before the session starts: the native start clears it
+    // synchronously (prepareSession), and one armed after that outlived the
+    // session, so the next wake within 30 s was taken as "already asked".
     this.timer("notifyWatch", () => {
       if (this.state !== "sleeping") return;
       this.log.warn("wake.request_timeout", { kind, queued: this.wakeQueue.length });
-      this.wakeQueue = []; // still visible as pendingResult; seeded on the next resume
+      this.wakeQueue = []; // still pending (pendingResults); spoken by the next session
     }, NOTIFY_WATCH_MS);
+    if (this.appAttached()) this.startNativeSession(kind === "wake" ? "wake" : "notify");
+    else this.command("connect", kind);
     return true;
   }
 
@@ -747,6 +913,8 @@ export class Voice {
       busy: !!this.delegation.claudeBusy, activity: clip(this.lastActivity || "", 160),
       said: clip(said, 200), approval: this.approvals?.current()?.label || null,
       problem: this.modProblem(),
+      watching: this.watches.list.length,
+      away: this.awayCount(),
     };
   }
 
@@ -1039,6 +1207,8 @@ export class Voice {
       case "key": r = this.keyControl(req); break;
       case "window": r = this.setWindow(req.window); break;
       case "cap": r = req.cap == null || req.cap === "" ? { ok: true, message: this.capMessage() } : this.setCap(req.cap, via); break;
+      case "watch": r = this.watchControl(req); break;
+      case "earcon": r = req.on == null ? { ok: true, message: `sotto: earcon ${this.earconEnabled() ? "on" : "off"}. Change it with /talk earcon on|off.` } : this.setEarcon(req.on === true || req.on === "on"); break;
       case "app": r = this.appControl(req); break;
       case "shutdown": {
         this.gracefulOff("shutdown");
@@ -1144,6 +1314,8 @@ export class Voice {
     const st = this.state === "live" ? "ON" : this.state;
     let m = `sotto: voice ${st} (${this.owner.project}) | ${u} | voice ${this.config.voice} | persona ${this.personaIdForStatus()} | ${this.policy} | ${this.modActive() ? "link mod" : linkSuffix(this.owner.linkReason)}`;
     if (app) m += ` | ${app}`;
+    const w = this.watches.active();
+    if (w.length) m += ` | watching: ${w.map((x) => `"${x.description}"`).join(", ")}`;
     if (this.lastError) m += ` | last error: ${this.lastError.message}`;
     return m;
   }
@@ -1256,6 +1428,9 @@ export class Voice {
       // Commentary, not instructions: an instructions append can cut off the
       // voice mid-sentence (guide-live-delegation "Send the right kind of
       // update"); commentary is fitted into the conversation by the model.
+      this.updates.clear(); // the recap and the watches are per owner session
+      this.watches.clear();
+      this.watchFiring = null;
       if (this.sideband) this.deliver({ kind: "commentary", content: ownerSwitchInstruction(next.project), delegationId: null, source: "owner_switch" });
       this.refreshVocabulary(next);
     } else {
@@ -2292,6 +2467,7 @@ export class Voice {
     const why = SESSION_REASONS.includes(reason) ? reason : "start";
     this.clear("waitingPage");
     this.clear("notifyWatch");
+    this.clear("wakeBatch");
     if (why === "wake" || why === "notify") this.logWakeRequest(why, wake);
 
     // An older session still open: close it, but do not wait.
@@ -2325,6 +2501,7 @@ export class Voice {
       voiceHistory: this.transcript.recentLines(30),
       pendingResult: null,
       backlog: this.backlog,
+      recap: recapSeedLine(this.updates.recent(10)),
       awaiting: this.awaiting ? this.awaiting.text : null,
       estTokens,
     });
@@ -2596,6 +2773,7 @@ export class Voice {
       if (this.muteWanted) { sb.send("session.input_audio.mute"); this.live.muted = true; }
     }
     this.liveStartedAt = this.clock.now();
+    this.clear("notifyWatch"); // whatever asked for a session got one
     this.setState("live");
     // The voice changed while this session was being created: switch again
     // right away (no greeting in the voice the user just left).
@@ -2634,6 +2812,14 @@ export class Voice {
       }
     }
     this.speech.resume();
+    // An update the user did not ask for wakes the voice: a soft chime first
+    // (§6.15 "Earcon"), from the app (or the page) ahead of the model's speech.
+    if (reason === "notify" && (this.wakeQueue.length || this.pendingResults.length || this.carryResults.length) && this.earconEnabled()) {
+      if (this.appAttached()) this.native?.playEarcon?.();
+      else this.emitPage({ type: "earcon" });
+    }
+    // The user woke it by speaking: they are there to hear, speakers or not.
+    if (reason === "wake") this.headphonesGone = false;
     this.flushPending();
     this.interval("idle", () => this.idleTick(), IDLE_TICK_MS);
     this.scheduleExpiry();
@@ -2715,6 +2901,7 @@ export class Voice {
     this.clear("reconnectWatch");
     this.clear("reconnectOpen");
     this.clear("wakeNote");
+    this.clear("recap");
     this.clear("handoff");
     this.clear("clipHandoff");
     this.clipHandoff = null;
@@ -2872,7 +3059,7 @@ export class Voice {
     const why = sleepDecision({
       now: this.clock.now(), idleMs: idleSecondsOf(this.config) * 1000, liveStartedAt: this.liveStartedAt,
       lastUserAt: this.transcript.lastUserSpeechAt, lastAssistantAt: this.transcript.lastAssistantSpeechAt,
-      lastPageActivityAt: Math.max(this.lastPageActivityAt, this.lastDeliverAt || 0), busy, wokeBy: this.governor.wokeBy, heardUser: this.governor.heardUser,
+      lastPageActivityAt: Math.max(this.lastPageActivityAt, this.lastDeliverAt || 0), busy, wokeBy: this.governor.wokeBy, heardUser: this.governor.heardUser, heardWords: this.governor.heardWords,
       lastLocalSpeechAt: this.lastPageActivityAt,
     });
     if (why) this.goToSleep(why);
@@ -2919,10 +3106,17 @@ export class Voice {
     };
     // Newest first: the wake queue holds what woke us (questions, approvals, results).
     for (const m of [...this.wakeQueue].reverse()) add(m);
-    for (const r of [...this.carryResults, ...this.pendingResults].sort((a, b) => (b.at || 0) - (a.at || 0))) {
-      if (!this.speech.wasSpoken(r.text)) add({ kind: "commentary", content: r.text, source: r.source });
+    const all = [...this.carryResults, ...this.pendingResults].filter((r) => !this.speech.wasSpoken(r.text));
+    // Held while nobody could hear (§6.15 "Away hold"): one "While you were
+    // away" update, oldest first, ahead of the rest.
+    const held = all.filter((r) => r.away && !seen.has(r.text)).sort((a, b) => (a.at || 0) - (b.at || 0));
+    if (held.length) {
+      for (const r of held) seen.add(r.text);
+      items.unshift({ kind: "commentary", content: relay("away", held.map((r) => materialOf(r.text)).join(" ")), source: "away" });
     }
+    for (const r of all.filter((x) => !x.away).sort((a, b) => (b.at || 0) - (a.at || 0))) add({ kind: "commentary", content: r.text, source: r.source });
     const queued = this.wakeQueue.length;
+    if (held.length) this.log.info("away.flush", { count: held.length });
     this.wakeQueue = [];
     this.carryResults = [];
     this.pendingResults = [];
@@ -3000,6 +3194,7 @@ export class Voice {
     // daemon unless the model delegates first (§6.20 B).
     const route = !!text && clipWantsDelegation(text);
     if (route) this.armClipHandoff(text);
+    else if (text && isRecapRequest(text)) this.armRecap({ text, at: this.clock.now() });
     this.log.info("wake.inject", { via, chars: text ? text.length : 0, route });
   }
 
@@ -3163,9 +3358,14 @@ export class Voice {
     this.pendingResults = [];
     this.governor.onEnd();
     this.clear("notifyWatch");
+    this.clear("wakeBatch");
     this.modlink.release(reason === "shutdown" ? "shutdown" : "off");
     removeActive(this.paths);
     removePendingContext(this.paths);
+    this.updates.clear();
+    this.watches.clear();
+    this.watchFiring = null;
+    this.clear("watchFire");
     if (this.owner) this.log.info("owner.release", { reason, project: this.owner.project });
     this.owner = null;
     this.clear("liveness");

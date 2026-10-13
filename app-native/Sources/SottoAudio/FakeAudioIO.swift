@@ -48,6 +48,7 @@ public final class FakeAudioIO: AudioIO, @unchecked Sendable {
     public var onLevels: ((_ mic: Float, _ speaker: Float) -> Void)?
     public var onError: ((AudioIOError) -> Void)?
     public var onMicSilence: ((Bool) -> Void)?
+    public var onDevicesChanged: (() -> Void)?
     public var muted: Bool {
         get { emitter.muted.value != 0 }
         set { emitter.muted.store(newValue ? 1 : 0) }

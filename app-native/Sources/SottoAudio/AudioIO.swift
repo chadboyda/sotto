@@ -72,6 +72,9 @@ public protocol AudioIO: AnyObject {
     /// Added by B3 (additive): true when the unmuted mic has delivered exact digital silence for 3 s
     /// (a privacy-blocked or dead input), false when real signal returns. Main queue.
     var onMicSilence: ((Bool) -> Void)? { get set }
+    /// The device lists or a system default changed (a device plugged or unplugged), whether or
+    /// not the route was rebuilt: in listen mode the output is not part of the plan. Main queue.
+    var onDevicesChanged: (() -> Void)? { get set }
     /// Added by B3 (additive): the current route, nil while stopped.
     var route: AudioRouteInfo? { get }
     /// Start capture (+ playout unless `listenOnly`). Idempotent.

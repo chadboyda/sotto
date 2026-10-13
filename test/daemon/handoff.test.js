@@ -11,7 +11,7 @@ import { makeHarness } from "../helpers/daemon-harness.js";
 import { isHandoffClaim, isWaitingClaim, clipWantsDelegation } from "../../daemon/handoff.js";
 import { MIRROR_TAG, MIRROR_QUIET_MS } from "../../daemon/mirror.js";
 import { VOICE_WAIT_MAX_MS } from "../../daemon/delegation.js";
-import { WAKE_SOURCES } from "../../daemon/wake.js";
+import { WAKE_SOURCES, wakesWhenAsleep } from "../../daemon/wake.js";
 
 const OWNER = "/tmp/clv-owner-a.sock";
 const appends = (ws, kind) => ws.sent.filter((e) => e.type === `session.${kind}.append`);
@@ -88,13 +88,12 @@ test("clipWantsDelegation: questions and requests yes; fillers, mic checks, voic
   for (const s of ["Hello?", "hello", "okay", "slow down", "testing one two", "", "Hmm?"]) assert.equal(clipWantsDelegation(s), false, s);
 });
 
-test("mirror_result, typed_result and background work reports wake a sleeping voice (D, F); other turns do not by source", () => {
+test("every result wakes a sleeping voice (D, F, asleep never means silent); replies the user waits on wake at once", () => {
+  for (const s of ["mirror_result", "voice_result", "typed_result", "background_result", "other_result", "completion", "agents_done"]) assert.ok(wakesWhenAsleep(s), s);
+  for (const s of ["progress_text", "tool_milestone", "tool_failure", "idle"]) assert.ok(!wakesWhenAsleep(s), s);
   assert.ok(WAKE_SOURCES.has("mirror_result"));
   assert.ok(WAKE_SOURCES.has("voice_result"));
-  assert.ok(WAKE_SOURCES.has("typed_result"));
-  assert.ok(WAKE_SOURCES.has("background_result"));
-  // A continuation other_result wakes by its action's flag, so a subagent's never does.
-  assert.ok(!WAKE_SOURCES.has("other_result"));
+  assert.ok(!WAKE_SOURCES.has("typed_result"), "batched with other updates");
 });
 
 // ---- A: a spoken handoff with no delegation --------------------------------------------

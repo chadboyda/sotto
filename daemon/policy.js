@@ -64,6 +64,9 @@ export function resultParts(text) {
  *   payload: {text, delegationId, requestText, labels, label, policy}
  *   ctx:     {canSpeakProgress}  (walkthrough progress_text throttle)
  */
+/** Every source route() handles (the asleep-never-silent invariant test enumerates them). */
+export const ROUTE_SOURCES = Object.freeze(["voice_result", "stale_result", "typed_result", "other_result", "mirror_result", "background_voice", "background_result",
+  "progress_text", "question", "attention", "notice", "context", "completion", "idle", "tool_failure", "agents_done", "tool_milestone", "permission", "approval_reminder", "policy_change", "watch"]);
 export function route(source, policy, payload = {}, ctx = {}) {
   const p = ["quiet", "milestones", "walkthrough"].includes(policy) ? policy : "milestones";
   switch (source) {
@@ -98,6 +101,7 @@ export function route(source, policy, payload = {}, ctx = {}) {
       // walkthrough, and wakes a sleeping voice; anything else is context
       // only, except in walkthrough.
       const { sum, S, R } = resultParts(payload.text);
+      if (payload.subagent) return [act("thinking", null, BG + S)];
       if (payload.continuation && p !== "quiet" && sum) {
         return [{ ...act("commentary", null, relay("other", clip(firstSentences(sum, 1), SHORT_SUMMARY_CHARS))), wake: true }, ...R.map((r) => act("thinking", null, r))];
       }
@@ -128,6 +132,14 @@ export function route(source, policy, payload = {}, ctx = {}) {
       if (p === "quiet" || !sum) return [act("thinking", null, BG + "Background work finished. " + S)];
       const said = p === "milestones" ? clip(firstSentences(sum, 1), SHORT_SUMMARY_CHARS) : firstSentences(sum, 2);
       return [act("commentary", null, relay("bgwork", said)), ...R.map((r) => act("thinking", null, r))];
+    }
+    case "watch": {
+      // Something the user asked to be told about happened (§6.15
+      // "Watches"): spoken under every policy, quiet included.
+      const { sum, R } = resultParts(payload.text);
+      const fallback = speakable(payload.message || "") || "It happened.";
+      const said = sum ? (p === "walkthrough" ? sum : firstSentences(sum, 2)) : fallback;
+      return [act("commentary", null, relay("watch", said, { requestText: payload.watch })), ...R.map((r) => act("thinking", null, r))];
     }
     case "progress_text": {
       const t = speakable(payload.text);

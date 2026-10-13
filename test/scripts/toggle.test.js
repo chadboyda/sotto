@@ -187,7 +187,7 @@ describe("toggle.sh cold start", () => {
   test("bogus argument prints usage and never contacts the daemon", async () => {
     const { D, env } = await setup();
     const out = parseOut(await run(TOGGLE, { env, input: stdinFor("bogus") }));
-    assert.equal(out.stopReason, "sotto: usage: /talk [on|off|status|restart|quiet|milestones|walkthrough|voice [name]|persona [name]|app|window [auto|app|chrome]|cap [off|<minutes>]|key]");
+    assert.equal(out.stopReason, "sotto: usage: /talk [on|off|status|restart|quiet|milestones|walkthrough|voice [name]|persona [name]|app|window [auto|app|chrome]|cap [off|<minutes>]|earcon [on|off]|key]");
     assert.ok(!existsSync(join(D, "daemon.pid")));
   });
 });
@@ -708,6 +708,31 @@ describe("toggle.sh /talk persona (SPEC §4.6)", () => {
   });
 });
 
+describe("toggle.sh /talk earcon: the chime before an unprompted update (SPEC §6.15)", () => {
+  test("daemon down: shows and sets prefs.json earcon; other writes keep it", async () => {
+    const { D, env } = await setup();
+    let out = parseOut(await run(TOGGLE, { env, input: stdinFor("earcon") }));
+    assert.equal(out.stopReason, "sotto: earcon on. Change it with /talk earcon on|off.");
+    out = parseOut(await run(TOGGLE, { env, input: stdinFor("earcon off") }));
+    assert.match(out.stopReason, /^sotto: earcon off/);
+    assert.deepEqual(JSON.parse(readFileSync(join(D, "prefs.json"), "utf8")), { earcon: false });
+    parseOut(await run(TOGGLE, { env, input: stdinFor("voice cedar") }));
+    assert.deepEqual(JSON.parse(readFileSync(join(D, "prefs.json"), "utf8")), { voice: "cedar", earcon: false });
+    out = parseOut(await run(TOGGLE, { env, input: stdinFor("earcon maybe") }));
+    assert.match(out.stopReason, /^sotto: ERROR say \/talk earcon on/);
+    assert.ok(!existsSync(join(D, "daemon.pid")), "never spawns a daemon");
+  });
+
+  test("daemon up: /control gets action earcon (+ on)", async () => {
+    const { D, env } = await setup();
+    parseOut(await run(TOGGLE, { env, input: stdinFor("on") }));
+    parseOut(await run(TOGGLE, { env, input: stdinFor("earcon off") }));
+    parseOut(await run(TOGGLE, { env, input: stdinFor("earcon") }));
+    const bodies = controlBodies(D).slice(1);
+    assert.deepEqual(bodies.map((b) => [b.action, b.on]), [["earcon", false], ["earcon", undefined]]);
+  });
+});
+
 describe("toggle.sh /talk cap: the daily voice limit (SPEC §4.5)", () => {
   test("daemon down: shows and sets prefs.json (off = 0, hours, minutes), keeping the other prefs", async () => {
     const { D, env } = await setup({ CLAUDE_PLUGIN_OPTION_DAILY_CAP_MINUTES: "120" });
@@ -822,6 +847,34 @@ describe("bin/sotto (SPEC §5.9)", () => {
     const p = controlBodies(D).at(-1);
     assert.deepEqual([p.action, p.persona, p.confirm, p.via], ["persona", "june", true, "cli"]);
     assert.equal(controlBodies(other).length, 0);
+  });
+
+  test("sotto watch: free text straight to /control with the daemon key (quotes and newlines survive as JSON)", async () => {
+    const { env: e0 } = await setup();
+    const home = e0.HOME;
+    const D = join(home, ".claude/plugins/data/sotto-w");
+    mkdirSync(D, { recursive: true });
+    const port = await freePort();
+    const env = { ...e0, CLAUDE_PLUGIN_DATA: D, CLAUDE_PLUGIN_OPTION_PORT: String(port) };
+    parseOut(await run(TOGGLE, { env, input: stdinFor("on") }));
+    cleanups.push(() => killStub(D));
+    writeFileSync(join(D, "active"), `${SOCK}\t${port}\tk\tn\n`);
+    const cliEnv = baseEnv({ HOME: home, CLAUDE_CODE_MESSAGING_SOCKET: SOCK });
+    let r = await run(CLI, { args: ["watch", "the", "\"prod\" deploy\nfinishes"], env: cliEnv });
+    assert.equal(r.code, 0, r.stderr);
+    assert.equal(r.stdout, "stub: watch\n");
+    let b = controlBodies(D).at(-1);
+    assert.deepEqual([b.action, b.op, b.description, b.via, b.session.socket], ["watch", "add", "the \"prod\" deploy finishes", "cli", SOCK]);
+    await run(CLI, { args: ["watch", "done", "w1", "it", "is", "up"], env: cliEnv });
+    b = controlBodies(D).at(-1);
+    assert.deepEqual([b.op, b.id, b.text], ["done", "w1", "it is up"]);
+    await run(CLI, { args: ["watch"], env: cliEnv });
+    assert.equal(controlBodies(D).at(-1).op, "list");
+    await run(CLI, { args: ["watch", "clear"], env: cliEnv });
+    assert.deepEqual([controlBodies(D).at(-1).op, controlBodies(D).at(-1).id], ["clear", "all"]);
+    r = await run(CLI, { args: ["earcon", "off"], env: cliEnv });
+    assert.equal(r.code, 0, r.stderr);
+    assert.deepEqual([controlBodies(D).at(-1).action, controlBodies(D).at(-1).on], ["earcon", false]);
   });
 
   test("no daemon: writes prefs.json in the newest data dir; errors exit 1", async () => {

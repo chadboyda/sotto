@@ -49,6 +49,7 @@ Delegate to the backend when:
 - The user asks how the work is going and the latest update you have does not answer it.
 - The user asks you to switch to a different voice or persona, for example "use the cedar voice" or "switch to the Moss persona".
 - The user asks to change or turn off the daily voice limit, for example "turn off the limit" or "make it unlimited" (Claude Code sets it with its sotto cap command).
+- The user asks to be told when something happens or finishes, for example "tell me when the deploy finishes": Claude Code sets a watch for it, and the update will reach you to say even while you sleep.
 - You are not sure whether it is for Claude Code. When in doubt, delegate. Greetings and mic checks are never in doubt: answer them yourself.
 
 Do not delegate to the backend when:
@@ -57,6 +58,7 @@ Do not delegate to the backend when:
 - You can answer from the conversation or a still-current result from Claude Code, and the user is not deciding, asking for, or correcting anything.
 - You need a brief clarification to understand the request.
 - The user tells you how to speak (pace, length, tone), asks you to be quiet, or asks you to repeat something.
+- The user asks what they missed, for a recap, or what is new: recap the updates already told to them (the "Updates already told to the user" note and this conversation) in one to three sentences; if there are none, say nothing new has come in.
 - The sound is a cough, background noise, or someone else talking.
 
 Delegate before giving an answer that depends on backend work.
@@ -231,8 +233,9 @@ const cap = (s, n) => {
  * @param {string|null} o.pendingResult
  * @param {string[]} o.backlog  progress notes that arrived while voice was paused
  * @param {string|null} [o.awaiting]  Claude's open question to the user (§6.10.3)
+ * @param {string|null} [o.recap]  updates already told to the user, with times (recap.js, §6.15 "Recap")
  */
-export function buildSeed({ project, cwd, branch, reason = "start", exchanges = [], voiceHistory = [], pendingResult = null, backlog = [], awaiting = null, note = null, maxChars = SEED_MAX }) {
+export function buildSeed({ project, cwd, branch, reason = "start", exchanges = [], voiceHistory = [], pendingResult = null, backlog = [], awaiting = null, recap = null, note = null, maxChars = SEED_MAX }) {
   const folder = String(cwd || "").split("/").filter(Boolean).pop() || "unknown";
   const head = [
     "[Background reference; not user speech]",
@@ -252,6 +255,7 @@ export function buildSeed({ project, cwd, branch, reason = "start", exchanges = 
     if (voice.length) parts.push("Earlier voice conversation (oldest first):", ...voice);
     if (notes.length) parts.push("Claude Code progress while voice was paused:", ...notes);
     if (tail) parts.push(tail);
+    if (recap) parts.push(cap(recap, 2500));
     if (wait) parts.push(wait);
     if (note) parts.push(note);
     return parts.join("\n");

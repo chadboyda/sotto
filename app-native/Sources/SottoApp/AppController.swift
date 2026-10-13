@@ -248,6 +248,7 @@ final class AppController: NSObject, NSApplicationDelegate, PanelControllerDeleg
             icon.linkFailed = false
             log.log("welcome", ["version": version, "state": orNull(status?.state)])
             IconModel.input(status: status, into: &icon)
+            sentOutput = nil // a new link: the daemon has not heard the output yet
             sendRoute()
         case .status(let s):
             IconModel.input(status: s, into: &icon)
@@ -451,6 +452,9 @@ final class AppController: NSObject, NSApplicationDelegate, PanelControllerDeleg
         io.onMicSilence = { [weak self] silent in
             MainActor.assumeIsolated { self?.micSilence(silent) }
         }
+        io.onDevicesChanged = { [weak self] in
+            MainActor.assumeIsolated { self?.devicesChanged() }
+        }
         // The user's saved choices (the app's defaults, docs/NATIVE.md §3.3 "handled in the app").
         let d = Prefs.store
         io.setPreferredDevices(input: d.string(forKey: "InputDevice"), output: d.string(forKey: "OutputDevice"))
@@ -546,7 +550,26 @@ final class AppController: NSObject, NSApplicationDelegate, PanelControllerDeleg
         link?.send(.other(type: "mic_silent", fields: ["input_label": .string(lastRoute?.input?.name ?? ""), "source": "native", "ms": 3000]))
     }
 
+    private var sentOutput: RouteMessage.Device??
+
+    /// The speaker a wake would play through (`output`, docs/NATIVE.md §3.2): the user's chosen
+    /// output if present, else the system default; nil when there is none. Sent in every mode
+    /// (listen included, whose route has no output) whenever it changes, so the daemon holds
+    /// updates nobody could hear (SPEC §6.15 "Away hold").
+    private func sendOutput(force: Bool = false) {
+        guard let io = audio, icon.linkUp else { return }
+        let outs = io.outputDevices()
+        let chosen = settings.selectedOutput.flatMap { id in outs.first { $0.id == id } }
+        let def = io.defaultDeviceID(input: false).flatMap { id in outs.first { $0.id == id } }
+        let d = (chosen ?? def).map { RouteMessage.Device(id: $0.id, name: $0.name, bluetooth: $0.bluetooth, headphones: $0.headphones) }
+        if !force, let s = sentOutput, s == d { return }
+        sentOutput = .some(d)
+        let device: JSONValue = d.map { .object(["name": .string($0.name), "bluetooth": .bool($0.bluetooth), "headphones": .bool($0.headphones ?? false)]) } ?? .null
+        link?.send(.other(type: "output", fields: ["device": device]))
+    }
+
     private func sendRoute() {
+        sendOutput()
         guard let io = audio, icon.linkUp, let r = lastRoute else { return }
         func dev(_ d: AudioDevice?) -> RouteMessage.Device? {
             d.map { RouteMessage.Device(id: $0.id, name: $0.name, bluetooth: $0.bluetooth, headphones: $0.headphones) }
@@ -762,6 +785,7 @@ final class AppController: NSObject, NSApplicationDelegate, PanelControllerDeleg
     /// default (never another device) and flash its footer icon (SPEC-DEVIATIONS "Devices in the footer").
     private func devicesChanged() {
         refreshDevices()
+        defer { sendOutput() }
         if DeviceMenu.lost(selected: settings.selectedInput, devices: settings.inputDevices) {
             log.log("device_lost", ["kind": "input"])
             settings.chooseInput(nil)

@@ -94,6 +94,18 @@ test('once linked: voice tools are registered, allowed without a prompt, and ans
   expect(d.events.some((e) => e.kind === 'context' && e.messages.length === 2)).toBe(true)
 })
 
+test('mcp__sotto__watch: registered once linked, answered through /control with the watch fields', async ($, on) => {
+  const clock = mock.clock(on)
+  const d: Daemon = { polls: 0, events: [], controls: [], state: STATE }
+  stubs(on, clock, d)
+  await $.session.start({ surface: 'terminal', isInteractive: true, cwd: '/work' } as any)
+  await settle(clock)
+  await $.tool.call({ tool: 'mcp__sotto__watch', tool_use_id: 'tw1', op: 'add', description: 'the deploy finishes', keywords: ['deploy'] } as any)
+  expect(d.controls.at(-1)).toMatchObject({ action: 'watch', op: 'add', description: 'the deploy finishes', keywords: ['deploy'], via: 'cli', session: { socket: SOCK } })
+  await $.tool.call({ tool: 'mcp__sotto__watch', tool_use_id: 'tw2', op: 'done', id: 'w1', text: 'It is up.' } as any)
+  expect(d.controls.at(-1)).toMatchObject({ action: 'watch', op: 'done', id: 'w1', text: 'It is up.' })
+})
+
 test('the band is the one surface: header, persona and voice dimmed, the last words; no status line; yields to a survey', async ($, on) => {
   const clock = mock.clock(on)
   const d: Daemon = { polls: 0, events: [], controls: [], state: STATE }
