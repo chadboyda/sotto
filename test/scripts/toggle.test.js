@@ -6,7 +6,7 @@ import assert from "node:assert/strict";
 import { readFileSync, existsSync, statSync, mkdirSync, writeFileSync, realpathSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { join } from "node:path";
-import { TOGGLE, ROOT, run, tempDir, rmDir, baseEnv, freePort, waitFor, isAlive, sleep, spawnBaseline } from "./helpers/run.js";
+import { TOGGLE, ROOT, run, tempDir, rmDir, baseEnv, freePort, waitFor, isAlive, sleep, spawnBaseline, underLoad, IDLE_SPAWN_MS } from "./helpers/run.js";
 import { startFakeDaemon } from "./helpers/fake-daemon.js";
 import { BUILTIN_PERSONAS, personaListMessage, unknownPersonaMessage, loadPersonas } from "../../daemon/personas.js";
 
@@ -88,11 +88,12 @@ function controlBodies(D) {
 describe("toggle.sh cold start", () => {
   test("spawns the stub detached, passes its /control reply through, fast", async () => {
     const { D, port, env } = await setup();
-    const r = await run(TOGGLE, { env, input: stdinFor("on") });
+    const { value: r, factor } = await underLoad(() => run(TOGGLE, { env, input: stdinFor("on") }));
     const out = parseOut(r);
     assert.equal(out.stopReason, "stub: on");
-    // Load allowance: 10 bare node spawns (~0.4 s unloaded; toggle.sh starts node).
-    const bound = 3500 + 10 * spawnBaseline().node;
+    // 3.5 s plus 10 idle node spawns (toggle.sh starts node), scaled by the
+    // load measured around the run.
+    const bound = (3500 + 10 * IDLE_SPAWN_MS.node) * factor;
     assert.ok(r.ms < bound, `took ${r.ms.toFixed(0)} ms (bound ${bound.toFixed(0)} ms)`);
     // Verbatim pass-through: exactly the stub's JSON.
     assert.equal(r.stdout, JSON.stringify({ continue: false, stopReason: "stub: on" }) + "\n");
@@ -372,11 +373,11 @@ describe("toggle.sh with the daemon down", () => {
   test("node too old and no bun -> early error with how to install, no spawn", async () => {
     const { bin, PATH } = fakeRuntimes({ node: 'echo v18.18.0' });
     const { D, env } = await setup({ PATH });
-    const r = await run(TOGGLE, { env, input: stdinFor("on") });
+    const { value: r, factor } = await underLoad(() => run(TOGGLE, { env, input: stdinFor("on") }));
     const out = parseOut(r);
     assert.equal(out.stopReason, "sotto: ERROR node on PATH is v18.18.0; sotto needs Node 22 or newer. Install Node 22 or newer (brew install node, nvm install 22, or nodejs.org), or Bun (bun.sh), then run /talk on again.");
     assert.ok(!existsSync(join(D, "daemon.pid")));
-    assert.ok(r.ms < 3000, `took ${r.ms.toFixed(0)} ms`);
+    assert.ok(r.ms < 3000 * factor, `took ${r.ms.toFixed(0)} ms (bound ${(3000 * factor).toFixed(0)} ms, load x${factor.toFixed(1)})`);
     void bin;
   });
 
