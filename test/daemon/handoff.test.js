@@ -76,6 +76,21 @@ test("isHandoffClaim: the live log's lines and persona handoff lines; past tense
   ]) assert.equal(isHandoffClaim(s), false, s);
 });
 
+test("isHandoffClaim: first-person handoffs (the voice is Claude, 0.6.8); results, status and greetings are not", () => {
+  for (const s of [
+    "On it.", "Okay, on it!", "I'm on it now.", "Let me check.", "I'll look into that.", "Give me a sec, I'm digging in.",
+    "Checking now.", "Yep, on it. ...moment of truth.", "Mm. Let me look.", "Sure. Running the suite now.", // live eval, 2026-10-14
+    "Boom, I'm on it.", "One sec.", "Let me dig in.", "I'm going to run the tests.", "Ball's in my court! Tests are spinning up.",
+    "Off I go. Hold my coffee.", "Heading out into the undergrowth.", "Ooh, okay, I'm on it. Moment of truth.",
+  ]) assert.equal(isHandoffClaim(s), true, s);
+  for (const s of [
+    "I found two failing tests.", "Done, the deploy's live.", "I'm still on it.", "I'm still working on it.",
+    "I'm looking forward to this.", "I need your approval in the terminal.", "Hey! I'm here in sotto. What are we doing?",
+    "Let me know if you want details.", "I checked, and everything passed.", "Looking good!", "I'll let you know when it's done.",
+    "I'm Claude, speaking as Moss.",
+  ]) assert.equal(isHandoffClaim(s), false, s);
+});
+
 test("isWaitingClaim: 'I'll be right here' and friends", () => {
   assert.equal(isWaitingClaim("I'll be right here with you."), true);
   assert.equal(isWaitingClaim("Stay with me a sec."), true);
@@ -116,7 +131,7 @@ test("A: 'Passing that to Claude now.' with no delegation: the daemon sends the 
   assert.match(fb[0].said, /Passing that to Claude/);
   assert.equal(h.voice.counters.handoff_fallbacks, 1);
   // The model is told the truth, with no delegation id it never issued.
-  const note = appends(ws, "thinking").find((e) => /Request sent to Claude Code: "can you check the build status"/.test(e.content));
+  const note = appends(ws, "thinking").find((e) => /Delegated: "can you check the build status"/.test(e.content));
   assert.ok(note);
   assert.equal(note.delegation_id, null);
   // The mirror does not send the same words again.
@@ -179,7 +194,7 @@ test("A: the model delegates after the daemon sent the words: no second send, no
   assert.equal(requests(h).length, 1, "not sent twice");
   assert.equal(h.voice.delegation.get("item_late").status, "mirrored");
   assert.ok(!appends(ws, "commentary").some((e) => /didn't catch/.test(e.content)));
-  assert.ok(appends(ws, "thinking").some((e) => e.delegation_id === "item_late" && /already reached Claude Code/.test(e.content)));
+  assert.ok(appends(ws, "thinking").some((e) => e.delegation_id === "item_late" && /already reached your Claude Code session/.test(e.content)));
 });
 
 // ---- B: the words that woke the voice --------------------------------------------------

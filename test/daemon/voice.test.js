@@ -259,7 +259,7 @@ test("SessionEnd: clear/resume ignored; exit of a dead owner turns voice off", a
   h.ownerAlive = false;
   h.voice.handleHook("SessionEnd", { reason: "prompt_input_exit" }, "/tmp/clv-owner-a.sock");
   await h.clock.advance(3000);
-  assert.equal(appends(ws, "commentary").at(-1).content, "The Claude Code session for proj-a ended, so voice is turning off.");
+  assert.equal(appends(ws, "commentary").at(-1).content, "The terminal session for proj-a ended, so voice is turning off.");
   await h.clock.advance(4000);
   assert.equal(h.voice.state, "closing");
   h.closeReply(ws);
@@ -291,7 +291,7 @@ test("owner switch while live: orphan, rewrite active, a spoken note (commentary
   assert.equal(r.message, "sotto: voice ON (proj-b), moved from proj-a.");
   assert.equal(h.voice.delegation.get("item_1").status, "orphaned");
   assert.match(fs.readFileSync(path.join(h.dataDir, "active"), "utf8"), /^\/tmp\/clv-owner-b\.sock\t/);
-  assert.match(appends(ws, "commentary").at(-1).content, /switched to a different Claude Code session, in the project proj-b/);
+  assert.match(appends(ws, "commentary").at(-1).content, /switched you to a different Claude Code session, in the project proj-b/);
   assert.ok(!appends(ws, "instructions").some((e) => /switched to a different/.test(e.content)), "an owner switch never interrupts the voice with instructions");
   assert.equal(h.voice.state, "live");
   assert.equal(h.fetchCalls.length, 1);
@@ -382,7 +382,7 @@ test("end to end in-process: speech → inbox → Stop → spoken result with th
   assert.deepEqual(c.at(-1), { type: "session.commentary.append", event_id: c.at(-1).event_id, delegation_id: "item_abc", content: relay("answer", "You are on main.") });
   assert.equal(h.voice.status().delegations[0].status, "answered");
   assert.equal(h.voice.status().claude.busy, false);
-  assert.ok(appends(ws, "thinking").some((e) => e.delegation_id === "item_abc" && /Request sent to Claude Code/.test(e.content)));
+  assert.ok(appends(ws, "thinking").some((e) => e.delegation_id === "item_abc" && /Delegated: /.test(e.content)));
 });
 
 test("permission prompts are spoken once", async (t) => {
@@ -392,7 +392,7 @@ test("permission prompts are spoken once", async (t) => {
   for (let i = 0; i < 2; i++) h.voice.handleHook("PermissionRequest", { tool_name: "Edit", tool_input: { file_path: "/a/hooks.json" } }, "/tmp/clv-owner-a.sock");
   const c = appends(ws, "commentary");
   assert.equal(c.length, 1);
-  assert.equal(c[0].content, "Claude needs your approval in the terminal to edit hooks.json.");
+  assert.equal(c[0].content, "I need your approval in the terminal to edit hooks.json.");
   assert.ok(h.sse.some((m) => m.type === "activity" && m.kind === "permission"));
 });
 

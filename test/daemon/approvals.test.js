@@ -101,7 +101,7 @@ test("commandFingerprint / findRunning: the approved command as Claude Code's sh
 });
 
 test("reminderSpeech: Claude, a background agent, several", () => {
-  assert.equal(reminderSpeech([{ label: "run a shell command" }]), "By the way, Claude's still waiting on your approval to run a shell command.");
+  assert.equal(reminderSpeech([{ label: "run a shell command" }]), "By the way, I'm still waiting on your approval to run a shell command.");
   assert.equal(reminderSpeech([{ label: "edit a.js", agent: true }]), "By the way, a background agent is still waiting on your approval to edit a.js.");
   assert.equal(reminderSpeech([{ label: "x" }, { label: "y" }]), "By the way, 2 approvals are still waiting for you in the terminal.");
 });
@@ -121,7 +121,7 @@ test("lifecycle: request, then PostToolUse for that tool_use_id, then the card a
   hook("UserPromptSubmit", { prompt: "deploy it", prompt_id: "p1" });
   hook("PreToolUse", { prompt_id: "p1", tool_use_id: "toolu_1", tool_name: "Bash", tool_input: { command: CMD } });
   hook("PermissionRequest", { prompt_id: "p1", tool_name: "Bash", tool_input: { command: CMD } });
-  assert.equal(said(ws).at(-1), "Claude needs your approval in the terminal to run a shell command.");
+  assert.equal(said(ws).at(-1), "I need your approval in the terminal to run a shell command.");
   assert.deepEqual([lastActivity(h).kind, lastActivity(h).text, lastActivity(h).agent], ["permission", "Claude needs approval to run a shell command", false]);
   assert.equal(h.voice.status().claude.approval.label, "run a shell command");
   assert.equal(h.voice.pageStatus().claude.approval.agent, false);
@@ -215,7 +215,7 @@ test("approvals are never deduped: same words twice, after a similar line, and u
   }
   await h.clock.advance(15_000);
   assert.deepEqual(said(ws), [
-    "Claude needs your approval in the terminal to run a shell command.",
+    "I need your approval in the terminal to run a shell command.",
     "A background agent is waiting for your approval in the terminal to run a shell command.",
     "Heads up, a background agent needs your approval in the terminal to run a shell command.", // rotated: same meaning
   ]);
@@ -249,7 +249,7 @@ test("reminder (fake clock): at 2 min and 5 min, at most twice, never over the u
   await h.clock.advance(1500);
   assert.equal(reminders().length, 0, "not while the user speaks");
   await h.clock.advance(3000);
-  assert.deepEqual(reminders(), ["By the way, Claude's still waiting on your approval to run a shell command."]);
+  assert.deepEqual(reminders(), ["By the way, I'm still waiting on your approval to run a shell command."]);
   await h.clock.advance(300_000 - 123_500 - 1000);
   assert.equal(reminders().length, 1);
   await h.clock.advance(1000);
@@ -297,5 +297,5 @@ test("a reminder while voice sleeps wakes a session to say it", async (t) => {
   assert.ok(h.commands().includes("connect:notify"), h.commands().join(","));
   ws = await h.goLive({ reason: "notify" });
   await h.clock.advance(6000);
-  assert.ok(said(ws).includes("By the way, Claude's still waiting on your approval to run a shell command."), said(ws).join(" | "));
+  assert.ok(said(ws).includes("By the way, I'm still waiting on your approval to run a shell command."), said(ws).join(" | "));
 });

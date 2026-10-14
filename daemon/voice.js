@@ -10,7 +10,7 @@ import { writeActive, removeActive, createPendingContext, removePendingContext, 
 import { Transcript, CAPTION_SETTLE_MS } from "./transcript.js";
 import { DelegationEngine, parseTaskNotifications } from "./delegation.js";
 import { Mirror, MIRROR_MODES } from "./mirror.js";
-import { materialOf, relay } from "./phrasing.js";
+import { materialOf, relay, QUESTION_LEAD } from "./phrasing.js";
 import { StyleWatch } from "./stylewatch.js";
 import { Narrator, elicitationSpeech, serverName, ToolLine, AgentTracker, TopLevelWork, reportSentence, isBackgroundLaunch, agentsText, cardText, permissionLabel, reminderSpeech } from "./policy.js";
 import { Approvals, commandFingerprint, findRunning } from "./approvals.js";
@@ -1165,7 +1165,7 @@ export class Voice {
     this.counters.mirror_sent++;
     if (this.delegation.claudeBusy && !this.modActive()) createPendingContext(this.paths);
     // Tell the voice model, so it can truthfully say Claude has it.
-    this.deliver({ kind: "thinking", content: `[sotto] What the user just said was also passed to Claude Code as background, not as a request: "${clip(text, 240).replace(/"/g, "'")}". Claude Code will act on any decision or request in it.`, delegationId: null });
+    this.deliver({ kind: "thinking", content: `[sotto] What the user just said was also passed to your Claude Code session as background, not as a request: "${clip(text, 240).replace(/"/g, "'")}". You will act there on any decision or request in it.`, delegationId: null });
   }
 
   /** Claude ended its turn with a question, or asked one (AskUserQuestion): its answer matters. */
@@ -1174,8 +1174,8 @@ export class Voice {
     if (!q) return;
     this.awaiting = { text: q, at: this.clock.now(), via };
     this.log.info("claude.awaiting", { via, chars: q.length });
-    const how = via === "ask" ? "Claude Code asked the user a question in the terminal and is waiting for the answer" : "Claude Code ended its turn with a question and is waiting for the user's answer";
-    this.deliver({ kind: "thinking", content: `${BG}${how}: "${q.replace(/"/g, "'")}". The user's next words may be that answer. An answer is a decision for Claude Code: delegate it.`, delegationId: null });
+    const how = via === "ask" ? "You asked the user a question in the terminal and are waiting for the answer" : "Your last reply in the terminal ended with a question, and you are waiting for the user's answer";
+    this.deliver({ kind: "thinking", content: `${BG}${how}: "${q.replace(/"/g, "'")}". The user's next words may be that answer. An answer is a decision: delegate it.`, delegationId: null });
     this.changed();
   }
 
@@ -1183,7 +1183,7 @@ export class Voice {
     if (!this.awaiting) return;
     this.awaiting = null;
     this.log.info("claude.awaiting", { cleared: true });
-    this.deliver({ kind: "thinking", content: `${BG}Claude Code got a new message and is working again; it is no longer waiting for an answer.`, delegationId: null });
+    this.deliver({ kind: "thinking", content: `${BG}You got a new message in the terminal and are working again; you are no longer waiting for an answer.`, delegationId: null });
     this.changed();
   }
 
@@ -1929,7 +1929,7 @@ export class Voice {
     this.timer("sessionEnd", () => {
       if (this.owner !== owner || !owner) return;
       if (isOwnerAlive(owner, this.probe)) return;
-      this.deliver({ kind: "commentary", content: `The Claude Code session for ${owner.project} ended, so voice is turning off.`, delegationId: null });
+      this.deliver({ kind: "commentary", content: `The terminal session for ${owner.project} ended, so voice is turning off.`, delegationId: null });
       this.timer("sessionEndOff", () => { if (this.owner === owner) this.gracefulOff("owner_gone"); }, 4000);
     }, 3000);
   }
@@ -2174,7 +2174,7 @@ export class Voice {
   onAsk(b) {
     const delegationId = typeof b.agent_id === "string" && b.agent_id ? null : this.delegation.activeVoiceId(b.prompt_id);
     const text = this.narrator.onQuestion(b.tool_name, b.tool_input, { toolUseId: b.tool_use_id, delegationId });
-    if (text) this.setAwaiting(text.replace(/^Claude's asking: /, "").replace(/ Answer in the terminal\.$/, ""), "ask");
+    if (text) this.setAwaiting(text.replace(QUESTION_LEAD, "").replace(/ Answer in the terminal\.$/, ""), "ask");
     if (text) this.activity("question", b.tool_name === "ExitPlanMode" ? "Claude's plan needs your approval" : "Claude is asking you a question");
   }
 

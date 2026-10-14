@@ -68,12 +68,13 @@ test("mirror: the assistant's words heard back during double talk are cut, the u
   const h = await harness(t);
   const ws = await h.goLive();
   let at = 1000;
-  for (const w of "I'll run the whole test suite and then open the pull request".split(" ")) {
+  // "We'll", not "I'll": "I'll run the…" is a first-person handoff (§6.20 A) and would arm the guard.
+  for (const w of "We'll run the whole test suite and then open the pull request".split(" ")) {
     ws.receive({ type: "session.output_transcript.delta", delta: " " + w, start_ms: at, end_ms: at + 200 });
     at += 200;
   }
   // The mic hears the assistant 300 ms late, and the user talks over it.
-  const heard = [["I'll run the whole", 1300], ["actually wait", 2100], ["test suite and then", 2500], ["let's skip the lint step", 3300]];
+  const heard = [["We'll run the whole", 1300], ["actually wait", 2100], ["test suite and then", 2500], ["let's skip the lint step", 3300]];
   for (const [text, s] of heard) {
     let t0 = s;
     for (const w of text.split(" ")) { ws.receive({ type: "session.input_transcript.delta", delta: " " + w, start_ms: t0, end_ms: t0 + 200 }); t0 += 200; }

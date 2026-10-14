@@ -17,15 +17,20 @@ import { speakable, sentences, clip } from "./speech.js";
 
 // ---- results: material to relay ---------------------------------------------------
 
-/** Separates a relay frame from Claude's own words (speaker.js strips up to it). */
-export const RELAY_MARK = "Claude said: ";
+/**
+ * Separates a relay frame from Claude's own words (materialOf strips up to it).
+ * Not "Claude said: ": the voice IS Claude (SPEC §8.1 "One voice"), and a
+ * frame that names Claude as a source is what it echoed ("Claude says…").
+ */
+export const RELAY_MARK = "Your result from the terminal: ";
 
 /** The relay rule every spoken result carries. */
 export const RELAY_RULES = "Tell the user the gist in your own words, speaking to them as \"you\", conversationally, in one to three short sentences, in your persona's own voice and style. " +
-  "Lead with the actual answer or outcome (the name, number or result itself), not just that Claude found or did something. " +
+  "This is your own work: speak in the first person (\"I found\", \"I fixed\", \"the deploy's live\"), never \"Claude found\" or \"Claude says\". " +
+  "Lead with the actual answer or outcome (the name, number or result itself), not just that you found or did something. " +
   "Don't read lists, labels, file paths or formatting aloud; mention details only if they matter or the user asks. " +
   "Stop when the news ends: no closing line about the user not needing to do anything.";
-const ONE_LINE = "Mention it in one short sentence, in your own words, in your persona's own voice and style; skip paths, ids and formatting, and add no closing line about the user not needing to do anything.";
+const ONE_LINE = "Mention it in one short sentence, in your own words and in the first person, in your persona's own voice and style; skip paths, ids and formatting, and add no closing line about the user not needing to do anything.";
 
 const quoteReq = (t, max) => clip(String(t || ""), max).replace(/"/g, "'");
 
@@ -49,15 +54,15 @@ export function relay(kind, material, { requestText = "" } = {}) {
     case "earlier":
       return `This answers the user's earlier request "${quoteReq(requestText, 160)}". ${RELAY_RULES}\n${RELAY_MARK}${m}`;
     case "mirror":
-      return `Claude's response to what the user just said to you. ${RELAY_RULES}\n${RELAY_MARK}${m}`;
+      return `Your response, from the terminal, to what the user just said to you. ${RELAY_RULES}\n${RELAY_MARK}${m}`;
     case "background":
       return `Background work for the user's earlier request${requestText ? ` "${quoteReq(requestText, 120)}"` : ""} finished. ${RELAY_RULES}\n${RELAY_MARK}${m}`;
     case "typed":
-      return `Claude finished something the user typed in the terminal. ${ONE_LINE}\n${RELAY_MARK}${m}`;
+      return `You finished something the user typed in the terminal. ${ONE_LINE}\n${RELAY_MARK}${m}`;
     case "bgwork":
       return `Background work the user started finished. ${ONE_LINE}\n${RELAY_MARK}${m}`;
     case "other":
-      return `Claude finished some work. ${ONE_LINE}\n${RELAY_MARK}${m}`;
+      return `You finished some work in the terminal. ${ONE_LINE}\n${RELAY_MARK}${m}`;
     case "watch":
       return `The user asked to be told when this happens: "${quoteReq(requestText, 120)}". It just did. ${RELAY_RULES}\n${RELAY_MARK}${m}`;
     case "call":
@@ -65,10 +70,10 @@ export function relay(kind, material, { requestText = "" } = {}) {
     case "away":
       return `While the user was away (no headphones or speaker connected), this came in. Start with "While you were away", then ${RELAY_RULES.charAt(0).toLowerCase()}${RELAY_RULES.slice(1)}\n${RELAY_MARK}${m}`;
     case "progress":
-      return `Claude's still working. If you mention it, one short sentence in your own words, no paths or formatting.\n${RELAY_MARK}${m}`;
+      return `You're still working in the terminal. If you mention it, one short sentence in your own words and in the first person, no paths or formatting.\n${RELAY_MARK}${m}`;
     case "answer":
     default:
-      return `Claude's reply to what the user asked. ${RELAY_RULES}\n${RELAY_MARK}${m}`;
+      return `Your answer to what the user asked, from your work in the terminal. ${RELAY_RULES}\n${RELAY_MARK}${m}`;
   }
 }
 
@@ -152,6 +157,27 @@ export function relayMaterial(md, max = 900) {
 const cap = (s) => (s ? s[0].toUpperCase() + s.slice(1) : s);
 const stop = (t) => String(t || "").replace(/[.!?…]*$/, ".");
 
+/** How a one-question notice starts (voice.js strips it to remember the open question). */
+export const QUESTION_LEAD = "Quick question for you: ";
+
+/**
+ * Claude Code's own notification text in the first person ("Claude needs your
+ * permission to use Bash" → "I need your permission to use Bash"): the voice
+ * says it as Claude (SPEC §8.1 "One voice").
+ */
+const FIRST_PERSON = [
+  [/\bClaude(?: Code)? needs\b/g, "I need"],
+  [/\bClaude(?: Code)? wants\b/g, "I want"],
+  [/\bClaude(?: Code)? has\b/g, "I have"],
+  [/\bClaude(?: Code)? is\b/g, "I'm"],
+  [/\bClaude(?: Code)?'s (?=\w+ing\b)/g, "I'm "],
+  [/\bClaude(?: Code)?'s\b/g, "my"],
+  [/\bClaude(?: Code)? (can|will|could|would)\b/g, "I $1"],
+];
+export function firstPerson(text) {
+  return FIRST_PERSON.reduce((t, [re, to]) => t.replace(re, to), String(text || ""));
+}
+
 /**
  * Spoken templates. Each variant is a function of its slots. Variant 0 is the
  * plainest. The fixed part of every variant stays under TEMPLATE_MAX_CHARS
@@ -159,10 +185,11 @@ const stop = (t) => String(t || "").replace(/[.!?…]*$/, ".");
  */
 export const TEMPLATES = Object.freeze({
   // Claude is blocked on a tool approval: always "approval" and "terminal".
+  // First person: the voice is Claude (SPEC §8.1 "One voice").
   permission: [
-    ({ label }) => `Claude needs your approval in the terminal to ${label}.`,
-    ({ label }) => `Heads up, Claude's waiting for your approval in the terminal to ${label}.`,
-    ({ label }) => `Claude wants to ${label}. It needs your approval in the terminal.`,
+    ({ label }) => `I need your approval in the terminal to ${label}.`,
+    ({ label }) => `Heads up, I'm waiting for your approval in the terminal to ${label}.`,
+    ({ label }) => `I want to ${label}. I need your approval in the terminal.`,
   ],
   // The same, from a subagent: the user may not know it runs.
   permissionAgent: [
@@ -172,8 +199,8 @@ export const TEMPLATES = Object.freeze({
   ],
   // Approvals still pending after a while (SPEC §6.10.4).
   reminder: [
-    ({ label }) => `By the way, Claude's still waiting on your approval to ${label}.`,
-    ({ label }) => `Just a reminder, Claude still needs your approval in the terminal to ${label}.`,
+    ({ label }) => `By the way, I'm still waiting on your approval to ${label}.`,
+    ({ label }) => `Just a reminder, I still need your approval in the terminal to ${label}.`,
   ],
   reminderAgent: [
     ({ label }) => `By the way, a background agent is still waiting on your approval to ${label}.`,
@@ -183,36 +210,36 @@ export const TEMPLATES = Object.freeze({
     ({ n }) => `By the way, ${n} approvals are still waiting for you in the terminal.`,
     ({ n }) => `Just a reminder, ${n} approvals are still waiting in the terminal.`,
   ],
-  // A permission Notification: Claude Code's own message, or none.
+  // A permission Notification: Claude Code's own message (in the first person), or none.
   permissionNote: [
-    ({ msg }) => (msg ? `Claude needs you in the terminal: ${stop(msg)}` : "Claude's waiting for your approval in the terminal."),
-    ({ msg }) => (msg ? `Claude's waiting on you in the terminal: ${stop(msg)}` : "There's an approval waiting for you in the terminal."),
-    ({ msg }) => (msg ? `Something needs you in the terminal: ${stop(msg)}` : "Claude needs your approval in the terminal."),
+    ({ msg }) => (msg ? `I need you in the terminal: ${stop(firstPerson(msg))}` : "I'm waiting for your approval in the terminal."),
+    ({ msg }) => (msg ? `I'm waiting on you in the terminal: ${stop(firstPerson(msg))}` : "There's an approval waiting for you in the terminal."),
+    ({ msg }) => (msg ? `Something needs you in the terminal: ${stop(firstPerson(msg))}` : "I need your approval in the terminal."),
   ],
   // Claude went idle waiting for the user.
   idle: [
-    () => "Claude's waiting for you in the terminal.",
-    () => "Over to you, Claude's waiting in the terminal.",
-    () => "Claude's stopped and is waiting on you in the terminal.",
+    () => "I'm waiting for you in the terminal.",
+    () => "Over to you, I'm waiting in the terminal.",
+    () => "I've stopped, and I'm waiting on you in the terminal.",
   ],
   // AskUserQuestion with one question (q already ends in "?" and carries its options).
   questionOne: [
-    ({ q }) => `Claude's asking: ${q} Answer in the terminal.`,
-    ({ q }) => `Claude has a question: ${q} You can answer in the terminal.`,
-    ({ q }) => `Quick question from Claude: ${q} Answer it in the terminal.`,
+    ({ q }) => `${QUESTION_LEAD}${q} Answer in the terminal.`,
+    ({ q }) => `I have a question: ${q} You can answer in the terminal.`,
+    ({ q }) => `Quick one for you: ${q} Answer it in the terminal.`,
   ],
   questionMany: [
-    ({ n, list }) => `Claude has ${n} questions for you in the terminal. ${list}`,
-    ({ n, list }) => `Claude's got ${n} questions for you, answer them in the terminal. ${list}`,
+    ({ n, list }) => `I have ${n} questions for you in the terminal. ${list}`,
+    ({ n, list }) => `I've got ${n} questions for you, answer them in the terminal. ${list}`,
   ],
   questionNone: [
-    () => "Claude has a question for you in the terminal.",
-    () => "Claude's asking you something in the terminal.",
+    () => "I have a question for you in the terminal.",
+    () => "I'm asking you something in the terminal.",
   ],
   // ExitPlanMode.
   plan: [
-    ({ title }) => `Claude's plan is ready for your approval in the terminal${title ? `: ${title}` : ""}.`,
-    ({ title }) => `Claude has a plan ready${title ? `: ${title}` : ""}. It needs your approval in the terminal.`,
+    ({ title }) => `My plan's ready for your approval in the terminal${title ? `: ${title}` : ""}.`,
+    ({ title }) => `I have a plan ready${title ? `: ${title}` : ""}. It needs your approval in the terminal.`,
     ({ title }) => `The plan's ready for your approval in the terminal${title ? `: ${title}` : ""}.`,
   ],
   // An MCP server asks the user for input.
@@ -222,16 +249,16 @@ export const TEMPLATES = Object.freeze({
   ],
   // A background Claude session needs the user.
   sessionInput: [
-    ({ msg }) => `A background Claude session needs your input${msg ? `: ${stop(msg)}` : "."}`,
-    ({ msg }) => `One of the background Claude sessions needs you${msg ? `: ${stop(msg)}` : "."}`,
+    ({ msg }) => `A background session needs your input${msg ? `: ${stop(msg)}` : "."}`,
+    ({ msg }) => `One of the background sessions needs you${msg ? `: ${stop(msg)}` : "."}`,
   ],
   usageReset: [
     () => "Your usage limit has reset. Press Enter in the terminal to continue.",
     () => "The usage limit's reset. Press Enter in the terminal to keep going.",
   ],
   usageGaveUp: [
-    () => "Claude stopped waiting for the usage limit, so the task didn't continue.",
-    () => "Claude gave up waiting on the usage limit, so that task didn't pick back up.",
+    () => "I stopped waiting for the usage limit, so the task didn't continue.",
+    () => "I gave up waiting on the usage limit, so that task didn't pick back up.",
   ],
   // A main-thread step failed (walkthrough only). No exit codes aloud.
   toolFailure: [

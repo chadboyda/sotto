@@ -2,7 +2,7 @@
 // Replays of what the voice said live on 2026-09-24.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { StyleWatch, findings, repeatedPhrase, closingKey, openerKey, isBannedOpener, correction, UTTERANCE_GAP_MS, CORRECTION_GAP_MS } from "../../daemon/stylewatch.js";
+import { StyleWatch, findings, repeatedPhrase, closingKey, openerKey, isBannedOpener, correction, thirdPartyClaude, UTTERANCE_GAP_MS, CORRECTION_GAP_MS } from "../../daemon/stylewatch.js";
 import { createFakeClock } from "../helpers/fake-clock.js";
 import { makeHarness } from "../helpers/daemon-harness.js";
 
@@ -67,15 +67,23 @@ test("replay: reflexive agreement openers are banned; a repeated opener is caugh
 
 test("a natural conversation gets no corrections", async () => {
   const { sent } = await replay([
-    "Hey, I'm connected to Claude in sotto.",
-    "Sure, I'll pass that to Claude.",
+    "Hey, I'm here in sotto.",
+    "Sure, let me check.",
     "Oh nice, the parser tests pass now, and it's merged.",
     "Hm, that's annoying. Two tests failed on the date parsing.",
-    "Claude wants to run a shell command. It needs your approval in the terminal.",
+    "I want to run a shell command. I need your approval in the terminal.",
     "Yes, I can hear you.",
     "We fixed the wake bug, so normal speech wakes it now. Want the details?",
   ], { gap: 20000 });
   assert.deepEqual(sent, []);
+});
+
+test("third-party Claude: corrected once as a family, with one reminder; an identity answer is fine", async () => {
+  for (const s of ["Passing that to Claude now.", "Claude says one test failed.", "Claude's on it.", "I'll check with Claude."]) assert.ok(thirdPartyClaude(s), s);
+  for (const s of ["I'm Claude, speaking as Moss.", "It's Claude's voice in Sotto.", "The work happens in my Claude Code session.", "I found one failing test.", "On it.", ""]) assert.equal(thirdPartyClaude(s), null, s);
+  const { sent } = await replay(["Sure, passing that to Claude.", "Claude found one failing test.", "Claude's on it.", "Claude says it's merged.", "Claude's still on it.", "Who am I? I'm Claude, speaking as Moss."], { gap: 20000 });
+  assert.deepEqual(sent.map((s) => s.key), ["claude:third", "claude:third:reminder"]);
+  assert.match(sent[0].text, /You said "Sure, passing that to Claude", talking about Claude as someone else\. You are Claude: speak of the work in the first person/);
 });
 
 test("closing and opener keys", () => {

@@ -31,13 +31,13 @@ test("instructions: 'done' only on a Claude result for that request; otherwise w
   // "That one's done" with no result saying so.
   for (const policy of ["quiet", "milestones", "walkthrough"]) {
     const t = renderForPolicy("sotto", policy);
-    assert.ok(t.includes("Say that something is done, fixed, finished or ready only when a result from Claude Code for that request says so."));
-    assert.ok(t.includes(`Until then say, in your own words, that Claude's working on it or that you'll pass it on, and delegate it.`));
+    assert.ok(t.includes("Say that something is done, fixed, finished or ready only when a result for that request says so."));
+    assert.ok(t.includes(`Until then say, in your own words, that you're on it, and delegate it.`));
     assert.ok(t.includes("If the user asks whether something is done and no result says so, do not guess: delegate the question."));
   }
   // SPEC §8.1 carries the same template text.
   const spec = fs.readFileSync(new URL("../../docs/SPEC.md", import.meta.url), "utf8");
-  assert.ok(spec.includes("Say that something is done, fixed, finished or ready only when a result from Claude Code for that request says so."));
+  assert.ok(spec.includes("Say that something is done, fixed, finished or ready only when a result for that request says so."));
 });
 
 test("render sanitizes quotes in the project name", () => {
@@ -47,11 +47,11 @@ test("render sanitizes quotes in the project name", () => {
 
 test("greetings and runtime instructions", () => {
   assert.equal(greeting("start", "quiet", "p"), 'Say only "Ready." Then stop and listen.');
-  assert.match(greeting("start", "milestones", "proj"), /connected to Claude Code in proj/);
+  assert.match(greeting("start", "milestones", "proj"), /ready in proj/);
   assert.match(greeting("resume", "walkthrough", "p"), /^Say "I'm back\."/);
   assert.equal(greeting("reconnect", "milestones", "p"), null);
   assert.equal(policyChangeInstruction("quiet"), `The update preference has changed. ${POLICY_TEXT.quiet} Apply it from now on without announcing it.`);
-  assert.match(ownerSwitchInstruction("other"), /in the project other\..*connected to other\./);
+  assert.match(ownerSwitchInstruction("other"), /in the project other\..*working in other\./);
 });
 
 test("seed: header, exchanges, voice history only on resume, pending result", () => {
@@ -62,7 +62,7 @@ test("seed: header, exchanges, voice history only on resume, pending result", ()
     pendingResult: "It passed.",
   });
   assert.ok(s.startsWith("[Background reference; not user speech]\nProject: proj   Folder: folder   Git branch: main\nVoice session: start."));
-  assert.ok(s.includes("User: hi\nClaude Code: hello"));
+  assert.ok(s.includes("User: hi\nYou, in the terminal: hello"));
   assert.ok(!s.includes("Earlier voice conversation"));
   assert.ok(s.endsWith("Result that arrived while voice was paused: It passed."));
 

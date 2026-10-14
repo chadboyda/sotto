@@ -2,7 +2,7 @@
 // material, not read as a quote; notices with rotating variants.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { relay, relayMaterial, materialOf, stripLabels, isTagline, say, TEMPLATES, TEMPLATE_MAX_CHARS, Rotation, RELAY_MARK } from "../../daemon/phrasing.js";
+import { relay, relayMaterial, materialOf, stripLabels, isTagline, say, TEMPLATES, TEMPLATE_MAX_CHARS, Rotation, RELAY_MARK, firstPerson, QUESTION_LEAD } from "../../daemon/phrasing.js";
 import { route, Narrator } from "../../daemon/policy.js";
 import { renderForPolicy, cantHearInstruction, CANT_HEAR_LINES, personaBlock } from "../../daemon/prompt.js";
 import { isBannedOpener, openerKey } from "../../daemon/stylewatch.js";
@@ -31,7 +31,9 @@ test("prompt: the conversational speech rules are in every rendered prompt, befo
     assert.match(t, /contractions/);
     assert.match(t, /Relay, don't read\./);
     assert.match(t, /Never read out lists, headings, labels/);
-    assert.match(t, /Say "Claude", not "Claude Code"/);
+    assert.match(t, /You are Claude, so the work is yours: speak of it in the first person\./);
+    assert.match(t, /Never talk about Claude or Claude Code as someone else/);
+    assert.match(t, /If the user asks who you are, you're Claude, speaking as Moss\./);
     assert.match(t, /React like a person/);
     assert.match(t, /never open two replies the same way/);
     assert.match(t, /Never open with "Claude Code's answer", "Update:"/);
@@ -57,14 +59,14 @@ test("results are material to relay, never a quote prefixed \"Claude Code's answ
     const acts = route("voice_result", policy, { text: REPORT, delegationId: "d1" });
     const c = acts.find((a) => a.kind === "commentary");
     assert.doesNotMatch(c.content, /Claude Code's answer/);
-    assert.match(c.content, /^Claude's reply to what the user asked\. Tell the user the gist in your own words, speaking to them as "you", conversationally, in one to three short sentences, in your persona's own voice and style\./);
+    assert.match(c.content, /^Your answer to what the user asked, from your work in the terminal\. Tell the user the gist in your own words, speaking to them as "you", conversationally, in one to three short sentences, in your persona's own voice and style\./);
     assert.match(c.content, /Don't read lists, labels, file paths or formatting aloud/);
     const m = materialOf(c.content);
     assert.equal(m, "Fixed the wake bug. Normal speech wakes the voice now. lowered in wake.js from 0.08 to 0.05. 3 new cases in wake.test.js.");
     assert.ok(estTokens(c.content) <= MAX_APPEND_TOKENS);
     // The full reply stays available silently for follow-ups.
     const full = acts.filter((a) => a.kind === "thinking").map((a) => a.content).join(" ");
-    assert.match(full, /full reply, for follow-up questions/);
+    assert.match(full, /Your full reply in the terminal, for follow-up questions/);
     assert.match(full, /Threshold/);
   }
   for (const [source, payload] of [["mirror_result", { text: "Found it. The window started late." }], ["typed_result", { text: "Done. Tests pass." }], ["background_voice", { text: "Counted 3 files.", requestText: "count files" }], ["background_result", { text: "All green." }]]) {
@@ -145,9 +147,9 @@ test("Narrator rotates approvals and idle lines; a session never repeats the sam
   n.onPermission("Edit", { file_path: "/a/b.js" });
   const said = out.filter((a) => a.kind === "commentary").map((a) => a.content);
   assert.deepEqual(said, [
-    "Claude needs your approval in the terminal to run a shell command.",
-    "Heads up, Claude's waiting for your approval in the terminal to run a shell command.",
-    "Claude wants to edit b.js. It needs your approval in the terminal.",
+    "I need your approval in the terminal to run a shell command.",
+    "Heads up, I'm waiting for your approval in the terminal to run a shell command.",
+    "I want to edit b.js. I need your approval in the terminal.",
   ]);
   for (let i = 1; i < said.length; i++) assert.notEqual(openerKey(said[i]), openerKey(said[i - 1]));
 });
@@ -162,4 +164,18 @@ test("cant-hear: rotating variants, each said as given", () => {
 test("Rotation counts per key", () => {
   const r = new Rotation();
   assert.deepEqual([r.next("a"), r.next("a"), r.next("b"), r.next("a")], [0, 1, 0, 2]);
+});
+
+test("one voice (SPEC §8.1): no spoken notice names Claude as someone else; Claude Code's own notices go first person", () => {
+  const slots = { label: "run a shell command", n: 2, list: "First: A? Second: B?", q: "Ship it?", title: "Refactor auth", who: "Slack", msg: "" };
+  for (const [key, list] of Object.entries(TEMPLATES)) {
+    for (let v = 0; v < list.length; v++) assert.doesNotMatch(say(key, v, slots), /\bClaude\b/, `${key}[${v}]`);
+  }
+  assert.equal(firstPerson("Claude needs your permission to use Bash"), "I need your permission to use Bash");
+  assert.equal(firstPerson("Claude is waiting for your input"), "I'm waiting for your input");
+  assert.equal(firstPerson("Claude's waiting on you"), "I'm waiting on you");
+  assert.equal(firstPerson("Claude Code has a question"), "I have a question");
+  assert.equal(say("permissionNote", 0, { msg: "Claude needs your permission to use Bash" }), "I need you in the terminal: I need your permission to use Bash.");
+  assert.ok(say("questionOne", 0, { q: "Ship it?" }).startsWith(QUESTION_LEAD));
+  assert.ok(!RELAY_MARK.includes("Claude"));
 });

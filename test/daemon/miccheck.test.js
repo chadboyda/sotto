@@ -15,7 +15,7 @@ test("instructions: mic checks are answered by the voice, never delegated", () =
   const t = renderForPolicy("sotto", "milestones");
   assert.match(t, /Mic checks are yours to answer, right away/);
   assert.match(t, /"Yes, I can hear you\."/);
-  assert.match(t, /Never hand a mic check to Claude Code, and never say you will check with Claude\./);
+  assert.match(t, /Never delegate a mic check, and never say you'll check on it\./);
   const dont = t.slice(t.indexOf("Do not delegate to the backend when:"));
   assert.match(dont, /checks the mic or the connection: "hello\?", "can you hear me\?", "testing", "is this working\?", "are you there\?"/);
   const del = t.slice(t.indexOf("Delegate to the backend when:"), t.indexOf("Do not delegate to the backend when:"));
@@ -41,7 +41,7 @@ test("mirror: pure mic checks and greetings are not mirrored; project feedback s
 });
 
 test("greeting: a start within minutes of the last one is short and varied", () => {
-  assert.match(greeting("start", "milestones", "dev"), /connected to Claude Code in dev/);
+  assert.match(greeting("start", "milestones", "dev"), /ready in dev/);
   assert.equal(greeting("start", "milestones", "dev", { recent: 1 }), `Say only "${RECENT_GREETINGS[0]}" Then stop and listen.`);
   assert.equal(greeting("start", "milestones", "dev", { recent: 2 }), `Say only "${RECENT_GREETINGS[1]}" Then stop and listen.`);
   assert.notEqual(greeting("start", "walkthrough", "dev", { recent: 1 }), greeting("start", "walkthrough", "dev", { recent: 2 }));
