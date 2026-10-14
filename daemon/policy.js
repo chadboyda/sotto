@@ -9,8 +9,8 @@ import { speakable, summary, tokenChunks, fitTokens, firstSentences, clip, sente
 import { policyChangeInstruction } from "./prompt.js";
 import { relay, relayMaterial, say, Rotation } from "./phrasing.js";
 
-/** Silent-context prefix for Claude's reply (never spoken as is). */
-const REPLY = "Claude's reply: ";
+/** Silent-context prefix for Claude's reply (never spoken as is; the voice is Claude, §8.1). */
+const REPLY = "Your reply in the terminal: ";
 /** A bare acknowledgement ("Noted.", "Got it."): nothing to say to the user. */
 export function isAck(text) {
   const t = String(text || "").trim();
@@ -38,7 +38,7 @@ function completionSentence(items, p) {
   }
   return `Finished: ${oxford(items.map((it) => it.what), "and")}.`;
 }
-const FULL = "Claude's full reply, for follow-up questions (abridged): ";
+const FULL = "Your full reply in the terminal, for follow-up questions (abridged): ";
 
 // Every append is clipped to the (estimated) token budget, not a char count.
 const act = (kind, delegationId, content) => ({ kind, delegationId: delegationId ?? null, content: fitTokens(content) });
@@ -52,7 +52,7 @@ const act = (kind, delegationId, content) => ({ kind, delegationId: delegationId
 export function resultParts(text) {
   const sum = relayMaterial(text, 900);
   const full = speakable(text);
-  const S = sum ? REPLY + sum : "Claude finished, with nothing to report.";
+  const S = sum ? REPLY + sum : "Done, with nothing to report.";
   const R = full.length > sum.length ? tokenChunks(BG + FULL + full).slice(0, 2) : [];
   // The part of the reply after the summary, for walkthrough narration.
   const rest = full.length > sum.length && full.startsWith(sum) ? full.slice(sum.length).trim() : (full.length > sum.length ? sentences(full).slice(sentences(sum).length).join(" ") : "");
@@ -76,7 +76,7 @@ export function route(source, policy, payload = {}, ctx = {}) {
       // delegation id the current session does not know. Speak it with a null
       // id and say which request it answers.
       const id = payload.earlier ? null : payload.delegationId;
-      const said = sum || "Claude finished, with nothing to report.";
+      const said = sum || "Done, with nothing to report.";
       const out = [act("commentary", id, payload.earlier ? relay("earlier", said, { requestText: payload.requestText }) : relay("answer", said))];
       if (p === "walkthrough" && rest) for (const c of tokenChunks(rest).slice(0, 2)) out.push(act("commentary", id, c));
       for (const r of R) out.push(act("thinking", null, r));
@@ -115,7 +115,7 @@ export function route(source, policy, payload = {}, ctx = {}) {
       // has it). Anything else answers what the user said: spoken briefly
       // under every policy, like a short answer.
       const { sum, S, R } = resultParts(payload.text);
-      if (!sum || isAck(sum)) return [act("thinking", null, `${BG}Claude Code has seen what the user just told you and had nothing to add.`)];
+      if (!sum || isAck(sum)) return [act("thinking", null, `${BG}Your Claude Code session has seen what the user just told you and had nothing to add.`)];
       const said = p === "walkthrough" ? sum : clip(firstSentences(sum, 2), 300);
       return [act("commentary", null, relay("mirror", said)), ...R.map((r) => act("thinking", null, r))];
     }
@@ -174,11 +174,11 @@ export function route(source, policy, payload = {}, ctx = {}) {
       return out;
     }
     case "idle":
-      if (p === "quiet" || !payload.speak) return [act("thinking", null, BG + "Claude Code is idle, waiting for the user in the terminal.")];
+      if (p === "quiet" || !payload.speak) return [act("thinking", null, BG + "You are idle in the terminal, waiting for the user.")];
       return [act("commentary", null, say("idle", payload.variant))];
     case "tool_failure": {
       const said = say("toolFailure", payload.variant, { label: payload.label || "a step" });
-      const note = BG + `Claude Code tool failure: ${cap(payload.label || "a step")} failed${payload.exit ? ` with exit code ${payload.exit}` : ""}.${payload.detail ? ` ${payload.detail}` : ""}`;
+      const note = BG + `Tool failure in the terminal: ${cap(payload.label || "a step")} failed${payload.exit ? ` with exit code ${payload.exit}` : ""}.${payload.detail ? ` ${payload.detail}` : ""}`;
       if (p === "walkthrough" && ctx.canSpeakFailure) return [act("commentary", null, said), act("thinking", null, note)];
       return [act("thinking", null, note)];
     }
@@ -194,7 +194,7 @@ export function route(source, policy, payload = {}, ctx = {}) {
     }
     case "tool_milestone": {
       const labels = (payload.labels || []).filter(Boolean);
-      return labels.length ? [act("thinking", null, `${BG}Claude progress: ${labels.join("; ")}`)] : [];
+      return labels.length ? [act("thinking", null, `${BG}Your progress in the terminal: ${labels.join("; ")}`)] : [];
     }
     case "permission":
       // Spoken under every policy, never deduped away (SPEC §6.10.4). A
@@ -402,7 +402,7 @@ export function questionSpeech(input = {}, variant = 0) {
   return fitTokens(say("questionMany", variant, { n: parts.length, list: parts.map((t, i) => `${ORDINAL[i]}: ${t}`).join(" ") }));
 }
 
-/** Spoken form of an ExitPlanMode input: "Claude's plan is ready for your approval…: <title>." */
+/** Spoken form of an ExitPlanMode input: "My plan's ready for your approval…: <title>." */
 export function planSpeech(input = {}, policy = "milestones", variant = 0) {
   const plan = typeof input?.plan === "string" ? input.plan : "";
   const h = /^\s{0,3}#{1,6}\s+(.+?)\s*#*\s*$/m.exec(plan);
@@ -412,7 +412,7 @@ export function planSpeech(input = {}, policy = "milestones", variant = 0) {
     const body = summary(h ? plan.replace(h[0], "") : plan, 300);
     if (body) t += ` In short: ${body}`;
   }
-  return { text: t, reference: plan ? `Claude's proposed plan (awaiting the user's approval in the terminal): ${speakable(plan)}` : "" };
+  return { text: t, reference: plan ? `Your proposed plan (awaiting the user's approval in the terminal): ${speakable(plan)}` : "" };
 }
 
 /** A speakable MCP server name ("claude_ai_Slack" → "Slack"). */
@@ -786,15 +786,15 @@ export class Narrator {
         this.route("notice", { text: say("usageGaveUp", this.rot.next("usageGaveUp")) });
         return "spoken";
       case "resumed":
-        if (this.policy() === "quiet") this.route("context", { text: "Claude Code resumed the task after the usage limit reset." });
-        else this.route("completion", { items: [{ what: "the usage-limit wait", detail: "Claude Code picked the task back up.", level: "milestones" }] });
+        if (this.policy() === "quiet") this.route("context", { text: "You resumed the task after the usage limit reset." });
+        else this.route("completion", { items: [{ what: "the usage-limit wait", detail: "I picked the task back up.", level: "milestones" }] });
         return "spoken";
       case "completion":
-        this.onCompletion({ what: "a background Claude session", detail: msg, level: "milestones" });
+        this.onCompletion({ what: "a background session", detail: msg, level: "milestones" });
         return "batched";
       case "ignore": return "ignored";
       default:
-        if (msg) this.route("context", { text: `Claude Code notification: ${msg}` });
+        if (msg) this.route("context", { text: `Terminal notification: ${msg}` });
         return "context";
     }
   }

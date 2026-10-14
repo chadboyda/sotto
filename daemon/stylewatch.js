@@ -14,7 +14,10 @@
 //  - tagline: a stock "nothing needed from you" line, or the same short closing
 //             sentence as an earlier utterance;
 //  - opener:  a banned opener (reflexive agreement or apology, "Update:", …),
-//             or the same first two words as an earlier utterance.
+//             or the same first two words as an earlier utterance;
+//  - claude:  Claude named as someone else ("I'll pass that to Claude",
+//             "Claude says…"): the voice IS Claude (SPEC §8.1 "One voice").
+//             An identity answer ("I'm Claude, speaking as Moss") is fine.
 // Each phrase is corrected once per session (stock tag lines are one family:
 // "no action for you", "nothing for you to do" … share one correction, plus
 // one reminder if they keep coming), at most one correction per
@@ -46,6 +49,19 @@ export const BANNED_OPENERS = [
   /^update\s*:/i,
 ];
 export const isBannedOpener = (text) => BANNED_OPENERS.some((re) => re.test(String(text || "").trim()));
+
+// Claude as itself: "I'm Claude", "this is Claude", "Claude, speaking as…",
+// "Claude's voice", "as Claude". Anything else naming Claude is a third party.
+const CLAUDE_SELF = /\b(?:i ?a?m|i am|this is|it ?s|it is|me,?)\s+(?:actually\s+|just\s+|still\s+|really\s+)?claude\b|\bclaude,? (?:speaking|talking)\b|\bclaude ?s (?:own )?voice\b|\bas claude\b|\bclaude (?:code )?(?:is|am) me\b|\bmy claude code\b/;
+
+/** A sentence that talks about Claude as someone else, or null. */
+export function thirdPartyClaude(text) {
+  for (const s of splitSentences(text)) {
+    const t = s.toLowerCase().replace(/[’']/g, " ").replace(/\s+/g, " ");
+    if (/\bclaude\b/.test(t) && !CLAUDE_SELF.test(t)) return s.replace(/[.!?…]+$/, "");
+  }
+  return null;
+}
 
 const words = (s) => String(s || "").toLowerCase().replace(/[’']/g, "'").replace(/[^a-z0-9' ]+/g, " ").split(/\s+/).filter(Boolean);
 const splitSentences = (t) => String(t || "").replace(/\s+/g, " ").trim().split(/(?<=[.!?…])\s+/).filter(Boolean);
@@ -108,6 +124,8 @@ export function findings(text, earlier = []) {
   } else if (ck && ck.split(" ").length >= 3 && earlier.some((e) => closingKey(e) === ck)) {
     out.push({ why: "tagline", phrase: ck });
   }
+  const third = thirdPartyClaude(text);
+  if (third) out.push({ why: "claude", phrase: third });
   const trimmed = String(text || "").trim();
   if (isBannedOpener(trimmed)) out.push({ why: "opener", phrase: trimmed.split(/[,.!?]/)[0].trim() });
   else {
@@ -127,6 +145,8 @@ export function correction({ why, phrase }) {
       return `You said ${q(phrase)} more than once in one reply. Say each thing once. ${tail}`;
     case "tagline":
       return `You keep adding tag lines like ${q(phrase)}. Stop: never close an update with a reassurance, and if nothing is needed from the user, say nothing about it. Don't repeat a phrase you've already said this session. ${tail}`;
+    case "claude":
+      return `You said ${q(phrase)}, talking about Claude as someone else. You are Claude: speak of the work in the first person ("on it", "let me check", "I found", "I need your OK in the terminal"), never "I'll pass that to Claude", "Claude says" or "Claude's working on it". ${tail}`;
     case "opener":
     default:
       return `You started a reply with ${q(phrase)}. Don't open with reflexive agreement, apology or a stock phrase, and don't start two replies the same way: acknowledge feedback at most once per topic, then just answer or act. ${tail}`;
@@ -149,6 +169,7 @@ export class StyleWatch {
     this.history = []; // [{text, at}]
     this.corrected = new Set(); // "why:phrase" keys already corrected
     this.stockSince = 0; // stock tag lines said since their correction
+    this.claudeSince = 0; // third-party "Claude" lines said since their correction
     this.lastCorrectionAt = -Infinity;
     this.pending = []; // findings waiting for the correction gap
   }
@@ -176,7 +197,12 @@ export class StyleWatch {
     const found = findings(u.text, this.history.map((h) => h.text));
     this.history.push({ text: u.text.trim(), at: now });
     for (const f of found) {
-      let key = f.stock ? "tagline:stock" : `${f.why}:${f.phrase.toLowerCase()}`;
+      // Third-party "Claude" is one family too, like the stock tag lines.
+      let key = f.stock ? "tagline:stock" : f.why === "claude" ? "claude:third" : `${f.why}:${f.phrase.toLowerCase()}`;
+      if (f.why === "claude" && this.corrected.has(key)) {
+        if (++this.claudeSince < STOCK_REMIND_AFTER) continue;
+        key = "claude:third:reminder";
+      }
       if (f.stock && this.corrected.has(key)) {
         if (++this.stockSince < STOCK_REMIND_AFTER) continue;
         key = "tagline:stock:reminder";
@@ -207,6 +233,7 @@ export class StyleWatch {
     this.history = [];
     this.corrected.clear();
     this.stockSince = 0;
+    this.claudeSince = 0;
     this.pending = [];
     this.lastCorrectionAt = -Infinity;
   }

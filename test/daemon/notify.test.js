@@ -28,14 +28,14 @@ function narrator(policy = "milestones") {
 
 test("questionSpeech: question and option labels, concise", () => {
   const t = questionSpeech({ questions: [{ question: "Which layout?", header: "Layout", options: [{ label: "A" }, { label: "B" }, { label: "C" }], multiSelect: false }] });
-  assert.equal(t, "Claude's asking: Which layout? Options: A, B, or C. Answer in the terminal.");
+  assert.equal(t, "Quick question for you: Which layout? Options: A, B, or C. Answer in the terminal.");
   const two = questionSpeech({ questions: [
     { question: "Which DB?", options: [{ label: "Postgres" }, { label: "SQLite" }] },
     { question: "Which tests", multiSelect: true, options: [{ label: "Unit" }, { label: "E2E" }] },
   ] });
-  assert.equal(two, "Claude has 2 questions for you in the terminal. First: Which DB? Options: Postgres or SQLite. Second: Which tests? Pick any of: Unit and E2E.");
-  assert.equal(questionSpeech({}), "Claude has a question for you in the terminal.");
-  assert.equal(questionSpeech({ questions: "nope" }), "Claude has a question for you in the terminal.");
+  assert.equal(two, "I have 2 questions for you in the terminal. First: Which DB? Options: Postgres or SQLite. Second: Which tests? Pick any of: Unit and E2E.");
+  assert.equal(questionSpeech({}), "I have a question for you in the terminal.");
+  assert.equal(questionSpeech({ questions: "nope" }), "I have a question for you in the terminal.");
   // Variants rotate; each still says where to answer.
   const input = { questions: [{ question: "Which layout?", options: [{ label: "A" }, { label: "B" }] }] };
   const vs = [0, 1, 2].map((v) => questionSpeech(input, v));
@@ -55,7 +55,7 @@ test("questionSpeech sanitizes: no code, paths, URLs or secrets are read out", (
   assert.ok(!t.includes("pw@"), t);
   assert.ok(!t.includes("https://"), t);
   assert.match(t, /voice\.js/);
-  assert.match(t, /^Claude's asking: /);
+  assert.match(t, /^Quick question for you: /);
   assert.match(t, /Answer in the terminal\.$/);
 });
 
@@ -63,17 +63,17 @@ test("questionSpeech stays within the append budget with 4 long questions", () =
   const q = { question: "word ".repeat(200) + "?", options: Array.from({ length: 10 }, (_, i) => ({ label: `option number ${i} `.repeat(8) })) };
   const t = questionSpeech({ questions: [q, q, q, q, q] });
   assert.ok(t.length < 1400, String(t.length));
-  assert.match(t, /^Claude has 4 questions/);
+  assert.match(t, /^I have 4 questions/);
 });
 
 test("planSpeech: title from the first heading; the plan itself is reference only", () => {
   const p = planSpeech({ plan: "## Refactor auth\n\n1. Extract `token.js`.\n2. Add tests.", planFilePath: "/Users/me/.claude/plans/x.md" });
-  assert.equal(p.text, "Claude's plan is ready for your approval in the terminal: Refactor auth.");
+  assert.equal(p.text, "My plan's ready for your approval in the terminal: Refactor auth.");
   assert.match(p.reference, /Extract token\.js/);
   assert.ok(!p.reference.includes("/Users"));
   const w = planSpeech({ plan: "# Refactor auth\n\nMove the token logic out. Then add tests." }, "walkthrough");
   assert.match(w.text, /Refactor auth\. In short: Move the token logic out\./);
-  assert.equal(planSpeech({}).text, "Claude's plan is ready for your approval in the terminal.");
+  assert.equal(planSpeech({}).text, "My plan's ready for your approval in the terminal.");
 });
 
 test("elicitationSpeech / serverName never read URLs", () => {
@@ -104,7 +104,7 @@ test("parseTaskNotifications: the real CLI 2.1.281 payload", () => {
 
 test("route: question/attention/notice are spoken under every policy", () => {
   for (const p of POLICIES) {
-    assert.deepEqual(route("question", p, { text: "Claude's asking: x?", delegationId: "d1" }), [{ kind: "commentary", delegationId: "d1", content: "Claude's asking: x?" }]);
+    assert.deepEqual(route("question", p, { text: "Quick question for you: x?", delegationId: "d1" }), [{ kind: "commentary", delegationId: "d1", content: "Quick question for you: x?" }]);
     const withRef = route("question", p, { text: "plan ready.", reference: "the plan" });
     assert.deepEqual(withRef.map((a) => a.kind), ["commentary", "thinking"]);
     assert.equal(withRef[1].content, BG + "the plan");
@@ -131,7 +131,7 @@ test("route: background turns and turns nobody asked for", () => {
     const v = route("background_voice", p, { text, requestText: "count the files" });
     assert.equal(v[0].kind, "commentary", p);
     assert.match(v[0].content, /^Background work for the user's earlier request "count the files" finished\. /);
-    assert.ok(v[0].content.endsWith("Claude said: The agent found 3 files. It also checked the tests.") || p === "walkthrough", v[0].content);
+    assert.ok(v[0].content.endsWith("Your result from the terminal: The agent found 3 files. It also checked the tests.") || p === "walkthrough", v[0].content);
   }
   assert.deepEqual(route("background_result", "quiet", { text }).map((a) => a.kind), ["thinking"]);
   assert.equal(route("background_result", "milestones", { text })[0].content, relay("bgwork", "The agent found 3 files."));
@@ -160,8 +160,8 @@ test("route: typed_result under milestones is one short sentence", () => {
 
 test("route: idle and tool_failure", () => {
   assert.deepEqual(route("idle", "quiet", { speak: true }).map((a) => a.kind), ["thinking"]);
-  assert.equal(route("idle", "milestones", { speak: true })[0].content, "Claude's waiting for you in the terminal.");
-  assert.equal(route("idle", "milestones", { speak: true, variant: 1 })[0].content, "Over to you, Claude's waiting in the terminal.");
+  assert.equal(route("idle", "milestones", { speak: true })[0].content, "I'm waiting for you in the terminal.");
+  assert.equal(route("idle", "milestones", { speak: true, variant: 1 })[0].content, "Over to you, I'm waiting in the terminal.");
   assert.deepEqual(route("idle", "milestones", { speak: false }).map((a) => a.kind), ["thinking"]);
   for (const p of ["quiet", "milestones"]) assert.deepEqual(route("tool_failure", p, { label: "running tests", exit: "1" }, { canSpeakFailure: true }).map((a) => a.kind), ["thinking"]);
   const w = route("tool_failure", "walkthrough", { label: "running tests", exit: "1" }, { canSpeakFailure: true });
@@ -179,7 +179,7 @@ test("onQuestion: spoken once per tool call, whether PreToolUse or PermissionReq
   assert.equal(n.onQuestion("AskUserQuestion", input, {}), null, "PermissionRequest for the same call (no tool_use_id)");
   assert.equal(n.onPermission("AskUserQuestion", input), null, "never 'approval to use AskUserQuestion'");
   assert.equal(n.onToolUse("AskUserQuestion", input), null, "not a milestone");
-  assert.deepEqual(spoken(), ["Claude's asking: Which layout? Options: A or B. Answer in the terminal."]);
+  assert.deepEqual(spoken(), ["Quick question for you: Which layout? Options: A or B. Answer in the terminal."]);
   assert.equal(n.onQuestion("AskUserQuestion", input, { toolUseId: "toolu_1" }), null, "a repeat is deduped although the next variant differs");
   n.onQuestion("AskUserQuestion", { questions: [{ question: "Another?" }] }, { toolUseId: "toolu_2" });
   assert.equal(spoken().length, 2);
@@ -188,7 +188,7 @@ test("onQuestion: spoken once per tool call, whether PreToolUse or PermissionReq
 test("ExitPlanMode: spoken under quiet, plan text as reference", () => {
   const { n, out } = narrator("quiet");
   n.onQuestion("ExitPlanMode", { plan: "# Ship it\n\nStep one." }, { toolUseId: "t" });
-  assert.equal(out[0].content, "Claude's plan is ready for your approval in the terminal: Ship it.");
+  assert.equal(out[0].content, "My plan's ready for your approval in the terminal: Ship it.");
   assert.equal(out[1].kind, "thinking");
 });
 
@@ -199,7 +199,7 @@ test("Notification permission_prompt is deduped against PermissionRequest; spoke
   assert.equal(spoken().length, 1);
   await clock.advance(ATTENTION_DEDUPE_MS + 1);
   assert.equal(n.onNotification({ notification_type: "permission_prompt", message: "Claude needs your permission to use Bash" }), "spoken");
-  assert.equal(spoken().at(-1), "Claude needs you in the terminal: Claude needs your permission to use Bash.");
+  assert.equal(spoken().at(-1), "I need you in the terminal: I need your permission to use Bash.");
 });
 
 test("Notification types: attention spoken in quiet; ignored ones silent; unknown ones as context", () => {
@@ -211,9 +211,9 @@ test("Notification types: attention spoken in quiet; ignored ones silent; unknow
   assert.equal(n.onNotification({ notification_type: "quota_auto_resume_stale" }), "spoken");
   assert.equal(n.onNotification({ notification_type: "quota_auto_resume_disabled" }), "spoken");
   assert.deepEqual(spoken(), [
-    "A background Claude session needs your input: Session 2 asks a question.",
+    "A background session needs your input: Session 2 asks a question.",
     "Your usage limit has reset. Press Enter in the terminal to continue.",
-    "Claude stopped waiting for the usage limit, so the task didn't continue.",
+    "I stopped waiting for the usage limit, so the task didn't continue.",
   ]);
   assert.equal(n.onNotification({ notification_type: "something_new", message: "hello there" }), "context");
   assert.equal(out.at(-1).kind, "thinking");
@@ -315,7 +315,7 @@ test("AskUserQuestion PreToolUse → spoken question, attached to the voice requ
   hook("PermissionRequest", { prompt_id: "p1", tool_name: "AskUserQuestion", tool_input: { questions: [{ question: "Which layout?", options: [{ label: "Grid" }, { label: "Stack" }] }] } });
   const c = appends(ws, "commentary");
   assert.equal(c.length, 1);
-  assert.equal(c[0].content, "Claude's asking: Which layout? Options: Grid or Stack. Answer in the terminal.");
+  assert.equal(c[0].content, "Quick question for you: Which layout? Options: Grid or Stack. Answer in the terminal.");
   assert.equal(c[0].delegation_id, "item_q");
   assert.ok(h.sse.some((m) => m.type === "activity" && m.kind === "question"));
 });
@@ -435,7 +435,7 @@ test("background task turn: a voice-launched agent's completion is spoken as an 
   await h.clock.advance(3000);
   const c = appends(ws, "commentary").slice(before);
   assert.equal(c.length, 1);
-  assert.match(c[0].content, /^Background work for the user's earlier request "Ask Claude to count the files in the background" finished\. [\s\S]*\nClaude said: The helper counted 3 files\./);
+  assert.match(c[0].content, /^Background work for the user's earlier request "Ask Claude to count the files in the background" finished\. [\s\S]*\nYour result from the terminal: The helper counted 3 files\./);
 });
 
 test("background task turn: typed launch and unknown launch both spoken briefly under milestones", async (t) => {
@@ -519,7 +519,7 @@ test("held low-priority update becomes thinking after 20 s of continuous speech"
 
 test("the observed repeat: internal progress-line SubagentStops are not agents finishing", async (t) => {
   const { h, ws, hook } = await live(t, { idle_seconds: 7200 }); // the pattern runs for minutes: no idle sleep
-  const said = () => appends(ws, "commentary").map((e) => e.content).filter((c) => /finished|is done/.test(c) && !c.includes("Claude said: "));
+  const said = () => appends(ws, "commentary").map((e) => e.content).filter((c) => /finished|is done/.test(c) && !c.includes("Your result from the terminal: "));
   // Claude (running as `--agent claude`) launches two background agents; launching is not finishing.
   hook("UserPromptSubmit", { agent_type: "claude", prompt: "build it", prompt_id: "p1" });
   hook("PreToolUse", { agent_type: "claude", prompt_id: "p1", tool_name: "Agent", tool_use_id: "toolu_1", tool_input: { description: "web fix", prompt: "x", run_in_background: true } });

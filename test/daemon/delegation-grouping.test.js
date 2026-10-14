@@ -47,7 +47,7 @@ test("live regression: a paused request reaches Claude whole, from 'Cool' to 'wh
   assert.doesNotMatch(content, /asked Claude Code|Mm-hmm/, "assistant speech never leaks in");
   assert.doesNotMatch(content, /^\[sotto voice\] \.\.\./, "nothing was trimmed");
   // The Live model hears the whole request back too.
-  assert.match(h.appends.at(-1).content, /Request sent to Claude Code: "Cool\. What else/);
+  assert.match(h.appends.at(-1).content, /Delegated: "Cool\. What else/);
 });
 
 test("pauses of several seconds and assistant backchannels between groups stay in one request", async () => {

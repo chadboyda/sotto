@@ -650,7 +650,7 @@ test("persona switch on the native app (SPEC §4.6): the primary session is re-c
   const ws2 = await h.startPrimary();
   assert.notEqual(ws2, ws1);
   const start = ws2.sent.find((m) => m.type === "session.start");
-  assert.match(start.session.instructions, /You are June/);
+  assert.match(start.session.instructions, /you speak as June\./);
   assert.equal(start.session.audio.output.voice, "coral");
   assert.equal(h.voice.live.persona, "june");
   assert.equal(h.voice.pageStatus().persona, "june");

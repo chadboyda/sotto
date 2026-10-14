@@ -165,7 +165,7 @@ test("mirror: a late delegation of words Claude is already answering is closed q
   assert.equal(h.engine.get("item_late").status, "mirrored");
   const note = h.appends.find((a) => a.id === "item_late");
   assert.equal(note.kind, "thinking");
-  assert.match(note.content, /already reached Claude Code a moment ago/);
+  assert.match(note.content, /already reached your Claude Code session a moment ago/);
 });
 
 test("mirror: decisions mode sends only decisions; off sends nothing", async () => {
@@ -231,7 +231,7 @@ test("replay (naming decision): 'I agree…' and 'Sotto is a clever name' reach 
   for (const m of mirrors) assert.match(m.msgId, /^clv-mirror-/);
   assert.equal(h.voice.counters.mirror_sent, 2);
   // The voice model is told, so it can truthfully say Claude has it.
-  const notes = ws.sent.filter((e) => e.type === "session.thinking.append" && /also passed to Claude Code as background/.test(e.content));
+  const notes = ws.sent.filter((e) => e.type === "session.thinking.append" && /also passed to your Claude Code session as background/.test(e.content));
   assert.equal(notes.length, 2);
   assert.ok(h.log.entries.some((l) => l.ev === "mirror.send" && l.ok === true));
 });
@@ -292,12 +292,12 @@ test("mirror turn: 'Noted.' stays silent, an answer is spoken", async (t) => {
   h.voice.handleHook("Stop", { prompt_id: "pm", last_assistant_message: "Noted." }, OWNER);
   await h.clock.advance(100);
   const think = ws.sent.filter((e) => e.type === "session.thinking.append").map((e) => e.content);
-  assert.ok(think.some((c) => /Claude Code has seen what the user just told you and had nothing to add/.test(c)));
+  assert.ok(think.some((c) => /Your Claude Code session has seen what the user just told you and had nothing to add/.test(c)));
   assert.ok(!ws.sent.some((e) => e.type === "session.commentary.append" && /Noted/.test(e.content)), "Noted is never spoken");
   h.voice.handleHook("UserPromptSubmit", { prompt: `[sotto voice ${nonce}] ${MIRROR_TAG} why did that get cut off, seems like a bug`, prompt_id: "pm2" }, OWNER);
   h.voice.handleHook("Stop", { prompt_id: "pm2", last_assistant_message: "Found it: the request window started too late. I fixed it and added a test." }, OWNER);
   await h.clock.advance(5000);
-  assert.ok(ws.sent.some((e) => e.type === "session.commentary.append" && /^Claude's response to what the user just said[\s\S]*\nClaude said: Found it: the request window/.test(e.content)));
+  assert.ok(ws.sent.some((e) => e.type === "session.commentary.append" && /^Your response, from the terminal, to what the user just said[\s\S]*\nYour result from the terminal: Found it: the request window/.test(e.content)));
 });
 
 // ---- routing -----------------------------------------------------------------------------
@@ -309,7 +309,7 @@ test("mirror_result: 'Noted.' is silent; a real answer is spoken briefly under e
     assert.deepEqual(a.map((x) => x.kind), ["thinking"]);
     const b = route("mirror_result", p, { text: "I recorded Sotto as the project name. I will use it in the new repo." });
     assert.equal(b[0].kind, "commentary");
-    assert.match(b[0].content, /^Claude's response to what the user just said to you\. [\s\S]*\nClaude said: I recorded Sotto as the project name/);
+    assert.match(b[0].content, /^Your response, from the terminal, to what the user just said to you\. [\s\S]*\nYour result from the terminal: I recorded Sotto as the project name/);
   }
 });
 
@@ -336,7 +336,7 @@ test("Stop ending in a question: silent 'waiting for the answer' note, status, s
   assert.match(note.content, /"Should I also bump the version\?".*delegate it/);
   assert.equal(h.voice.status().claude.awaiting_input, true);
   const seed = buildSeed({ project: "p", cwd: "/p", branch: "main", awaiting: h.voice.awaiting.text });
-  assert.match(seed, /Claude Code is waiting for the user's answer to: Should I also bump the version\?/);
+  assert.match(seed, /In the terminal, you are waiting for the user's answer to: Should I also bump the version\?/);
   h.voice.handleHook("UserPromptSubmit", { prompt: "yes", prompt_id: "p2" }, OWNER);
   assert.equal(h.voice.status().claude.awaiting_input, false);
   assert.ok(ws.sent.some((e) => e.type === "session.thinking.append" && /no longer waiting for an answer/.test(e.content)));
@@ -355,11 +355,13 @@ test("AskUserQuestion also marks Claude as waiting", async (t) => {
 test("instructions: decisions, feedback and casual requests are delegated; no false promises", () => {
   const t = renderForPolicy("sotto", "milestones");
   const del = t.slice(t.indexOf("Delegate to the backend when:"), t.indexOf("Do not delegate to the backend when:"));
-  for (const re of [/makes a decision, states a preference, agrees or disagrees, approves or rejects something, picks an option or a name, or answers a question Claude Code asked/,
+  for (const re of [/makes a decision, states a preference, agrees or disagrees, approves or rejects something, picks an option or a name, or answers a question you asked/,
     /gives feedback, reports a bug/, /even casually or in passing/, /When in doubt, delegate\./]) assert.match(del, re);
-  assert.match(t, /Never say you have noted, recorded, marked, saved, scheduled or started something, or that you told or asked Claude Code something, unless you delegated it just now\./);
+  assert.match(t, /Never say you have noted, recorded, marked, saved, scheduled or started something unless you delegated it just now\./);
   assert.match(t, /Never promise to tell the user something later unless you delegated it\./);
-  assert.match(t, /"I'll pass that to Claude"/);
+  // One voice (§8.1): "on it" in its own words, never "I'll pass that to Claude".
+  assert.match(t, /Instead say, in your own words, that you're on it, and delegate it\./);
+  assert.match(t, /never "I'll tell Claude", "I'll pass that to Claude"/);
   assert.match(t, /never delegate a change you merely suggested, or after silence or noise/);
   const dont = t.slice(t.indexOf("Do not delegate to the backend when:"));
   assert.match(dont, /The user only greets you, makes small talk, or thanks you\./);

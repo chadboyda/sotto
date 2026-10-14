@@ -74,7 +74,7 @@ test("a notify wake nobody answers says the update and sleeps again, nothing lef
   assert.equal(h.log.find("wake.request").length, 1);
   const ws = await h.startPrimary();
   await h.clock.advance(2000);
-  assert.match(appends(ws, "commentary").at(-1).content, /Claude said: The deploy finished\./);
+  assert.match(appends(ws, "commentary").at(-1).content, /Your result from the terminal: The deploy finished\./);
   ws.receive({ type: "session.output_transcript.delta", delta: " The deploy's done, all thirteen up.", start_ms: 1, end_ms: 2 });
   assert.deepEqual(h.voice.pendingResults, []);
   assert.equal(h.voice.pendingResult, null);
@@ -270,7 +270,7 @@ test("recap: the log keeps the last 20 updates' words (no relay frame), with tim
   log.add(relay("typed", `Update ${RECAP_MAX + 4}.`), 99_000, "typed_result");
   assert.equal(log.size, RECAP_MAX, "the same update twice is one");
   assert.match(recapSeedLine(log.recent(2)), /^Updates already told to the user, oldest first[\s\S]*Update 23\.[\s\S]*Update 24\./);
-  assert.match(recapCommentary(log.recent()), /^The user asked what they missed\.[\s\S]*Claude said: [\s\S]*Update 24\./);
+  assert.match(recapCommentary(log.recent()), /^The user asked what they missed\.[\s\S]*Your result from the terminal: [\s\S]*Update 24\./);
   assert.match(recapCommentary([]), /Nothing new has come in/);
 });
 

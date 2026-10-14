@@ -404,7 +404,7 @@ test("a main-thread turn with no prompt seen wakes (continuation); a subagent's 
   h.voice.handleHook("Stop", { prompt_id: "p_cont", last_assistant_message: "All four research agents reported. The plan is ready." }, OWNER);
   await h.clock.advance(3000);
   assert.ok(h.commands().includes("connect:notify"), h.commands().join(","));
-  assert.match(h.voice.pendingResult.text, /Claude finished some work[\s\S]*All four research agents reported\./);
+  assert.match(h.voice.pendingResult.text, /You finished some work in the terminal[\s\S]*All four research agents reported\./);
 });
 
 test("quiet: a continuation turn while asleep never wakes", async (t) => {

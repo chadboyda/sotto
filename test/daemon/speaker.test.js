@@ -80,7 +80,7 @@ test("held items are released highest priority first, FIFO within a priority", a
 test("a question cuts in only at a sentence boundary", async () => {
   const { clock, q, sent } = makeQ();
   q.onOutput("So the build is", 0, 1000);
-  q.enqueue(c("question", "Claude's asking: which layout?"));
+  q.enqueue(c("question", "Quick question for you: which layout?"));
   await clock.advance(300);
   assert.equal(sent.length, 0, "mid-sentence: wait");
   q.onOutput(" green.", 1000, 1400);
@@ -195,14 +195,14 @@ test("swap: items queued while suspended wait for the new session, in order, onc
   q.suspend();
   q.enqueue(c("typed_result", "Claude finished: tests pass."));
   q.enqueue(c("typed_result", "Claude finished: tests pass."));
-  q.enqueue(c("question", "Claude's asking: red or blue?"));
+  q.enqueue(c("question", "Quick question for you: red or blue?"));
   await clock.advance(HOLD_MAX_MS + 1000); // no demotion while waiting for a session
   assert.equal(sent.length + demoted.length, 0);
   assert.equal(q.size, 2, "the duplicate was dropped");
   q.resume();
-  assert.equal(sent[0].content, "Claude's asking: red or blue?");
+  assert.equal(sent[0].content, "Quick question for you: red or blue?");
   await clock.advance(COMMENTARY_PREROLL_MS + 300);
-  assert.deepEqual(sent.map((a) => a.content), ["Claude's asking: red or blue?", "Claude finished: tests pass."]);
+  assert.deepEqual(sent.map((a) => a.content), ["Quick question for you: red or blue?", "Claude finished: tests pass."]);
 });
 
 test("outside a swap, a repeated text is a new event and is spoken again", async () => {
@@ -269,7 +269,7 @@ test("a mirror reply restating the answer just spoken is dropped; a new answer l
 
 test("questions and approvals are never dropped as repeats", async () => {
   const { clock, q, sent } = makeQ();
-  const ask = "Claude's asking: Which layout do you want for the settings drawer panel? Options: Grid or Stack. Answer in the terminal.";
+  const ask = "Quick question for you: Which layout do you want for the settings drawer panel? Options: Grid or Stack. Answer in the terminal.";
   q.enqueue(c("question", ask));
   await clock.advance(COMMENTARY_PREROLL_MS + 100);
   q.enqueue(c("question", ask.replace("want", "prefer")));

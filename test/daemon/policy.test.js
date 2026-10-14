@@ -22,7 +22,7 @@ test("voice_result: commentary(id, S) (+ thinking R when longer), all policies",
     assert.ok(l[0].content.includes(RELAY_MARK + "Result. The tests pass."));
     assert.ok(l.slice(1).length >= 1 && l.slice(1).length <= 2);
     for (const a of l.slice(1)) { assert.equal(a.kind, "thinking"); assert.equal(a.delegationId, null); }
-    assert.ok(l[1].content.startsWith(BG + "Claude's full reply, for follow-up questions (abridged): "));
+    assert.ok(l[1].content.startsWith(BG + "Your full reply in the terminal, for follow-up questions (abridged): "));
   }
   const w = route("voice_result", "walkthrough", { text: LONG, delegationId: "d1" });
   assert.deepEqual(kinds(w).slice(0, 3), ["commentary:d1", "commentary:d1", "commentary:d1"]);
@@ -33,12 +33,12 @@ test("voice_result: commentary(id, S) (+ thinking R when longer), all policies",
 test("stale_result: background thinking with the request text", () => {
   for (const p of ["quiet", "milestones", "walkthrough"]) {
     const a = route("stale_result", p, { text: SHORT, delegationId: "d1", requestText: 'what "branch"' });
-    assert.deepEqual(a, [{ kind: "thinking", delegationId: null, content: `${BG}Result for the earlier request "what 'branch'": Claude's reply: ${SHORT}` }]);
+    assert.deepEqual(a, [{ kind: "thinking", delegationId: null, content: `${BG}Result for the earlier request "what 'branch'": Your reply in the terminal: ${SHORT}` }]);
   }
 });
 
 test("typed_result per policy", () => {
-  assert.deepEqual(route("typed_result", "quiet", { text: SHORT }), [{ kind: "thinking", delegationId: null, content: BG + "Claude's reply: " + SHORT }]);
+  assert.deepEqual(route("typed_result", "quiet", { text: SHORT }), [{ kind: "thinking", delegationId: null, content: BG + "Your reply in the terminal: " + SHORT }]);
   const text3 = "One done. Two done. Three done.";
   // Milestones: one short sentence (§6.10.2), so a typed turn never crowds the voice.
   assert.deepEqual(route("typed_result", "milestones", { text: text3 }), [{ kind: "commentary", delegationId: null, content: relay("typed", "One done.") }]);
@@ -58,9 +58,9 @@ test("progress_text: thinking unless walkthrough may speak", () => {
 
 test("tool_milestone, permission and policy_change", () => {
   assert.deepEqual(route("tool_milestone", "walkthrough", { labels: ["reading a.js", "searching the code"] }),
-    [{ kind: "thinking", delegationId: null, content: BG + "Claude progress: reading a.js; searching the code" }]);
+    [{ kind: "thinking", delegationId: null, content: BG + "Your progress in the terminal: reading a.js; searching the code" }]);
   assert.deepEqual(route("permission", "quiet", { label: "run a shell command" }),
-    [{ kind: "commentary", delegationId: null, content: "Claude needs your approval in the terminal to run a shell command." }]);
+    [{ kind: "commentary", delegationId: null, content: "I need your approval in the terminal to run a shell command." }]);
   const pc = route("policy_change", "milestones", { policy: "quiet" });
   assert.equal(pc[0].kind, "instructions");
   assert.match(pc[0].content, /^The update preference has changed\. Update preference: Quiet\./);
@@ -161,7 +161,7 @@ test("cardText: Claude's words without markdown, code or paths, a sentence or tw
 
 test("resultParts: empty text is handled", () => {
   const r = resultParts("");
-  assert.equal(r.S, "Claude finished, with nothing to report.");
+  assert.equal(r.S, "Done, with nothing to report.");
   assert.deepEqual(r.R, []);
 });
 
@@ -182,7 +182,7 @@ test("milestone batching: one thinking per 3 s, joined, duplicates dropped", asy
   assert.equal(out.length, 0);
   await clock.advance(1);
   assert.equal(out.length, 1);
-  assert.equal(out[0].content, BG + "Claude progress: looking through the code");
+  assert.equal(out[0].content, BG + "Your progress in the terminal: looking through the code");
   assert.equal(out[0].source, "tool_milestone");
   n.onToolUse("Grep", {}); // same as the last label sent → dropped
   n.onToolUse("Bash", { command: "cd /x && ls" }); // busywork: never a milestone
@@ -222,7 +222,7 @@ test("permission: a repeated hook for the same call is spoken once; every other 
   assert.equal(n.onPermission("Bash", { command: "npm test" }, { id: "toolu_2", agent: true }), "run a shell command");
   assert.equal(n.onPermission("Bash", { command: "npm test" }, { id: "toolu_2", agent: true }), null, "same approval id");
   assert.deepEqual(out.slice(2).map((a) => a.content), [
-    "Claude wants to run a shell command. It needs your approval in the terminal.", // third main-thread approval: variant 2
+    "I want to run a shell command. I need your approval in the terminal.", // third main-thread approval: variant 2
     "A background agent is waiting for your approval in the terminal to run a shell command.",
   ]);
   assert.deepEqual(out.slice(2).map((a) => a.dedupeKey), ["approval:toolu_1", "approval:toolu_2"], "keyed by approval, not by text");

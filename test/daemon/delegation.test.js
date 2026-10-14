@@ -148,7 +148,7 @@ test("E3: success sends a thinking note; busy send creates pending-context", asy
   assert.equal(rec.sent_while_busy, true);
   assert.equal(h.pendingCreated, 1);
   assert.equal(h.counters.inbox_sent, 1);
-  assert.deepEqual(h.appends[0], { kind: "thinking", id: "item_1", content: '[sotto] Request sent to Claude Code: "also check lint". Claude Code is working on it; there is no result yet.' });
+  assert.deepEqual(h.appends[0], { kind: "thinking", id: "item_1", content: '[sotto] Delegated: "also check lint". You are working on it in your Claude Code session; there is no result yet.' });
 });
 
 test("E3: inbox failure → failed, commentary, liveness check on no_socket/refused", async () => {
@@ -159,14 +159,14 @@ test("E3: inbox failure → failed, commentary, liveness check on no_socket/refu
   await h.clock.advance(700);
   assert.equal(rec.status, "failed");
   assert.equal(h.counters.inbox_failed, 1);
-  assert.equal(h.appends[0].content, "I couldn't reach Claude Code for proj. Voice is turning off.");
+  assert.equal(h.appends[0].content, "I couldn't reach the terminal session for proj. Voice is turning off.");
   assert.equal(h.liveness, 1);
 
   h.inboxResult = { ok: false, code: "timeout" };
   h.say("try once more please", 5000);
   h.create("item_2", 5400);
   await h.clock.advance(700);
-  assert.equal(h.appends[1].content, "I couldn't reach Claude Code. Please try again.");
+  assert.equal(h.appends[1].content, "I couldn't reach the terminal session. Please try again.");
   assert.equal(h.liveness, 1);
 });
 
@@ -206,7 +206,7 @@ test("E4: typed prompts become background thinking; slash and pasted are skipped
   h.engine.onHook("UserPromptSubmit", { prompt: "/clear" });
   h.engine.onHook("UserPromptSubmit", { prompt: "look <pasted_content id=1>" });
   assert.equal(h.engine.claudeBusy, true);
-  assert.deepEqual(h.appends, [{ kind: "thinking", id: null, content: "[Background reference; not user speech] The user typed to Claude Code: refactor the parser" }]);
+  assert.deepEqual(h.appends, [{ kind: "thinking", id: null, content: "[Background reference; not user speech] The user typed to you in the terminal: refactor the parser" }]);
 });
 
 
@@ -313,9 +313,9 @@ test("E7: StopFailure answers the newest in-flight record and speaks the error",
   h.engine.onHook("UserPromptSubmit", { prompt: rec.content });
   h.engine.onStopFailure({ error: "rate_limit" });
   assert.equal(rec.status, "answered");
-  assert.deepEqual(h.appends.at(-1), { kind: "commentary", content: "Claude Code hit an error: it hit a rate limit.", id: "item_1" });
+  assert.deepEqual(h.appends.at(-1), { kind: "commentary", content: "I hit an error: it hit a rate limit.", id: "item_1" });
   h.engine.onStopFailure({ error: "weird" });
-  assert.deepEqual(h.appends.at(-1), { kind: "commentary", content: "Claude Code hit an error: an API error.", id: null });
+  assert.deepEqual(h.appends.at(-1), { kind: "commentary", content: "I hit an error: an API error.", id: null });
   assert.equal(h.engine.claudeBusy, false);
 });
 

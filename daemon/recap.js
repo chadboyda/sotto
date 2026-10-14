@@ -60,7 +60,7 @@ export function recapSeedLine(items) {
 export function recapCommentary(items, { since = 0 } = {}) {
   const fresh = items.filter((it) => it.at >= since);
   const use = (fresh.length ? fresh : items).slice(-6);
-  if (!use.length) return "The user asked what they missed. Nothing new has come in from Claude: say so in a few words, in your persona's own voice.";
+  if (!use.length) return "The user asked what they missed. Nothing new has come in: say so in a few words, in your persona's own voice.";
   const list = use.map((it) => `[${clockTime(it.at)}] ${it.text}`).join("\n");
   return "The user asked what they missed. Give a short recap of these updates, newest last, in one to three sentences in your own words and your persona's voice; say roughly when only if it helps. Don't read the times or any formatting aloud.\n" +
     `${RELAY_MARK}${list}`;

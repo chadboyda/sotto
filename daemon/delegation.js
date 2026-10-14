@@ -420,7 +420,7 @@ export class DelegationEngine {
       this.lastSentAt = rec.sent_at;
       if (busy) this.fx.createPendingContext();
       this.fx.counters.inbox_sent++;
-      this.fx.append("thinking", `[sotto] Request sent to Claude Code: "${clip(reqText, 300).replace(/"/g, "'")}". Claude Code is working on it; there is no result yet.`, this.idFor(rec));
+      this.fx.append("thinking", requestSentNote(reqText), this.idFor(rec));
       // The held timer is the classic inbox's inference (§6.9 E3.7): a message the
       // mod took is put in by the session itself and never held (§6.21).
       if (!busy && res.via !== "mod") this.timer(() => this.checkHeld(rec), HELD_MS);
@@ -430,8 +430,8 @@ export class DelegationEngine {
       this.fx.counters.inbox_failed++;
       const gone = code === "no_socket" || code === "refused";
       this.fx.append("commentary", gone
-        ? `I couldn't reach Claude Code for ${this.fx.project?.() || "this project"}. Voice is turning off.`
-        : "I couldn't reach Claude Code. Please try again.", this.idFor(rec));
+        ? `I couldn't reach the terminal session for ${this.fx.project?.() || "this project"}. Voice is turning off.`
+        : "I couldn't reach the terminal session. Please try again.", this.idFor(rec));
       if (gone) this.fx.checkLiveness?.();
     }
   }
@@ -440,7 +440,7 @@ export class DelegationEngine {
   checkHeld(rec) {
     if (rec.status !== "sent" || this.lastHookAt >= rec.sent_at) return;
     this.setStatus(rec, "held_suspected");
-    this.fx.append("commentary", "Your message is waiting for approval in the terminal. Claude Code has not picked it up yet; approve it there and it goes through.", this.idFor(rec));
+    this.fx.append("commentary", "Your message is waiting for approval in the terminal. I haven't picked it up yet; approve it there and it goes through.", this.idFor(rec));
     this.fx.setLastError?.("inbox_held", "A voice message is waiting for approval in the Claude Code terminal (held). Approve it there; see Troubleshooting in the Sotto README.");
     this.fx.notice?.("warn", "inbox_held", "Your voice message is waiting for approval in the Claude Code terminal. If this keeps happening, run /talk on again there: it says why.");
   }
@@ -510,7 +510,7 @@ export class DelegationEngine {
       return;
     }
     if (prompt && !prompt.startsWith("/") && !prompt.includes("<pasted_content")) {
-      this.fx.append("thinking", `${BG}The user typed to Claude Code: ${clip(prompt, 300)}`, null);
+      this.fx.append("thinking", `${BG}The user typed to you in the terminal: ${clip(prompt, 300)}`, null);
     }
   }
 
@@ -770,7 +770,7 @@ export class DelegationEngine {
     const target = live.length ? live.reduce((a, b) => (b.rev > a.rev ? b : a)) : null;
     if (target) this.setStatus(target, "answered", { answered_at: this.clock.now() });
     const lead = target && !this.isCurrentLive(target) && target.text ? `About your earlier request "${clip(target.text, 120).replace(/"/g, "'")}": ` : "";
-    this.fx.append("commentary", `${lead}Claude Code hit an error: ${humanizeError(body.error)}.`, target ? this.idFor(target) : null);
+    this.fx.append("commentary", `${lead}I hit an error: ${humanizeError(body.error)}.`, target ? this.idFor(target) : null);
     return target;
   }
 
@@ -788,8 +788,18 @@ export class DelegationEngine {
 /** The text a requeued voice message's nudge carries after the marker (SPEC §6.21). */
 export const REQUEUE_NUDGE = "(My voice message just above arrived as you were finishing your reply, so you have not answered it yet. Please act on it and answer it now.)";
 
-const MIRRORED_NOTE ="[sotto] Those words already reached Claude Code a moment ago and it is answering them; the answer will arrive as an update. Do not claim it is done before then.";
-const ECHO_NOTE = "[sotto] Not a request: that was your own voice picked up by the microphone. Nothing was sent to Claude Code. Ignore it and do not mention it.";
+const MIRRORED_NOTE ="[sotto] Those words already reached your Claude Code session a moment ago and you are answering them there; the answer will arrive as an update. Do not claim it is done before then.";
+const ECHO_NOTE = "[sotto] Not a request: that was your own voice picked up by the microphone. Nothing was delegated. Ignore it and do not mention it.";
+
+/**
+ * The silent note after a delegation was delivered (SPEC §6.9 E3). Second
+ * person: the voice IS Claude (§8.1 "One voice"), so the note says the work
+ * is the voice's own, never that "Claude Code is working on it" (which it
+ * echoed as "Claude's on it").
+ */
+export function requestSentNote(reqText) {
+  return `[sotto] Delegated: "${clip(String(reqText || ""), 300).replace(/"/g, "'")}". You are working on it in your Claude Code session; there is no result yet.`;
+}
 
 /**
  * The text of a request (SPEC §6.9 E3.1, as amended in SPEC-DEVIATIONS

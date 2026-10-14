@@ -40,7 +40,7 @@ test("built-ins: 10 distinct personas, valid ids and voices, bodies within ~750 
     // Rich enough to be heard (SPEC §4.6): a voice line, delivery directions,
     // habits, and sample lines for every kind of moment.
     assert.match(p.body, /^Voice: /, `${p.id}: opens with its voice direction`);
-    for (const part of ["Who you are:", "Delivery:", "- Pace:", "- Sounds:", "Signature habits:", "- Greeting:", "- Handing work to Claude (said as you delegate it):", "- Good result:", "- A failure:", "- Approval needed:", "- Quick acks:"]) {
+    for (const part of ["Who you are:", "Delivery:", "- Pace:", "- Sounds:", "Signature habits:", "- Greeting:", "- Taking on a request (said as you delegate it):", "- Good result:", "- A failure:", "- Approval needed:", "- Quick acks:"]) {
       assert.ok(p.body.includes(part), `${p.id}: ${part}`);
     }
     // Sounds are delivery directions, never bracketed tags the voice would read aloud.
@@ -135,7 +135,10 @@ test("prompt: the persona block sits after the identity line and before every ru
   const text = renderForPolicy("proj", "milestones", "", moss);
   const at = (s) => { const i = text.indexOf(s); assert.ok(i >= 0, s); return i; };
   const persona = at("Personality and Tone: you are Moss.");
-  assert.ok(at("You are Moss, the voice of Claude Code") < persona);
+  // One voice (§8.1): the identity line says it is Claude, speaking as the persona.
+  assert.ok(at("You are Claude, the AI assistant made by Anthropic") < persona);
+  assert.ok(at("you speak as Moss.") < persona);
+  assert.ok(text.includes("Moss is your voice and personality, not a different assistant."));
   assert.ok(text.includes(moss.body));
   assert.ok(text.includes("Every rule below takes precedence over the persona on content"));
   // The frame keeps the voice in character everywhere, sounds voiced (never
@@ -143,17 +146,18 @@ test("prompt: the persona block sits after the identity line and before every ru
   assert.ok(text.includes("Be Moss in EVERY utterance"));
   assert.ok(text.includes("never spoken as words"));
   assert.ok(text.includes("never reuse a sample word for word"));
-  assert.ok(text.includes("only ever state details that came from the conversation or from Claude"));
+  assert.ok(text.includes("only ever state details that came from the conversation or from your results"));
   assert.ok(text.includes("delegate the request to the backend first"));
   assert.ok(text.indexOf("Be Moss in EVERY utterance") < at("Rules for what you say."));
   // Without a persona the voice is Sotto.
-  assert.ok(render({ project: "proj" }).startsWith("You are Sotto, the voice of Claude Code"));
+  assert.ok(render({ project: "proj" }).startsWith("You are Claude, the AI assistant made by Anthropic"));
+  assert.ok(render({ project: "proj" }).includes("you speak as Sotto."));
   // Every relay and safety rule follows the persona.
   for (const rule of [
     "Keep most replies to one to three short sentences.",
     "Never say passwords, API keys, tokens, or other secrets aloud",
     "Mic checks are yours to answer, right away",
-    "Say that something is done, fixed, finished or ready only when a result from Claude Code for that request says so.",
+    "Say that something is done, fixed, finished or ready only when a result for that request says so.",
     "Delegation policy:",
     "Delegate to the backend when:",
     "The user makes a decision, states a preference",
