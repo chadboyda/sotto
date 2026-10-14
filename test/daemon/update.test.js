@@ -9,6 +9,7 @@ import { fileURLToPath } from "node:url";
 import { listSources, sourceSignature, hashSources, updateTimings, Updater, CHECK_MS, SETTLE_MS, QUIET_MS, MANUAL_QUIET_MS, QUIET_POLL_MS } from "../../daemon/update.js";
 import { createFakeClock } from "../helpers/fake-clock.js";
 import { createMemoryLogger } from "../../daemon/log.js";
+import { underLoad } from "../scripts/helpers/run.js";
 
 const REPO = fileURLToPath(new URL("../..", import.meta.url));
 
@@ -204,15 +205,19 @@ test("Updater: SOTTO_UPDATE=0 never checks", async (t) => {
   assert.equal(log.find("update.detected").length, 0);
 });
 
-test("cost on this repository: a no-change check is a few ms, a full hash well under 100 ms", () => {
-  const t0 = performance.now();
-  const sig = sourceSignature(REPO);
-  const statMs = performance.now() - t0;
-  const t1 = performance.now();
-  const h = hashSources(REPO);
-  const hashMs = performance.now() - t1;
-  assert.ok(sig.length > 0 && h.files > 20, `${h.files} files`);
-  // Generous bounds: npm test runs files in parallel.
-  assert.ok(statMs < 250, `stat pass ${statMs.toFixed(1)} ms`);
-  assert.ok(hashMs < 500, `hash ${hashMs.toFixed(1)} ms`);
+test("cost on this repository: a no-change check is a few ms, a full hash well under 100 ms", async () => {
+  const { value: m, factor } = await underLoad(() => {
+    const t0 = performance.now();
+    const sig = sourceSignature(REPO);
+    const statMs = performance.now() - t0;
+    const t1 = performance.now();
+    const h = hashSources(REPO);
+    return { sig, h, statMs, hashMs: performance.now() - t1 };
+  });
+  assert.ok(m.sig.length > 0 && m.h.files > 20, `${m.h.files} files`);
+  // Generous idle bounds (npm test runs files in parallel), scaled by the load
+  // measured around the run: a hash of 597 ms failed the fixed 500 ms bound at
+  // a load average of 400+ (2026-10-14).
+  assert.ok(m.statMs < 250 * factor, `stat pass ${m.statMs.toFixed(1)} ms (load x${factor.toFixed(1)})`);
+  assert.ok(m.hashMs < 500 * factor, `hash ${m.hashMs.toFixed(1)} ms (load x${factor.toFixed(1)})`);
 });

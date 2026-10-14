@@ -101,6 +101,37 @@ export function spawnBaseline() {
   return { bash: med(bash), node: med(node) };
 }
 
+/**
+ * What one bare spawn costs on an idle machine (an M-series Mac measures ~3 ms
+ * and ~25 ms; these sit a little above, so an idle run gets a factor of 1 and
+ * the original bounds).
+ */
+export const IDLE_SPAWN_MS = Object.freeze({ bash: 4, node: 40 });
+
+/**
+ * How much slower than idle this machine is right now: the larger of the bash
+ * and node spawn ratios to IDLE_SPAWN_MS, at least 1, at most 50. Load is
+ * bursty (a parallel `npm test`, a build, the user's own apps: load average
+ * 400-700 on 12 cores was seen on 2026-10-14, and a toggle.sh run took 6.9 s
+ * against a 3 s bound), so callers measure it right before AND right after the
+ * timed run (`underLoad`) and take the larger.
+ */
+export function loadFactor(base = spawnBaseline()) {
+  return Math.min(50, Math.max(1, base.bash / IDLE_SPAWN_MS.bash, base.node / IDLE_SPAWN_MS.node));
+}
+
+/**
+ * Run fn (sync or async) between two loadFactor() measurements. Resolves
+ * {value, factor}: assert `ms < idleBound * factor`. Idle, that is the idle
+ * bound itself, so a regression (say 3x slower) still fails; loaded, the bound
+ * stretches with what every other process pays at that moment.
+ */
+export async function underLoad(fn) {
+  const before = loadFactor();
+  const value = await fn();
+  return { value, factor: Math.max(before, loadFactor()) };
+}
+
 /** Poll fn() until truthy or timeout; returns the last value (timeouts are generous: polling returns early). */
 export async function waitFor(fn, timeoutMs = 8000, stepMs = 25) {
   const end = Date.now() + timeoutMs;
