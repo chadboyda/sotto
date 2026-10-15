@@ -3,7 +3,7 @@
 // page (SSE) and Chrome window together. All time goes through `clock`.
 import { randomBytes } from "node:crypto";
 import { execFile as execFileCb } from "node:child_process";
-import { normalizeConfig, POLICIES, VOICES, VOICE_INFO, ECHO_GUARD_MODES, openaiBase, wssBase, VERSION, MAX_APPEND_TOKENS, voiceMarker, BG } from "./config.js";
+import { normalizeConfig, POLICIES, VOICES, VOICE_INFO, allVoices, setExtraVoices, ECHO_GUARD_MODES, openaiBase, wssBase, VERSION, MAX_APPEND_TOKENS, voiceMarker, BG } from "./config.js";
 import { estTokens, fitTokens, tokenChunks, speakable, summary, clip, awaitingQuestion } from "./speech.js";
 import { makeOwner, ownerStatus, isOwnerAlive } from "./owner.js";
 import { writeActive, removeActive, createPendingContext, removePendingContext, setApprovalPending, readUsage, writeUsage, localDate, StatusFileWriter } from "./statefiles.js";
@@ -15,7 +15,7 @@ import { StyleWatch } from "./stylewatch.js";
 import { Narrator, elicitationSpeech, serverName, ToolLine, AgentTracker, TopLevelWork, reportSentence, isBackgroundLaunch, agentsText, cardText, permissionLabel, reminderSpeech } from "./policy.js";
 import { Approvals, commandFingerprint, findRunning } from "./approvals.js";
 import { SpeechQueue, COMMENTARY_PREROLL_MS } from "./speaker.js";
-import { renderForPolicy, buildSeedInput, greeting, ownerSwitchInstruction, voiceSwitchGreeting, personaSwitchGreeting, vocabularyUpdateInstruction, updateGreeting, cantHearInstruction, RECENT_GREETING_MS } from "./prompt.js";
+import { renderForPolicy, buildSeedInput, greeting, ownerSwitchInstruction, voiceSwitchGreeting, modelChangeGreeting, personaSwitchGreeting, vocabularyUpdateInstruction, updateGreeting, cantHearInstruction, RECENT_GREETING_MS } from "./prompt.js";
 import { readPrefs, writePrefs, normalizeCap, resolveCap, capLabel, resolveVoice, normalizeVoice, voiceListMessage, unknownVoiceMessage, normalizeWindow, resolveWindowPref, personaVoiceOn, earconOn, callHoldOn } from "./prefs.js";
 import { loadPersonas, findPersona, resolvePersona, personaSummary, personaListMessage, unknownPersonaMessage } from "./personas.js";
 import { collectVocabulary, renderVocabulary, vocabularyHint, TIER } from "./vocabulary.js";
@@ -34,6 +34,7 @@ import { normalizeKeyInput, validateKey, keyWhere } from "./apikey.js";
 import { isHandoffClaim, isWaitingClaim, clipWantsDelegation } from "./handoff.js";
 import { VOICE_WAIT_MAX_MS } from "./delegation.js";
 import { ModLink } from "./modlink.js";
+import { ModelSelector, MODEL_REFRESH_MS, DEFAULT_LIVE_MODEL, normalizeModelPref, parseVoiceError, modelLabel } from "./models.js";
 import { transcriptVersion, staticLinkReason, notLinkedReason, linkSuffix, linkSentence, LINK_WAIT_MS } from "./linkreason.js";
 
 // Handoff guard (§6.20). The voice said it handed something to Claude: a
@@ -41,6 +42,8 @@ import { transcriptVersion, staticLinkReason, notLinkedReason, linkSuffix, linkS
 // within HANDOFF_GRACE_MS after it counts; otherwise the daemon sends the
 // user's unsent words itself.
 const HANDOFF_GRACE_MS = 2000;
+const DEFAULT_CONFIG_VOICE = "marin";
+const NEW_VOICE_INFO = Object.freeze({ description: "", tone: "", presentation: "new", accent: "", new: true });
 const HANDOFF_LOOKBACK_MS = 5000;
 /** Assistant speech this recent is checked for a handoff line. */
 const HANDOFF_TEXT_MS = 6000;
@@ -271,7 +274,7 @@ export class Voice {
     this.previews = new PreviewCache({
       dir: this.paths.previews, log: this.log,
       record: (voice) => recordPreview({
-        base: this.base, apiKey: this.getApiKey(), voice, WebSocketImpl: this.WebSocketImpl, clock: this.clock, log: this.log,
+        base: this.base, apiKey: this.getApiKey(), voice, model: this.models.forSession(), WebSocketImpl: this.WebSocketImpl, clock: this.clock, log: this.log,
         // Billed like any Live session (per second, no minimum on a WebSocket): today's usage.
         onClosed: ({ live_id, seconds }) => {
           this.log.info("preview.closed", { voice, live_id, seconds });
@@ -279,6 +282,16 @@ export class Voice {
         },
       }),
     });
+
+    // The Live model (SPEC §4.7): "auto" follows the newest GPT-Live the key
+    // lists (checked at start and every 6 h, cached in D/live-model.json);
+    // each session reads it once at its start.
+    this.models = new ModelSelector({
+      file: this.paths.liveModel, voicesFile: this.paths.voicesExtra,
+      base: () => this.base, getApiKey: () => this.getApiKey(), getPref: () => readPrefs(this.paths).model || "auto",
+      fetchImpl: (...a) => this.fetchImpl(...a), clock: this.clock, log: this.log,
+    });
+    setExtraVoices(this.models.newVoices());
 
     this.transcript = new Transcript({ clock: this.clock });
     // The model heard its own voice (echo filter, §6.8.1): tell the page, whose
@@ -407,8 +420,9 @@ export class Voice {
       owner: ownerStatus(this.owner),
       live: this.live ? {
         session_id: this.live.id, started_at: iso(this.live.started_at), expires_at: this.live.expires_at,
-        usage_seconds: this.live.usage_seconds, muted: this.live.muted,
+        usage_seconds: this.live.usage_seconds, muted: this.live.muted, model: this.live.model,
       } : null,
+      model: this.models.info(),
       today: { date: today, seconds: Math.round(this.todaySeconds() * 10) / 10, cap_minutes: this.capMinutes() },
       config: {
         voice: this.config.voice, persona: this.personaIdForStatus(), idle_minutes: this.config.idle_minutes, idle_seconds: idleSecondsOf(this.config), speaking_policy: this.policy,
@@ -1245,6 +1259,7 @@ export class Voice {
       case "cap": r = req.cap == null || req.cap === "" ? { ok: true, message: this.capMessage() } : this.setCap(req.cap, via); break;
       case "watch": r = this.watchControl(req); break;
       case "callhold": r = req.on == null ? { ok: true, message: `sotto: call hold ${this.callHoldEnabled() ? "on" : "off"}. Change it with /talk callhold on|off.` } : this.setCallHold(req.on === true || req.on === "on"); break;
+      case "model": r = req.model == null || req.model === "" ? { ok: true, message: this.modelMessage() } : this.setModel(req.model); break;
       case "earcon": r = req.on == null ? { ok: true, message: `sotto: earcon ${this.earconEnabled() ? "on" : "off"}. Change it with /talk earcon on|off.` } : this.setEarcon(req.on === true || req.on === "on"); break;
       case "app": r = this.appControl(req); break;
       case "shutdown": {
@@ -1349,7 +1364,7 @@ export class Voice {
     const app = this.appNote();
     if (this.state === "off" || !this.owner) return `sotto: voice is off. ${u}.${app ? ` ${app}.` : ""}`;
     const st = this.state === "live" ? "ON" : this.state;
-    let m = `sotto: voice ${st} (${this.owner.project}) | ${u} | voice ${this.config.voice} | persona ${this.personaIdForStatus()} | ${this.policy} | ${this.modActive() ? "link mod" : linkSuffix(this.owner.linkReason)}`;
+    let m = `sotto: voice ${st} (${this.owner.project}) | ${u} | voice ${this.config.voice} | model ${this.live?.model || this.models.forSession()} | persona ${this.personaIdForStatus()} | ${this.policy} | ${this.modActive() ? "link mod" : linkSuffix(this.owner.linkReason)}`;
     if (app) m += ` | ${app}`;
     const w = this.watches.active();
     if (w.length) m += ` | watching: ${w.map((x) => `"${x.description}"`).join(", ")}`;
@@ -1701,11 +1716,14 @@ export class Voice {
    */
   voices() {
     return {
-      voices: [...VOICES],
+      voices: allVoices(),
       current: this.currentVoice(),
       live: !!(this.live && this.sideband),
       live_voice: this.live?.voice || null,
-      info: VOICE_INFO,
+      // A reported new voice (§4.5 "New voices") has no description until
+      // it is analyzed: the pickers list it under "New".
+      info: { ...VOICE_INFO, ...Object.fromEntries(this.models.newVoices().map((v) => [v, NEW_VOICE_INFO])) },
+      new: this.models.newVoices(),
     };
   }
 
@@ -2460,11 +2478,23 @@ export class Voice {
     if (this.appAttached()) return { status: 409, body: { error: { code: "app_took_over", message: "Voice is in the Sotto app." } } };
     const p = await this.prepareSession(reason, wake);
     if (!p.ok) return { status: p.status, body: p.body };
-    const { why, owner, apiKey, instructions, seed, voice, persona } = p;
-    const body = buildSessionBody({ instructions, seed, voice, sdp });
-    this.lastSessionCreateAt = this.clock.now();
-    const res = await createLiveSession({ base: this.base, apiKey, body, fetchImpl: this.fetchImpl, clock: this.clock });
-    this.log.info("session.create", { ms: res.ms, status: res.status ?? null, ok: res.ok, model: body.session.model, live_id: res.id || null, code: res.code || null, reason: why, voice, persona: persona.id });
+    const { why, owner, apiKey, instructions, seed, persona } = p;
+    let { voice, model } = p;
+    let body, res;
+    // A start the model refused (a voice it lacks, a model the key cannot
+    // use) is retried at once with the fallback (§4.7): the SDP offer was not
+    // consumed. Bounded: each retry demotes a model or bars a voice.
+    for (let attempt = 0; ; attempt++) {
+      body = buildSessionBody({ instructions, seed, voice, sdp, model });
+      this.lastSessionCreateAt = this.clock.now();
+      res = await createLiveSession({ base: this.base, apiKey, body, fetchImpl: this.fetchImpl, clock: this.clock });
+      this.log.info("session.create", { ms: res.ms, status: res.status ?? null, ok: res.ok, model: body.session.model, live_id: res.id || null, code: res.code || null, reason: why, voice, persona: persona.id });
+      if (res.ok || attempt >= 2 || this.owner !== owner || this.state !== "connecting") break;
+      const next = this.afterRefusedStart({ model, voice, persona, status: res.status, message: res.message });
+      if (!next) break;
+      ({ model, voice } = next);
+      this.config.voice = voice;
+    }
 
     if (!res.ok) {
       this.setLastError(res.code, res.message);
@@ -2479,7 +2509,7 @@ export class Voice {
       return { status: 409, body: { error: { code: "not_active", message: "Voice was turned off." } } };
     }
     this.audioClient = "page";
-    this.beginLive(res.id, why, voice, persona);
+    this.beginLive(res.id, why, voice, persona, model);
     this.attachSideband(res.id, why, apiKey);
     this.changed();
     return { status: 201, body: { session_id: res.id, sdp: res.sdp } };
@@ -2545,14 +2575,85 @@ export class Voice {
     this.vocab = vocab;
     const persona = this.currentPersona();
     const instructions = renderForPolicy(owner.project, this.policy, vocab.text, persona);
+    // The Live model is read once here (§4.7): a session never changes model.
+    const model = this.models.forSession();
+    if (!this.models.lastOk && !this.models.refreshing) this.models.refresh("session").catch(() => {});
     // Resolved from prefs.json for every session (start, reconnect, wake, restart, handover).
-    const voice = this.effectiveVoice();
+    const voice = this.voiceForModel(model, this.effectiveVoice(), persona);
     this.config.voice = voice;
-    return { ok: true, why, owner, apiKey, instructions, seed, voice, persona };
+    return { ok: true, why, owner, apiKey, instructions, seed, voice, persona, model };
+  }
+
+  /**
+   * The voice a session on `model` can use (§4.5 "New voices"): `voice`
+   * unless that model refused it, then the persona's own voice, then marin.
+   */
+  voiceForModel(model, voice, persona = null) {
+    if (this.models.voiceOk(model, voice)) return voice;
+    const own = normalizeVoice(persona?.voice);
+    const to = [own, DEFAULT_CONFIG_VOICE].find((v) => v && v !== voice && this.models.voiceOk(model, v)) || DEFAULT_CONFIG_VOICE;
+    this.log.warn("voice.fallback", { voice, to, model });
+    return to;
+  }
+
+  /**
+   * A session start was refused (§4.7). An "invalid voice" error bars that
+   * voice for the model (merging any voice ids it lists); a model error
+   * demotes the model so gpt-live-1 is used. Returns {model, voice} to retry
+   * with, or null when nothing would change.
+   */
+  afterRefusedStart({ model, voice, persona, status = null, message = "" }) {
+    const ve = parseVoiceError(message, { tried: voice });
+    if (ve.invalid && voice) {
+      const added = this.models.mergeVoices(ve.voices, VOICES, "error");
+      if (added.length) setExtraVoices(this.models.newVoices());
+      this.models.markBadVoice(model, voice);
+      const next = this.voiceForModel(model, voice, persona);
+      return next !== voice ? { model, voice: next } : null;
+    }
+    const modelError = /model/i.test(message) || status === 404;
+    if (modelError && this.models.demote(model, message)) {
+      const next = this.models.forSession();
+      return { model: next, voice: this.voiceForModel(next, voice, persona) };
+    }
+    return null;
+  }
+
+  /** Daemon start (index.js): choose the Live model now and every 6 h (§4.7). */
+  startModelWatch() {
+    this.models.refresh("start").catch(() => {});
+    this.interval("modelRefresh", () => { this.models.refresh("interval").catch(() => {}); }, MODEL_REFRESH_MS);
+  }
+
+  /** /talk model, `sotto model`: the setting and the model the next session uses. */
+  modelMessage() {
+    const i = this.models.info();
+    const live = this.live?.model && this.live.model !== i.model ? `; this session runs on ${this.live.model}` : "";
+    const how = i.mode === "auto" ? "auto, the newest GPT-Live the API lists, checked every 6 h" : "pinned";
+    const avail = i.available.length ? ` Listed for this key: ${i.available.join(", ")}.` : "";
+    return `sotto: model ${i.mode === "auto" ? "auto" : i.mode} (${how}); the next session uses ${i.model}${live}.${avail} Change it with /talk model auto|<id>.`;
+  }
+
+  /** /talk model auto|<id>: persisted in prefs.json; never switches a running session (§4.7). */
+  setModel(v) {
+    const m = normalizeModelPref(v);
+    if (!m) return { ok: false, code: "bad_model", message: `sotto: unknown model "${String(v ?? "").replace(/[^A-Za-z0-9._-]/g, "").slice(0, 40)}". Say auto, or a GPT-Live id such as gpt-live-1.` };
+    try { writePrefs(this.paths, { model: m }); } catch (e) {
+      this.log.error("prefs.write_error", { message: e.message });
+      return { ok: false, message: `sotto: ERROR could not save the model to ${this.paths.prefs}.` };
+    }
+    this.log.info("live.model_pref", { model: m });
+    if (m === "auto") this.models.refresh("pref").catch(() => {});
+    const next = this.models.forSession();
+    const listed = this.models.info().available;
+    const warn = m !== "auto" && listed.length && !listed.includes(m) ? ` ${m} is not listed for this key; if OpenAI refuses it, sessions fall back to ${DEFAULT_LIVE_MODEL}.` : "";
+    const when = this.live ? "The current session keeps its model; the next one" : "The next voice session";
+    this.changed();
+    return { ok: true, model: m, message: `sotto: model set to ${m}. ${when} uses ${next}.${warn}` };
   }
 
   /** Bookkeeping for a new Live session (both transports). `id` is null on the primary socket until session.started. */
-  beginLive(id, why, voice, persona = null) {
+  beginLive(id, why, voice, persona = null, model = null) {
     this.counters.sessions_created++;
     // Words of the old session not yet sent anywhere go now: the new session's
     // timeline restarts at 0 (§6.18).
@@ -2561,7 +2662,7 @@ export class Voice {
     this.delegation.resetTimeline();
     this.mirror.resetTimeline();
     const now = this.clock.now();
-    this.live = { id, started_at: now, expires_at: Math.floor(now / 1000) + 7200, usage_seconds: 0, muted: false, reason: why, greeted: false, voice, persona: persona?.id ?? null, personaName: persona?.name ?? null, wakeHandled: false };
+    this.live = { id, started_at: now, expires_at: Math.floor(now / 1000) + 7200, usage_seconds: 0, muted: false, reason: why, greeted: false, voice, persona: persona?.id ?? null, personaName: persona?.name ?? null, wakeHandled: false, model: model || DEFAULT_LIVE_MODEL };
     this.governor.onWake(why === "wake" ? "voice" : why === "notify" ? "notify" : why);
     if (id) this.usageSeen.set(id, 0);
     // The backlog was seeded into the new session; pending results are spoken
@@ -2596,11 +2697,11 @@ export class Voice {
       }
       return p;
     }
-    const { why, apiKey, instructions, seed, voice, persona } = p;
-    const start = buildPrimaryStart({ instructions, seed, voice });
+    const { why, apiKey, instructions, seed, voice, persona, model } = p;
+    const start = buildPrimaryStart({ instructions, seed, voice, model });
     this.lastSessionCreateAt = this.clock.now();
     this.log.info("session.create", { transport: "websocket", ok: true, model: start.session.model, reason: why, voice, persona: persona.id });
-    this.beginLive(null, why, voice, persona);
+    this.beginLive(null, why, voice, persona, model);
     const sb = new PrimarySession({
       url: `${wssBase(this.base)}/live/sessions`, apiKey, start,
       WebSocketImpl: this.WebSocketImpl, clock: this.clock, log: this.log, counters: this.counters, debug: this.debug,
@@ -2608,6 +2709,11 @@ export class Voice {
     this.sideband = sb;
     sb.primary = true;
     sb.startReason = reason; // native-session.js: a reconnect or wake keeps "heard" (lib.createHearingMonitor)
+    sb.model = model;
+    sb.voice = voice;
+    sb.refusedRetries = this.nativeRefusedRetries || 0;
+    this.nativeRefusedRetries = 0;
+    sb.startWake = wake;
     sb.on("ready", (r) => this.onSidebandReady(sb, why, r));
     sb.on("event", (evt) => this.onLiveEvent(sb, evt));
     sb.on("session_closed", (r) => this.onSessionClosed(sb, r));
@@ -2632,6 +2738,15 @@ export class Voice {
     if (started) { this.reconnect("primary_lost"); return; }
     this.stopLiveTimers();
     this.live = null;
+    // Refused for its model or voice (§4.7): start again with the fallback, once per cause.
+    if (error && this.owner && this.state !== "off" && this.state !== "closing" && (sb.refusedRetries || 0) < 2) {
+      const next = this.afterRefusedStart({ model: sb.model, voice: sb.voice, persona: this.currentPersona(), message: `${error.code || ""} ${error.message || ""}` });
+      if (next) {
+        this.nativeRefusedRetries = (sb.refusedRetries || 0) + 1;
+        await this.startNativeSession(sb.startReason || "start", { wake: sb.startWake });
+        return;
+      }
+    }
     let lastCode = "openai_error";
     let message = error?.message ? `OpenAI refused the voice session: ${truncate(error.message, 200)}` : `Could not start the voice session with OpenAI (socket closed${code ? ` ${code}` : ""}).`;
     const apiKey = this.getApiKey();
@@ -2837,7 +2952,16 @@ export class Voice {
       // with a short, varied line instead of the same full sentence each time.
       const now = this.clock.now();
       this.greetedAt = (this.greetedAt || []).filter((t) => now - t < RECENT_GREETING_MS);
-      const g = personaSwitched ? personaSwitchGreeting(this.live.personaName) : switched ? voiceSwitchGreeting(this.live.voice) : updated ? updateGreeting() : greeting(reason, this.policy, this.owner?.project, { recent: this.greetedAt.length });
+      // A session on a new Live model (§4.7) says so once, in persona; not on a
+      // wake (the user is talking) or a notify (the message is what is said),
+      // which leave it for the next session that greets.
+      const announce = !switched && !personaSwitched && (reason === "start" || reason === "resume" || reason === "reconnect")
+        ? this.models.announcement(this.live.model) : null;
+      let g = personaSwitched ? personaSwitchGreeting(this.live.personaName) : switched ? voiceSwitchGreeting(this.live.voice) : updated ? updateGreeting() : greeting(reason, this.policy, this.owner?.project, { recent: this.greetedAt.length });
+      if (announce) {
+        g = modelChangeGreeting(announce, reason === "start" ? this.owner?.project : null);
+        this.models.markAnnounced(this.live.model);
+      }
       if (g && reason === "start" && !switched && !personaSwitched && !updated) this.greetedAt.push(now);
       if (g) this.deliver({ kind: "instructions", content: g, delegationId: null });
       // Held and carried commentary follows the greeting.

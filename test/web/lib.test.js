@@ -798,5 +798,8 @@ test("voiceGroups: Feminine, Masculine, Androgynous from the daemon's info; plai
   // A voice the table lacks goes last, under "Other".
   const p = lib.voiceGroups({ voices: ["ash", "newvoice"], info: { ash: { tone: "Clear", presentation: "masculine", accent: "American" } } });
   assert.deepEqual(p.map((x) => [x.title, x.items.map((i) => i.id)]), [["Masculine", ["ash"]], ["Other", ["newvoice"]]]);
+  // A voice the API reported (SPEC §4.5 "New voices"): under "New", no description.
+  const n = lib.voiceGroups({ voices: ["ash", "soleil"], info: { ash: { tone: "Clear", presentation: "masculine", accent: "American" }, soleil: { description: "", tone: "", presentation: "new", accent: "", new: true } } });
+  assert.deepEqual(n.map((x) => [x.title, x.items.map((i) => [i.id, i.label, i.description])]), [["Masculine", [["ash", "Ash · Clear · American", ""]]], ["New", [["soleil", "Soleil", ""]]]]);
   assert.deepEqual(lib.voiceGroups(null), []);
 });

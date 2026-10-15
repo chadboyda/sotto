@@ -188,7 +188,7 @@ describe("toggle.sh cold start", () => {
   test("bogus argument prints usage and never contacts the daemon", async () => {
     const { D, env } = await setup();
     const out = parseOut(await run(TOGGLE, { env, input: stdinFor("bogus") }));
-    assert.equal(out.stopReason, "sotto: usage: /talk [on|off|status|restart|quiet|milestones|walkthrough|voice [name]|persona [name]|app|window [auto|app|chrome]|cap [off|<minutes>]|earcon [on|off]|callhold [on|off]|key]");
+    assert.equal(out.stopReason, "sotto: usage: /talk [on|off|status|restart|quiet|milestones|walkthrough|voice [name]|persona [name]|app|window [auto|app|chrome]|cap [off|<minutes>]|earcon [on|off]|callhold [on|off]|model [auto|<id>]|key]");
     assert.ok(!existsSync(join(D, "daemon.pid")));
   });
 });
@@ -753,6 +753,40 @@ describe("toggle.sh /talk callhold: the opt-in call hold (SPEC §6.15)", () => {
     parseOut(await run(TOGGLE, { env, input: stdinFor("callhold on") }));
     const bodies = controlBodies(D).slice(1);
     assert.deepEqual(bodies.map((b) => [b.action, b.on]), [["callhold", true]]);
+  });
+});
+
+describe("toggle.sh /talk model: the Live model (SPEC §4.7)", () => {
+  test("daemon down: auto by default; sets prefs.json model and other writes keep it; bad ids refused", async () => {
+    const { D, env } = await setup();
+    let out = parseOut(await run(TOGGLE, { env, input: stdinFor("model") }));
+    assert.match(out.stopReason, /^sotto: model auto\. /);
+    out = parseOut(await run(TOGGLE, { env, input: stdinFor("model GPT-Live-1.1") }));
+    assert.equal(out.stopReason, "sotto: model set to gpt-live-1.1. It applies to the next voice session.");
+    parseOut(await run(TOGGLE, { env, input: stdinFor("voice cedar") }));
+    assert.deepEqual(JSON.parse(readFileSync(join(D, "prefs.json"), "utf8")), { voice: "cedar", model: "gpt-live-1.1" });
+    out = parseOut(await run(TOGGLE, { env, input: stdinFor("model gpt-4o") }));
+    assert.equal(out.stopReason, "sotto: unknown model \"gpt-4o\". Say auto, or a GPT-Live id such as gpt-live-1.");
+    out = parseOut(await run(TOGGLE, { env, input: stdinFor("model auto") }));
+    assert.deepEqual(JSON.parse(readFileSync(join(D, "prefs.json"), "utf8")), { voice: "cedar", model: "auto" });
+    assert.ok(!existsSync(join(D, "daemon.pid")), "never spawns a daemon");
+  });
+
+  test("daemon up: /control gets action model (+ model)", async () => {
+    const { D, env } = await setup();
+    parseOut(await run(TOGGLE, { env, input: stdinFor("on") }));
+    parseOut(await run(TOGGLE, { env, input: stdinFor("model gpt-live-1.1") }));
+    parseOut(await run(TOGGLE, { env, input: stdinFor("model") }));
+    const bodies = controlBodies(D).slice(1);
+    assert.deepEqual(bodies.map((b) => [b.action, b.model]), [["model", "gpt-live-1.1"], ["model", undefined]]);
+  });
+
+  test("a voice the daemon reported (D/voices-extra) is accepted", async () => {
+    const { D, env } = await setup();
+    writeFileSync(join(D, "voices-extra"), "soleil hana\n");
+    const out = parseOut(await run(TOGGLE, { env, input: stdinFor("voice soleil") }));
+    assert.equal(out.stopReason, "sotto: voice set to soleil. It applies to the next voice session.");
+    assert.match(parseOut(await run(TOGGLE, { env, input: stdinFor("voice") })).stopReason, /hana/);
   });
 });
 

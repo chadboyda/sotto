@@ -16,6 +16,8 @@ export function dataPaths(D) {
     status: path.join(D, "status.json"),
     usage: path.join(D, "usage.json"),
     prefs: path.join(D, "prefs.json"),
+    liveModel: path.join(D, "live-model.json"), // the auto-chosen Live model and reported voices (daemon/models.js)
+    voicesExtra: path.join(D, "voices-extra"), // the reported new voice ids, one line, for toggle.sh
     micLevels: path.join(D, "mic-levels.json"), // learned speech level per input device (daemon/agc.js)
     debug: path.join(D, "debug"), // opt-in audio captures (daemon/debugcapture.js)
     previews: path.join(D, "voice-previews"), // cached voice samples (<voice>.wav)

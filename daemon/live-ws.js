@@ -24,11 +24,11 @@ import { SAMPLE_RATE } from "./native-proto.js";
 import { truncate } from "./log.js";
 
 /** The session.start event: buildSessionBody() minus client/transport, plus audio.format. */
-export function buildPrimaryStart({ instructions, seed, voice }) {
+export function buildPrimaryStart({ instructions, seed, voice, model = LIVE_MODEL }) {
   return {
     type: "session.start",
     session: {
-      model: LIVE_MODEL,
+      model,
       instructions,
       input: seedMessages(seed),
       audio: { format: { type: "audio/pcm", rate: SAMPLE_RATE }, output: { voice } },

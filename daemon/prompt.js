@@ -204,6 +204,16 @@ export function personaSwitchGreeting(name) {
   return `In one short sentence, fully in your new personality and delivery, tell the user you're now ${n}. Then stop and listen; the conversation continues from where it left off.`;
 }
 
+/**
+ * The first session on a new Live model (§4.7, §8.3): said once, in persona,
+ * first person. `project`: a start also says it is ready there.
+ */
+export function modelChangeGreeting(label, project = null) {
+  const l = String(label || "").replace(/[^A-Za-z0-9 .-]/g, "").trim().slice(0, 40) || "a new voice model";
+  const ready = project ? ` and that you're ready in ${safeProject(project)}` : "";
+  return `In one short sentence, fully in character and in the first person, tell the user you've moved to ${l}${ready}, for example "I've moved to ${l}." Then stop and listen.`;
+}
+
 /** First session after a self-update (§6.17, §8.3): the user was mid-conversation. */
 export function updateGreeting() {
   return `Say only "I just updated myself." Then stop and listen; the conversation continues from where it left off.`;

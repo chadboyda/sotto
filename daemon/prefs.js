@@ -4,21 +4,23 @@
 // default true) and the daily voice limit ("daily_cap_minutes", 0 =
 // unlimited; `sotto cap`, the window's Daily limit; beats userConfig) and the
 // earcon before an unprompted wake ("earcon", default true) and the opt-in
-// call hold ("call_hold", default false). Precedence for voice and window:
+// call hold ("call_hold", default false) and the Live model ("model": "auto",
+// the default, or a pinned id; SPEC §4.7). Precedence for voice and window:
 //   D/prefs.json  >  userConfig (CLAUDE_PLUGIN_OPTION_* via /control)  >  default
 // ("marin"; window "auto"). SOTTO_BROWSER still beats all of it for the window.
 // toggle.sh reads and (when no daemon runs) writes the same file with bash
 // regex, so it stays compact single-line JSON:
 // {"voice":"cedar","window":"app","persona":"moss","persona_voice":false}.
 import fs from "node:fs";
-import { VOICES, DEFAULT_CONFIG, WINDOW_MODES } from "./config.js";
+import { allVoices, isVoice, DEFAULT_CONFIG, WINDOW_MODES } from "./config.js";
+import { normalizeModelPref } from "./models.js";
 import { writeAtomic } from "./statefiles.js";
 import { normalizePersonaId } from "./personas.js";
 
-/** Lowercased, trimmed voice name if it is one of the 22 voices, else null. */
+/** Lowercased, trimmed voice name if it is one of the 22 voices (or a reported new one), else null. */
 export function normalizeVoice(v) {
   const s = typeof v === "string" ? v.trim().toLowerCase() : "";
-  return VOICES.includes(s) ? s : null;
+  return isVoice(s) ? s : null;
 }
 
 /** Lowercased, trimmed window mode if valid (auto, app, chrome, default), else null. */
@@ -42,6 +44,8 @@ export function readPrefs(paths, readFile = fs.readFileSync) {
     if (typeof o.persona_voice === "boolean") out.persona_voice = o.persona_voice;
     if (typeof o.earcon === "boolean") out.earcon = o.earcon;
     if (typeof o.call_hold === "boolean") out.call_hold = o.call_hold;
+    const m = normalizeModelPref(o.model);
+    if (m) out.model = m;
     const cap = normalizeCap(o.daily_cap_minutes);
     if (cap !== null) out.daily_cap_minutes = cap;
     return out;
@@ -110,11 +114,11 @@ export function resolveWindowPref({ prefs = {}, configWindow } = {}) {
 
 /** One-line list for /talk voice and the CLI; the current voice is marked. */
 export function voiceListMessage(current) {
-  const list = VOICES.map((v) => (v === current ? `${v} (current)` : v)).join(", ");
+  const list = allVoices().map((v) => (v === current ? `${v} (current)` : v)).join(", ");
   return `sotto: voice is ${current}. Voices: ${list}. Change it with /talk voice <name>.`;
 }
 
 export function unknownVoiceMessage(name) {
   const shown = String(name ?? "").replace(/[^A-Za-z0-9_-]/g, "").slice(0, 40);
-  return `sotto: unknown voice "${shown}". Voices: ${VOICES.join(", ")}.`;
+  return `sotto: unknown voice "${shown}". Voices: ${allVoices().join(", ")}.`;
 }

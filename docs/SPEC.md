@@ -142,10 +142,10 @@ The orchestrator owns README.md, .gitignore and docs/.
 | Owner header (hooks → daemon) | `X-Sotto-Socket` |
 | Page token header | `X-Sotto-Page` (or query `token=` where headers are impossible) |
 | Data-channel label | `oai-events` |
-| Live model | `gpt-live-1` |
+| Live model | `auto` (default): the newest `gpt-live-<major>[.<minor>]` the key lists, else `gpt-live-1` (§4.7) |
 | OpenAI base | `https://api.openai.com/v1`, overridable by env `SOTTO_OPENAI_BASE` (tests); sideband base = the same URL with `https:`→`wss:` |
 | Max append size | `1400` characters per `*.append` content (≈ under 500 tokens with margin) |
-| Voices | `alloy ash ballad beacon bossa cedar cinder coral delta echo gleam marin meridian quartz ripple sage shimmer stone tempo verse vesper willow` |
+| Voices | `alloy ash ballad beacon bossa cedar cinder coral delta echo gleam marin meridian quartz ripple sage shimmer stone tempo verse vesper willow`, plus any the API reports (§4.5 "New voices") |
 | Policies | `quiet` `milestones` `walkthrough` |
 
 ---
@@ -162,6 +162,8 @@ The orchestrator owns README.md, .gitignore and docs/.
 | `D/pending-context` | daemon | hook.sh (PreToolUse) | 0600 | Empty flag file. Created when the daemon writes a voice message to the inbox while Claude is busy (§6.9). hook.sh deletes it when consumed. The daemon deletes it on Stop and when voice goes off. |
 | `D/status.json` | daemon | humans, tests | 0600 | Same JSON as `GET /status`, rewritten at most once per second on change. |
 | `D/prefs.json` | daemon, toggle.sh (only when no daemon of this data dir runs) | daemon, toggle.sh | 0600 | `{"voice":"<name>","window":"<auto|app|chrome|default>"}` (each field optional), compact, one line (toggle.sh reads it with a bash regex). Written atomically (tmp + rename). Survives restarts; see §4.5. A missing, malformed or invalid file is ignored. |
+| `D/live-model.json` | daemon | daemon | 0600 | `{"chosen","available","checked_at","announced","new_voices":{<id>:<ms>},"bad_voices":{<model>:[<voice>]}}`: the auto-chosen Live model, the ids the key listed, the model the user last heard about (§4.7), and what the API said about voices (§4.5 "New voices"). Missing or malformed → `gpt-live-1`. |
+| `D/voices-extra` | daemon | toggle.sh | 0600 | One line, the reported new voice ids separated by spaces (toggle.sh accepts them in `/talk voice`). |
 | `D/voice-previews/<voice>.wav` | daemon | daemon (`GET /api/voice-preview`) | 0600 (dir 0700) | Cached voice sample (mono PCM16 WAV, 24 kHz, ~2 s), recorded on the first preview request for that voice (§6.14.1). Written atomically (tmp + rename). Delete the directory to re-record. |
 | `D/usage.json` | daemon | daemon | 0600 | `{"days":{"YYYY-MM-DD":<seconds float>}}` in local dates; entries older than 30 days are pruned. |
 | `D/logs/daemon.log` (+`.1`) | daemon | humans | 0600 | JSONL, rotated at 5 MB (§10). |
@@ -219,7 +221,7 @@ The key MUST NOT be logged, echoed in errors, sent to the page, put on any comma
 **First run and key setup (the page).** `/talk on` without a key binds the owner, sets `last_error` `no_api_key`, stays `paused`, sets `keySetup`, and opens the window (message `sotto: voice ON (<project>), but there is no OpenAI API key yet. Opening the voice window so you can add it; it is saved in your macOS Keychain.`). The page shows the key card when `PageStatus.key.setup` is true, after a `/api/session` failure `no_api_key`, or after `openai_auth` when `key.can_change`. **Save** posts the key to `POST /api/key` (§6.4); the daemon:
 1. normalizes it (trim, a pair of quotes, a leading `OPENAI_API_KEY=`) and requires `^sk-[A-Za-z0-9_-]{16,400}$`, else 400 `bad_key_format`;
 2. requires the Keychain (macOS, not `SOTTO_KEYCHAIN=0`), else 501 `keychain_unavailable`;
-3. checks it: `GET <base>/models` with the key (10 s timeout). 401 → 400 `invalid_key`; 429 → `rate_limited`; other non-2xx → `openai_error`; network error or timeout → 504 `network`; a list without `gpt-live-1` → 400 `no_model_access`. A 403 on the list (a restricted key without the Models permission) falls back to `GET <base>/models/gpt-live-1`: 2xx passes, 404 → `no_model_access`, else `key_forbidden`. Error messages are sotto's own: OpenAI's 401 text echoes part of the key;
+3. checks it: `GET <base>/models` with the key (10 s timeout). 401 → 400 `invalid_key`; 429 → `rate_limited`; other non-2xx → `openai_error`; network error or timeout → 504 `network`; a list without any GPT-Live conversation model (`gpt-live-<n>…`, not a transcribe variant; §4.7) → 400 `no_model_access`. A 403 on the list (a restricted key without the Models permission) falls back to `GET <base>/models/gpt-live-1`: 2xx passes, 404 → `no_model_access`, else `key_forbidden`. Error messages are sotto's own: OpenAI's 401 text echoes part of the key;
 4. stores it in the Keychain (500 `keychain_error` if that fails), clears a `no_api_key`/`openai_auth` last error and `keySetup`, and, if an owner is bound and the state is `paused` (and the cap is not reached), goes to `waiting_page` and sends SSE `command:"connect"` (reason `key`). With no owner it answers `Key saved. Run /talk on in Claude Code to start talking.`
 
 The settings drawer shows `Key ending in <hint>` with its source, **Change** (when `can_change`: no key, Keychain or userConfig source; env and `.env` keys must be changed where they are) and **Remove** (Keychain source only; two clicks). Removing a key does not stop a running session.
@@ -259,6 +261,8 @@ The user can change the voice without `/config`: `/talk voice <name>` (§5.7), t
 
 The persona (§4.6) persists in the same file. `audio.output.voice` is immutable for a Live session (the Live API reference, https://developers.openai.com/api/reference/resources/live/primary-websocket: voice and format "are immutable after startup"), so a change while live re-creates the session (§6.14).
 
+**New voices.** The voice list is static (OpenAI has no voices endpoint for GPT-Live), but a newer model can add voices (GPT-Live 1.1, announced 2026-10-15, adds voices in French, German, Hindi, Mexican Spanish, Korean and Japanese). When a session start is refused with an "invalid voice" error, the daemon (`daemon/models.js` `parseVoiceError`) merges the voice ids the error lists into `D/live-model.json` `new_voices` (log `voice.new`), bars the refused voice for that model (`bad_voices`), and retries at once with the persona's own voice, then `marin` (log `voice.fallback {voice, to, model}`). Reported voices are valid choices everywhere (`/talk voice`, the pickers, persona files); `GET /api/voices` lists them after the static ones, with `new: [ids]` and an `info` entry with `presentation: "new"` and an empty description, so the pickers show them under "New" with no description until they are analyzed and added to `VOICE_INFO`.
+
 ---
 
 ### 4.6 Personas (`daemon/personas.js`, `D/prefs.json` `persona`, `persona_voice`)
@@ -269,6 +273,16 @@ A persona is the voice's identity and personality in the Live instructions (§8.
 - **Persona voice:** `persona_voice` (default true; the drawer's "Switch to the persona's own voice"). `D/prefs.json` is the one source of truth: every session the daemon creates (start, reconnect, voice or notify wake, restart, handover) resolves its voice again as the chosen persona's own voice while `persona_voice` is on and a persona is chosen, else `prefs.voice` > userConfig > default (`voice.js effectiveVoice`). Choosing a persona stores only `persona`; `prefs.voice` keeps the user's own voice for when the toggle is off. An explicit voice choice that differs from the persona's voice also stores `persona_voice: false`, so the voice in effect is always what prefs.json says.
 - **Live switch:** instructions are immutable per Live session, so a change while live re-creates the session exactly as §6.14 (close, wait for `session.closed` up to 2 s, `reconnect`), with SSE `notice` `persona_change` (`Switching to <Name>.`) and reconnect reason `persona_change`; `personaSwitch = id`; the greeting is the §8.3 persona line. While `connecting`, the ready session is switched with no greeting; in `reconnecting` the replacement uses the new persona; otherwise it applies to the next session.
 - **Messages** (`/control` `persona`): list `sotto: persona is <id>. Personas: <id>[ (current)][ (<description>)], …. Change it with /talk persona <name>.`; set `sotto: persona set to <id>[ with the <voice> voice]. ` + `Switching the live session now.` | `The session switches as soon as it is ready.` | `It applies to the next voice session.`; `sotto: persona is already <id>.`; `sotto: unknown persona "<shown>". Personas: <ids>.`
+
+### 4.7 Live model (`daemon/models.js`, `D/prefs.json` `model`)
+`model` is `auto` (the default) or a pinned GPT-Live id, set with `/talk model [auto|<id>]` (§5.7) or `sotto model` (§5.9) and stored in `D/prefs.json` (`{"model":"auto"}`).
+- **Auto:** at daemon start and every 6 h the daemon calls `GET <base>/models` and picks the highest-versioned `gpt-live-<major>[.<minor>][-<variant>][-YYYY-MM-DD]`: higher major, then minor (a missing minor is 0); a full model over a variant (`mini`); the undated alias over a dated snapshot, then the newer date. Transcribe, translate and speech variants (and `gpt-live-transcribe`, which has no version) are never chosen; mini and other variants only when no full model is listed. No candidate → `gpt-live-1`. The choice is cached in `D/live-model.json` and logged as `live.model {chosen, available, previous, mode, reason}`. A failed check (`live.model_error`) keeps the cached choice, else `gpt-live-1`.
+- **Per session:** the model is read once in `prepareSession` and sent as `session.model` (WebRTC `POST /live/sessions`, primary `session.start`, voice previews). A session never changes model; the next one uses the new choice. `/talk status` shows `model <id>` (the live session's, else the next one's); `/status` has `live.model` and `model {mode, model, chosen, available, checked_at}`.
+- **Fallback:** a start refused for its model (an error that mentions the model, or HTTP 404) demotes that model for 24 h (`live.model_demoted`) and the start is retried at once on `gpt-live-1`; a voice error follows §4.5 "New voices". At most two retries per start.
+- **Announcement:** the first session on a model different from `announced` says it once, in persona and in the first person (§8.3 `modelChangeGreeting`: "I've moved to GPT-Live 1.1."), then records it (`live.model_announced`). The first model ever used is recorded silently. A voice or persona switch, a wake and a notify do not announce; the next session that greets does.
+- **Messages** (`/control` `model`): `sotto: model <auto|id> (<how>); the next session uses <id>[; this session runs on <id>]. [Listed for this key: <ids>.] Change it with /talk model auto|<id>.`; set `sotto: model set to <m>. The next voice session uses <id>.` (or `The current session keeps its model; the next one uses <id>.`), plus a warning when a pinned id is not listed; `sotto: unknown model "<shown>". Say auto, or a GPT-Live id such as gpt-live-1.`
+
+---
 
 ## 5. Plugin shell (Owner A)
 
@@ -521,6 +535,7 @@ Claude Code adds a plugin's `bin/` to the Bash tool's `PATH` (plugins-reference.
 | `sotto cap` | Print the daily voice limit and today's use | 0 |
 | `sotto cap off\|unlimited\|<minutes>\|<hours>h` | Set the daily voice limit (`D/prefs.json` `daily_cap_minutes`, 0 = unlimited, 1-1440; beats the `daily_cap_minutes` userConfig). A running daemon applies it at once (`/control {"action":"cap","cap":…}`); a voice paused on the limit resumes when it no longer applies. Same as `/talk cap …` | 0, or 1 for an invalid value |
 | `sotto earcon [on\|off]` | Print or set the earcon before an unprompted update (§6.15; `D/prefs.json` `earcon`). Same as `/talk earcon …` | 0, or 1 for an invalid value |
+| `sotto model [auto\|<id>]` | Print or set the Live model (§4.7; `D/prefs.json` `model`, default `auto`). Never switches a running session. Same as `/talk model …` | 0, or 1 for an unknown model |
 | `sotto callhold [on\|off]` | Print or set the opt-in call hold (§6.15; `D/prefs.json` `call_hold`, default off). Same as `/talk callhold …` | 0, or 1 for an invalid value |
 | `sotto watch "<what>"` / `sotto watch` / `sotto watch done <id> [text]` / `sotto watch clear [<id>\|all]` | Watches (§6.15): add, list, mark done (the voice says it now, or with the turn's result), clear. Free text, so it posts `/control {"action":"watch","op":…}` itself with the daemon key (`-H @<(…)`), not through toggle.sh | 0, or 1 when voice is off or the watch is unknown |
 | anything else | usage on stderr | 2 |
@@ -728,7 +743,8 @@ Messages are in §9.2.
  "current":"marin","live":true,"live_voice":"marin",
  "info":{"marin":{"tone":"Bright, clear, polished","presentation":"feminine","accent":"American","description":"Bright, clear, polished · feminine · American"}, …}}
 ```
-- `voices`: the 22 built-in voices, in this order (stable; use it for the picker).
+- `voices`: the 22 built-in voices, in this order (stable; use it for the picker), then any voices the API reported (§4.5 "New voices").
+- `new`: the reported voices (added in 0.6.9; `[]` when none). Their `info` entry has `presentation: "new"` and empty `tone`, `accent` and `description`; the pickers list them under "New".
 - `info`: what each voice sounds like (`daemon/config.js` `VOICE_INFO`): `tone`, `presentation` (`feminine` | `masculine` | `androgynous`), `accent`, and `description` (`<tone> · <presentation> · <accent>`, at most 60 characters). The pickers group by `presentation` (Feminine, Masculine, Androgynous) and show the tone under each name; `sotto voice` lists the descriptions. Presentation and accent follow OpenAI's voice table where it lists the voice. Older daemons omit `info`; clients then show plain names.
 - `current`: the voice new sessions use (§4.5). It changes as soon as a voice is set.
 - `live`: a Live session is attached right now. `live_voice`: that session's voice, else `null`. While a switch is in progress `live` is `false` and `current` already names the new voice.
@@ -1590,6 +1606,7 @@ The earlier voice conversation follows as user and assistant messages, oldest fi
 | `reconnect` after a persona switch (§4.6; also when it changed the voice) | `In one short sentence, fully in your new personality and delivery, tell the user you're now <Name>. Then stop and listen; the conversation continues from where it left off.` |
 | `reconnect` after a voice switch (§6.14) | `Say only "Switched to <voice>." Then stop and listen; the conversation continues from where it left off.` |
 | `wake`, `notify` | none (§6.15) |
+| `start`, `resume`, `reconnect` (not a switch) on a model the user has not heard about (§4.7) | `In one short sentence, fully in character and in the first person, tell the user you've moved to <GPT-Live 1.1>[ and that you're ready in {{project}}], for example "I've moved to <GPT-Live 1.1>." Then stop and listen.` (once per model change; replaces the row above) |
 
 ### 8.4 Runtime instructions
 - **Policy change:** `The update preference has changed. <policy_text> Apply it from now on without announcing it.`
@@ -1642,7 +1659,7 @@ The earlier voice conversation follows as user and assistant messages, oldest fi
 | off | `sotto: voice OFF. <m> min today ($<$>).` |
 | off, already off | `sotto: voice is already off.` |
 | status, off | `sotto: voice is off. <m> min today ($<$>).` |
-| status, on | `sotto: voice <STATE> (<project>) | <m> min today ($<$>) | voice <voice> | persona <persona id> | <policy> | link <link>` plus ` | <app note>` and ` | last error: <message>` if set. `<STATE>` is `ON` when live, else the state word. `<link>` is `mod` while the session's Claude Code mod carries voice (§6.21), else `classic`, with the reason when known: `classic (Claude Code 2.1.285)`, `classic (integration=classic)`, `classic (mod not linked)` (§6.21 "Link reason"; the full sentence follows once per session). The app note (also appended to the off status as ` <note>.`) is set only when the window is `auto`/`app` and the app is not ready: `desktop app installing`, `desktop app not installed yet; /talk app installs it`, or `desktop app couldn't be installed (<message>); using Chrome. Retry with /talk app`. |
+| status, on | `sotto: voice <STATE> (<project>) | <m> min today ($<$>) | voice <voice> | model <model> | persona <persona id> | <policy> | link <link>` plus ` | <app note>` and ` | last error: <message>` if set. `<STATE>` is `ON` when live, else the state word. `<link>` is `mod` while the session's Claude Code mod carries voice (§6.21), else `classic`, with the reason when known: `classic (Claude Code 2.1.285)`, `classic (integration=classic)`, `classic (mod not linked)` (§6.21 "Link reason"; the full sentence follows once per session). The app note (also appended to the off status as ` <note>.`) is set only when the window is `auto`/`app` and the app is not ready: `desktop app installing`, `desktop app not installed yet; /talk app installs it`, or `desktop app couldn't be installed (<message>); using Chrome. Retry with /talk app`. |
 | on, window held for an app install | `sotto: voice ON (<project>). Installing the desktop app (signed release, about 350 KB); the window opens when it is ready.` |
 | on, app install failed | `sotto: voice ON (<project>). Desktop app couldn't be installed (<message>); using Chrome.` (the page also gets the `app_install_failed` notice) |
 | window (list) | `sotto: window is <w> (desktop app: <state>). Change it with /talk window <auto|app|chrome>.` |

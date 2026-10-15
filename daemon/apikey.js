@@ -18,12 +18,14 @@
 import fs from "node:fs";
 import { execFileSync } from "node:child_process";
 import { resolveApiKeyInfo } from "./config.js";
+import { DEFAULT_LIVE_MODEL, isLiveConversationModel } from "./models.js";
 
 export const KEYCHAIN_SERVICE = "sotto";
 export const KEYCHAIN_ACCOUNT = "openai-api-key";
 export const KEYCHAIN_LABEL = "Sotto OpenAI API key";
 export const SECURITY_BIN = "/usr/bin/security";
-export const REQUIRED_MODEL = "gpt-live-1";
+/** The model a restricted key is checked against (GET /models/<id>) and the one named in messages. */
+export const REQUIRED_MODEL = DEFAULT_LIVE_MODEL;
 
 /** OpenAI secret keys: sk-, sk-proj-, sk-svcacct-, sk-admin- … then key characters. */
 export const KEY_RE = /^sk-[A-Za-z0-9_-]{16,400}$/;
@@ -188,12 +190,14 @@ export function keyWhere(info) {
 
 /**
  * Check a key with GET /v1/models before saving it: the key must be accepted
- * and its project must list gpt-live-1. A 403 on the list (a restricted key
- * without the Models read permission) falls back to GET /v1/models/gpt-live-1.
+ * and its project must list a GPT-Live conversation model (any gpt-live-<n>,
+ * so a project that has only a newer one passes; SPEC §4.7), or `model` when
+ * one is given. A 403 on the list (a restricted key without the Models read
+ * permission) falls back to GET /v1/models/<model or gpt-live-1>.
  * Returns {ok:true} or {ok:false, code, message}; messages are ours, never
  * OpenAI's (their 401 text echoes part of the key).
  */
-export async function validateKey({ base, key, fetchImpl = globalThis.fetch, clock, timeoutMs = 10_000, model = REQUIRED_MODEL }) {
+export async function validateKey({ base, key, fetchImpl = globalThis.fetch, clock, timeoutMs = 10_000, model = null }) {
   const get = async (path) => {
     const ac = new AbortController();
     const t = (clock?.setTimeout || setTimeout)(() => ac.abort(), timeoutMs);
@@ -210,7 +214,7 @@ export async function validateKey({ base, key, fetchImpl = globalThis.fetch, clo
   try {
     r = await get("/models");
     if (r.status === 403) {
-      const one = await get(`/models/${encodeURIComponent(model)}`);
+      const one = await get(`/models/${encodeURIComponent(model || REQUIRED_MODEL)}`);
       if (one.status >= 200 && one.status < 300) return { ok: true };
       if (one.status === 404) r = { status: 200, body: { data: [] } };
     }
@@ -226,8 +230,9 @@ export async function validateKey({ base, key, fetchImpl = globalThis.fetch, clo
   if (r.status === 429) return { ok: false, code: "rate_limited", message: "OpenAI is rate limiting this key right now. Wait a minute and try again." };
   if (r.status < 200 || r.status >= 300) return { ok: false, code: "openai_error", message: `OpenAI returned an error (HTTP ${r.status}) while checking the key. Try again.` };
   const ids = Array.isArray(r.body?.data) ? r.body.data.map((m) => m?.id) : [];
-  if (!ids.includes(model)) {
-    return { ok: false, code: "no_model_access", message: `This key works, but its project cannot use ${model}. Enable ${model} for the project in the OpenAI dashboard, or use another key.` };
+  if (model ? !ids.includes(model) : !ids.some(isLiveConversationModel)) {
+    const m = model || REQUIRED_MODEL;
+    return { ok: false, code: "no_model_access", message: `This key works, but its project cannot use ${m}. Enable ${m} for the project in the OpenAI dashboard, or use another key.` };
   }
   return { ok: true };
 }

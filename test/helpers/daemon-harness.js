@@ -60,7 +60,10 @@ export async function makeHarness({ env = { OPENAI_API_KEY: "sk-test-key" }, clo
     keychain,
     processes: "",
   };
+  // GET /v1/models (the Live model choice at start, daemon/models.js): not recorded.
+  h.models = ["gpt-live-1", "gpt-live-transcribe"];
   h.fetchImpl = async (url, init) => {
+    if (init?.method === "GET" && /\/models$/.test(url)) return { status: 200, text: async () => JSON.stringify({ data: h.models.map((id) => ({ id })) }) };
     h.fetchCalls.push({ url, init, body: JSON.parse(init.body) });
     const id = `live_test_${++h.liveCounter}`;
     return { status: 201, text: async () => JSON.stringify({ session: { id }, transport: { type: "webrtc", sdp: "v=0 answer" } }) };

@@ -319,7 +319,8 @@ export function pickOutputDevice(devices, savedId) {
  * {id, name, tone, description, label} where `label` is the <option> text
  * ("Coral · Bright, lively, upbeat · American"; the group names the presentation).
  */
-export const VOICE_GROUPS = Object.freeze([["feminine", "Feminine"], ["masculine", "Masculine"], ["androgynous", "Androgynous"]]);
+// "new": a voice the API reported that has no description yet (SPEC §4.5 "New voices").
+export const VOICE_GROUPS = Object.freeze([["feminine", "Feminine"], ["masculine", "Masculine"], ["androgynous", "Androgynous"], ["new", "New"]]);
 export function voiceGroups(voices) {
   const list = Array.isArray(voices?.voices) ? voices.voices : [];
   const info = voices?.info && typeof voices.info === "object" ? voices.info : {};
@@ -327,7 +328,7 @@ export function voiceGroups(voices) {
   const item = (id) => {
     const i = info[id];
     const name = cap(id);
-    if (!i || typeof i.tone !== "string") return { id, name, tone: "", description: "", label: name };
+    if (!i || typeof i.tone !== "string" || !i.tone) return { id, name, tone: "", description: "", label: name };
     const desc = String(i.description || "");
     // The option text drops the presentation: the group heading says it.
     return { id, name, tone: i.tone, description: desc, label: i.accent ? `${name} · ${i.tone} · ${i.accent}` : `${name} · ${i.tone}` };

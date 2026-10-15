@@ -254,7 +254,7 @@ test("GET /api/voices and POST /api/voice: page-token auth, validation, live swi
   assert.equal((await request(h.port, { path: "/api/voices", headers: { "X-Sotto-Key": h.d.daemonKey } })).status, 403, "the daemon key is not a page token");
   let r = await request(h.port, { path: "/api/voices", headers: page });
   assert.equal(r.status, 200);
-  assert.deepEqual(r.json, { voices: [...VOICES], current: "marin", live: false, live_voice: null, info: JSON.parse(JSON.stringify(VOICE_INFO)) });
+  assert.deepEqual(r.json, { voices: [...VOICES], current: "marin", live: false, live_voice: null, info: JSON.parse(JSON.stringify(VOICE_INFO)), new: [] });
   r = await request(h.port, { path: `/api/voices?token=${h.d.pageToken}` });
   assert.equal(r.status, 200);
 

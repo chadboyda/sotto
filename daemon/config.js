@@ -3,7 +3,7 @@
 import fs from "node:fs";
 import path from "node:path";
 
-export const VERSION = "0.6.8";
+export const VERSION = "0.6.9";
 export const NAME = "sotto";
 export const LIVE_MODEL = "gpt-live-1";
 export const DEFAULT_PORT = 47821;
@@ -22,6 +22,22 @@ export const VOICES = Object.freeze([
   "marin", "meridian", "quartz", "ripple", "sage", "shimmer", "stone", "tempo", "verse", "vesper", "willow",
 ]);
 export const POLICIES = Object.freeze(["quiet", "milestones", "walkthrough"]);
+
+// Voices the API reported that VOICES lacks (SPEC §4.5 "New voices"): a new
+// model (GPT-Live 1.1 adds voices) lists them in an "invalid voice" error.
+// The daemon loads them from D/live-model.json (daemon/models.js); they are
+// valid choices and show in the pickers as new, with no description.
+let extraVoices = [];
+export function setExtraVoices(list) {
+  extraVoices = (Array.isArray(list) ? list : []).filter((v) => typeof v === "string" && /^[a-z]{2,20}$/.test(v) && !VOICES.includes(v));
+}
+/** VOICES plus the reported new ones (newest last). */
+export function allVoices() {
+  return [...VOICES, ...extraVoices];
+}
+export function isVoice(v) {
+  return VOICES.includes(v) || extraVoices.includes(v);
+}
 
 /**
  * What each voice sounds like, for the pickers (page, app), `sotto voice` and the
@@ -107,7 +123,7 @@ export function normalizeConfig(input, base = DEFAULT_CONFIG) {
   const mins = num(c.idle_minutes, 0, 120);
   const idleSeconds = secs ?? (mins !== undefined ? mins * 60 : b.idle_seconds);
   return {
-    voice: VOICES.includes(c.voice) ? c.voice : b.voice,
+    voice: isVoice(c.voice) ? c.voice : b.voice,
     idle_minutes: Math.round((idleSeconds / 60) * 100) / 100,
     idle_seconds: idleSeconds,
     speaking_policy: POLICIES.includes(c.speaking_policy) ? c.speaking_policy : b.speaking_policy,

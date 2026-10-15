@@ -121,6 +121,8 @@ export function createDaemon({
     getApiKey: () => keyStore.key(), keys: keyStore, sse, onExit: (r) => onExit?.(r), owner, execFile, processList,
     requestRestart: onRestart ? () => (updater && updater.enabled ? updater.requestManual() : "disabled") : null,
   });
+  // The Live model (SPEC §4.7): chosen now from GET /v1/models, then every 6 h.
+  voice.startModelWatch();
   // Install the desktop app as soon as the plugin is used (the daemon starts
   // at the first /talk), not only when a window opens (SPEC §6.16).
   if (!chrome) {
