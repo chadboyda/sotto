@@ -14,6 +14,7 @@
 #   sotto cap              the daily voice limit and today's use
 #   sotto cap off|<min>|<h>h  set it (off = unlimited; applies at once)
 #   sotto earcon [on|off]  the soft chime before an update the voice wakes up to tell
+#   sotto model [auto|<id>]  the OpenAI Live model: auto (newest GPT-Live the key lists) or a pinned id
 #   sotto callhold [on|off]  hold updates while another app uses the mic (a call); off by default
 #   sotto watch "<what>"   tell the user when it happens (SPEC §6.15 "Watches"):
 #                          spoken even while the voice sleeps or is set to quiet
@@ -42,7 +43,7 @@ done
 ROOT="$(cd "${SELF%/*}/.." && pwd)"
 
 usage() {
-  printf 'usage: sotto voice [name] | sotto persona [name] | sotto status | sotto restart | sotto window [auto|app|chrome] | sotto app | sotto cap [off|<minutes>|<hours>h] | sotto earcon [on|off] | sotto callhold [on|off] | sotto watch ["<what>" | done <id> [text] | clear [<id>|all]] | sotto debug capture on|off|status\n' >&2
+  printf 'usage: sotto voice [name] | sotto persona [name] | sotto status | sotto restart | sotto window [auto|app|chrome] | sotto app | sotto cap [off|<minutes>|<hours>h] | sotto earcon [on|off] | sotto callhold [on|off] | sotto model [auto|<id>] | sotto watch ["<what>" | done <id> [text] | clear [<id>|all]] | sotto debug capture on|off|status\n' >&2
   exit 2
 }
 
@@ -56,13 +57,14 @@ case "$1" in
   cap|limit)    ARGS="cap${2:+ $2}" ;;
   earcon|chime) ARGS="earcon${2:+ $2}" ;;
   callhold|call-hold) ARGS="callhold${2:+ $2}" ;;
+  model|models) ARGS="model${2:+ $2}" ;;
   watch|watches) ARGS="watch" ;;
   debug)        [[ "$2" == capture && "$3" =~ ^(on|off|status)$ ]] || usage; ARGS="debug" ;;
   -h|--help|help|"") usage ;;
   *) usage ;;
 esac
 # Only plain words reach the JSON below.
-[[ "$ARGS" =~ ^[A-Za-z0-9\ _-]+$ ]] || { [[ "$1" == persona* ]] && printf 'sotto: unknown persona.\n' || printf 'sotto: unknown voice.\n'; exit 1; }
+[[ "$ARGS" =~ ^[A-Za-z0-9\ ._-]+$ ]] || { [[ "$1" == persona* ]] && printf 'sotto: unknown persona.\n' || { [[ "$1" == model* ]] && printf 'sotto: unknown model.\n'; } || printf 'sotto: unknown voice.\n'; exit 1; }
 
 # --- data dir discovery -----------------------------------------------------------
 CANDS=()
@@ -225,5 +227,5 @@ if [[ "$ARGS" == voice && "$MSG" =~ $re_list ]]; then
   exit 0
 fi
 printf '%s\n' "$MSG"
-[[ "$MSG" == *"ERROR"* || "$MSG" == *"unknown voice"* || "$MSG" == *"unknown persona"* || "$MSG" == *"usage:"* ]] && exit 1
+[[ "$MSG" == *"ERROR"* || "$MSG" == *"unknown voice"* || "$MSG" == *"unknown persona"* || "$MSG" == *"unknown model"* || "$MSG" == *"usage:"* ]] && exit 1
 exit 0

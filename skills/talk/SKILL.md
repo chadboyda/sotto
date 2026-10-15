@@ -1,7 +1,7 @@
 ---
 name: talk
 description: Turns sotto voice conversation on or off for this Claude Code session, or shows its status.
-argument-hint: "[on|off|status|restart|quiet|milestones|walkthrough|voice [name]|persona [name]|app|window [auto|app|chrome]|cap [off|<minutes>]|earcon [on|off]|callhold [on|off]|key]"
+argument-hint: "[on|off|status|restart|quiet|milestones|walkthrough|voice [name]|persona [name]|app|window [auto|app|chrome]|cap [off|<minutes>]|earcon [on|off]|callhold [on|off]|model [auto|<id>]|key]"
 disable-model-invocation: true
 ---
 

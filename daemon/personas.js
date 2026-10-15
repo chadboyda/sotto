@@ -14,7 +14,7 @@
 // Pure apart from the directory scan, which takes injected fs functions.
 import fs from "node:fs";
 import path from "node:path";
-import { VOICES } from "./config.js";
+import { isVoice } from "./config.js";
 
 export const DEFAULT_PERSONA = "sotto";
 /** Ids: what /talk persona and the CLI take; also the file name of a custom persona. */
@@ -412,7 +412,7 @@ export function parsePersonaFile(text, id, source = "user") {
   let voice = null;
   if (meta.voice) {
     const v = meta.voice.trim().toLowerCase();
-    if (VOICES.includes(v)) voice = v;
+    if (isVoice(v)) voice = v;
     else warnings.push("bad_voice");
   }
   const name = oneLine(meta.name, 40) || pid.charAt(0).toUpperCase() + pid.slice(1);

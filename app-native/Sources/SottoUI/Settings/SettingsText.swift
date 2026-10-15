@@ -198,7 +198,8 @@ public enum SettingsText {
     public struct VoiceGroup: Equatable, Sendable, Identifiable {
         public var id: String; public var title: String; public var voices: [String]
     }
-    static let voiceGroupOrder: [(String, String)] = [("feminine", "Feminine"), ("masculine", "Masculine"), ("androgynous", "Androgynous")]
+    /// "new": a voice the API reported with no description yet (SPEC §4.5 "New voices").
+    static let voiceGroupOrder: [(String, String)] = [("feminine", "Feminine"), ("masculine", "Masculine"), ("androgynous", "Androgynous"), ("new", "New")]
 
     /// Feminine, Masculine, Androgynous in the daemon's order; voices without info go last ("Other").
     public static func voiceGroups(_ voices: [String], info: [String: VoiceInfo]) -> [VoiceGroup] {

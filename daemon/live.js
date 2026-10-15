@@ -26,10 +26,10 @@ export function seedMessages(seed) {
   return list.map((m) => ({ type: "message", role: m.role, content: [{ type: m.role === "assistant" ? "output_text" : "input_text", text: m.text }] }));
 }
 
-export function buildSessionBody({ instructions, seed, voice, sdp }) {
+export function buildSessionBody({ instructions, seed, voice, sdp, model = LIVE_MODEL }) {
   return {
     session: {
-      model: LIVE_MODEL,
+      model,
       instructions,
       input: seedMessages(seed),
       audio: { output: { voice } },

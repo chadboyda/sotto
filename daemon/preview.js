@@ -109,7 +109,7 @@ const norm = (s) => String(s || "").toLowerCase().replace(/[^a-z]+/g, " ").trim(
  * the billed seconds from session.closed (null when unconfirmed). Never
  * rejects; the key never appears in results or logs.
  */
-export function recordPreview({ base, apiKey, voice, WebSocketImpl = globalThis.WebSocket, clock, log, timeoutMs = PREVIEW_TIMEOUT_MS, onClosed }) {
+export function recordPreview({ base, apiKey, voice, model = LIVE_MODEL, WebSocketImpl = globalThis.WebSocket, clock, log, timeoutMs = PREVIEW_TIMEOUT_MS, onClosed }) {
   const url = `${String(base).replace(/^http/, "ws")}/live/sessions`;
   const t0 = clock.now();
   const want = norm(previewText(voice));
@@ -171,7 +171,7 @@ export function recordPreview({ base, apiKey, voice, WebSocketImpl = globalThis.
       ws.send(JSON.stringify({
         type: "session.start", event_id: "sotto_preview_start",
         session: {
-          model: LIVE_MODEL,
+          model,
           instructions: previewInstructions(voice),
           audio: { format: { type: "audio/pcm", rate: PREVIEW_RATE }, output: { voice } },
           store: false,

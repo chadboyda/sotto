@@ -105,6 +105,9 @@ case "$ARG" in
   # /talk callhold [on|off]: hold updates while another app uses the mic (a call; opt-in, prefs.json).
   callhold|call-hold|call_hold) ACTION=callhold
                                 EARCON_ARG="$(printf '%s' "$ARG2" | tr '[:upper:]' '[:lower:]')" ;;
+  # /talk model [auto|<id>]: the Live model (SPEC §4.7; prefs.json, default auto).
+  model|models)                 ACTION=model
+                                MODEL_ARG="$(printf '%s' "$ARG2" | tr '[:upper:]' '[:lower:]')" ;;
   # /talk key shows where the API key comes from. Anything typed after it
   # (or a bare /talk sk-...) is never read: it opens the setup window instead.
   key|keys|apikey|api-key|api_key)
@@ -116,7 +119,7 @@ esac
 shopt -u nocasematch
 
 if [[ "$ACTION" == usage ]]; then
-  finish "sotto: usage: /talk [on|off|status|restart|quiet|milestones|walkthrough|voice [name]|persona [name]|app|window [auto|app|chrome]|cap [off|<minutes>]|earcon [on|off]|callhold [on|off]|key]"
+  finish "sotto: usage: /talk [on|off|status|restart|quiet|milestones|walkthrough|voice [name]|persona [name]|app|window [auto|app|chrome]|cap [off|<minutes>]|earcon [on|off]|callhold [on|off]|model [auto|<id>]|key]"
 fi
 
 # --- config (SPEC §4.1/§4.2); unset, empty or invalid -> default ---------------
@@ -145,6 +148,12 @@ num_or_default() {
 }
 
 VOICES="alloy ash ballad beacon bossa cedar cinder coral delta echo gleam marin meridian quartz ripple sage shimmer stone tempo verse vesper willow"
+# Voices the API reported beyond the list (SPEC §4.5 "New voices"; written by the daemon).
+if [[ -r "$D/voices-extra" ]]; then
+  read -r EXTRA_VOICES < "$D/voices-extra"
+  re_ev='^[a-z ]*$' # (macOS regex repeats stop at 255: the length is checked apart)
+  [[ "$EXTRA_VOICES" =~ $re_ev ]] && (( ${#EXTRA_VOICES} <= 600 )) && VOICES+=" $EXTRA_VOICES"
+fi
 POLICIES="quiet milestones walkthrough"
 
 CFG_VOICE="$CLAUDE_PLUGIN_OPTION_VOICE"
@@ -215,6 +224,11 @@ pref_call_hold() { # prints true/false when prefs.json sets call_hold, else noth
   [[ -r "$PREFS" ]] && p="$(<"$PREFS")"
   if [[ "$p" =~ $re ]]; then printf '%s' "${BASH_REMATCH[1]}"; fi
 }
+pref_model() { # prints the model setting from prefs.json (auto or a gpt-live id), or nothing
+  local p="" re='"model"[[:space:]]*:[[:space:]]*"(auto|gpt-live-[0-9][a-z0-9.-]{0,40})"'
+  [[ -r "$PREFS" ]] && p="$(<"$PREFS")"
+  if [[ "$p" =~ $re ]]; then printf '%s' "${BASH_REMATCH[1]}"; fi
+}
 pref_cap() { # prints the daily limit (minutes, 0 = unlimited) from prefs.json, or nothing
   local p="" re='"daily_cap_minutes"[[:space:]]*:[[:space:]]*([0-9]+)'
   [[ -r "$PREFS" ]] && p="$(<"$PREFS")"
@@ -244,6 +258,8 @@ write_prefs() {
   [[ -n "$ec" ]] && body="${body:+$body,}\"earcon\":$ec"
   local ch="${CALL_HOLD_NEW:-$(pref_call_hold)}"
   [[ -n "$ch" ]] && body="${body:+$body,}\"call_hold\":$ch"
+  local md="${MODEL_NEW:-$(pref_model)}"
+  [[ -n "$md" ]] && body="${body:+$body,}\"model\":\"$md\""
   printf '{%s}\n' "$body" > "$PREFS.tmp" && chmod 600 "$PREFS.tmp" && mv -f "$PREFS.tmp" "$PREFS"
 }
 
@@ -417,6 +433,15 @@ callhold_local() {
     *) finish "sotto: ERROR say /talk callhold on or /talk callhold off." ;;
   esac
 }
+# model_local: /talk model with no daemon of ours to ask (exits).
+model_local() {
+  local cur
+  cur="$(pref_model)"; [[ -n "$cur" ]] || cur=auto
+  [[ -z "$MODEL_ARG" ]] && finish "sotto: model $cur. Voice is off, so nothing was checked; auto uses the newest GPT-Live the API lists. Change it with /talk model auto|<id>."
+  MODEL_NEW="$MODEL_ARG" write_prefs "$(pref_voice)" "$(pref_window)" \
+    || fail prefs_write "sotto: ERROR could not save the model to $PREFS."
+  finish "sotto: model set to $MODEL_ARG. It applies to the next voice session."
+}
 voice_local() {
   local cur own pv=""
   cur="$(effective_voice)"
@@ -445,6 +470,10 @@ fi
 if [[ "$ACTION" == persona && -n "$PERSONA_ARG" && ! "$PERSONA_ARG" =~ ^[a-z0-9][a-z0-9_-]{0,31}$ ]]; then
   SHOWN="${PERSONA_ARG//[^a-z0-9_-]/}"
   finish "sotto: unknown persona \"${SHOWN:0:40}\". Personas: $(ids="$(persona_ids)"; printf '%s' "${ids// /, }")."
+fi
+if [[ "$ACTION" == model && -n "$MODEL_ARG" && ! "$MODEL_ARG" =~ ^(auto|gpt-live-[0-9][a-z0-9.-]{0,40})$ ]]; then
+  SHOWN="${MODEL_ARG//[^a-z0-9._-]/}"
+  finish "sotto: unknown model \"${SHOWN:0:40}\". Say auto, or a GPT-Live id such as gpt-live-1."
 fi
 if [[ "$ACTION" == voice && -n "$VOICE_ARG" ]]; then
   # shellcheck disable=SC2086
@@ -524,6 +553,7 @@ if [[ -n "$H" ]]; then
     [[ "$ACTION" == cap ]] && cap_local
     [[ "$ACTION" == earcon ]] && earcon_local
     [[ "$ACTION" == callhold ]] && callhold_local
+    [[ "$ACTION" == model ]] && model_local
     if [[ "$ACTION" == on || "$ACTION" == toggle || "$ACTION" == app ]]; then
       # Replace it with ours: ask it to shut down, wait for the port, then spawn.
       OKEY=""; [[ -r "$KEYFILE" ]] && OKEY="$(<"$KEYFILE")"
@@ -571,6 +601,7 @@ daemon_down() {
     cap)        cap_local ;;
     earcon)     earcon_local ;;
     callhold)   callhold_local ;;
+    model)      model_local ;;
   esac
   # on/toggle/app/key continue: key needs a daemon to serve the setup window.
 }
@@ -713,6 +744,7 @@ if [[ ( "$ACTION" == voice && -n "$VOICE_ARG" ) || ( "$ACTION" == persona && -n 
   CTL_MAX_S=8
 fi
 [[ "$ACTION" == window && -n "$WINDOW_ARG" ]] && BODY+=",\"window\":\"$WINDOW_ARG\""
+[[ "$ACTION" == model && -n "$MODEL_ARG" ]] && BODY+=",\"model\":\"$MODEL_ARG\""
 if [[ ( "$ACTION" == earcon || "$ACTION" == callhold ) && -n "$EARCON_ARG" ]]; then
   case "$EARCON_ARG" in on|yes|true) BODY+=",\"on\":true" ;; off|no|false) BODY+=",\"on\":false" ;; *) finish "sotto: ERROR say /talk $ACTION on or /talk $ACTION off." ;; esac
 fi

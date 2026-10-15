@@ -87,6 +87,7 @@ The symlink loads the plugin in place as `sotto@skills-dir`, so edits to the rep
 | `/talk app` | Use the Sotto desktop app: install it now if it is missing (or retry a failed install), open the voice in it, and remember the choice |
 | `/talk window <auto\|app\|chrome>` | Where the voice window opens, saved like the voice. `/talk window` alone shows the current choice and whether the app is installed |
 | `/talk cap <off\|minutes\|hours h>` | The daily voice limit, for example `/talk cap off` (unlimited) or `/talk cap 4h`. Applies at once and resumes a voice paused on the limit; `sotto cap` and Settings > Daily limit do the same. `/talk cap` alone shows it and today's use |
+| `/talk model [auto\|<id>]` | The OpenAI voice model. `auto` (the default) moves to the newest GPT-Live your key can use, checked every 6 hours, and says so once ("I've moved to GPT-Live 1.1"); an id such as `gpt-live-1` pins it. A running session keeps its model; `sotto model` does the same |
 | `/talk earcon <on\|off>` | The soft chime before an update the voice wakes up to tell you (on by default); `sotto earcon` and Settings > "Chime before updates" do the same |
 | `/talk callhold <on\|off>` | Hold updates while another app uses the microphone (a call), off by default; `sotto callhold` and Settings > "Hold updates during calls" do the same |
 | `/talk key` | Which OpenAI API key is in use (its last four characters) and where it comes from; with no key, opens the window to add one |

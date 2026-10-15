@@ -177,6 +177,10 @@ final class SettingsModelTests: XCTestCase {
         XCTAssertEqual(m.voiceGroups.map(\.title), ["Feminine", "Masculine", "Androgynous"])
         XCTAssertEqual(m.voiceGroups.map(\.voices), [["marin"], ["cedar"], ["alloy"]])
         XCTAssertEqual(SettingsText.voicePickerGroups(m.voices, info: m.voiceInfo).flatMap(\.options).first { $0.id == "cedar" }?.desc, "Relaxed, textured, casual · American")
+        // A voice the API reported (SPEC §4.5 "New voices"): under "New", no description.
+        let fresh = SettingsText.voiceGroups(["marin", "soleil"], info: ["marin": VoiceInfo(tone: "Bright", presentation: "feminine"), "soleil": VoiceInfo(description: "", tone: "", presentation: "new", accent: "")])
+        XCTAssertEqual(fresh.map(\.title), ["Feminine", "New"])
+        XCTAssertEqual(SettingsText.voicePickerGroups(["soleil"], info: ["soleil": VoiceInfo(description: "", tone: "", presentation: "new", accent: "")]).first?.options.first?.desc, "")
         XCTAssertEqual(m.settings?.window, "auto")
         XCTAssertEqual(m.wakeLevels, ["off", "low", "medium", "high"])
         XCTAssertEqual(m.settings?.data_dir, "/tmp/sotto-data")
