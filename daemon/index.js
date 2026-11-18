@@ -367,7 +367,12 @@ async function main() {
     await (handover ? listenWithRetry(() => d.listen()) : d.listen());
   } catch (e) {
     log.error("listen.error", { code: e.code, port: args.port });
-    if (!handover) removeQuiet(paths.pid);
+    if (!handover) {
+      removeQuiet(paths.pid);
+      // Taken between the port probe and listen (§6.2): say so to toggle.sh.
+      if (e.code === "EADDRINUSE") try { writeAtomic(paths.startError, `port_lost	${args.port}
+`); } catch { /* ignore */ }
+    }
     process.exit(1);
   }
   log.info("start", { version: VERSION, pid: process.pid, port: args.port, node: process.version, runtime: runtimeLabel(), handover: !!handover });

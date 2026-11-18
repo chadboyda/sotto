@@ -565,9 +565,10 @@ if [[ -n "$H" ]]; then
   fi
 fi
 
-# port_busy PORT: does something accept connections on 127.0.0.1:PORT?
-# (bash's /dev/tcp; a refused loopback connect fails at once.)
-port_busy() { ( exec 3<>"/dev/tcp/127.0.0.1/$1" ) 2>/dev/null; }
+# port_busy PORT: does something hold 127.0.0.1:PORT? curl exits 7 only when
+# the connection is refused (the port is free); a timeout or any answer means
+# held. Bounded at 0.3 s like healthz (a /dev/tcp connect has no time limit).
+port_busy() { curl -s -o /dev/null -m 0.3 "http://127.0.0.1:$1/"; [[ $? -ne 7 ]]; }
 
 # port_holder PORT: "<command> pid <n>" of the process listening on PORT (lsof),
 # else "another program". Only run when a port clash is reported.
@@ -710,6 +711,7 @@ cold_start() {
   if [[ -z "$H" && -f "$D/start-error" ]]; then
     IFS=$'\t' read -r SE_CODE SE_VER SE_LAST _ < "$D/start-error"
     [[ "$SE_CODE" == node_version ]] && fail no_node "sotto: ERROR node on PATH is $SE_VER; sotto needs Node 22 or newer. Set SOTTO_NODE to a Node 22 binary, or change your default Node."
+    [[ "$SE_CODE" == port_lost ]] && fail port_lost "sotto: ERROR port $SE_VER was taken while the voice daemon started. Run /talk on again."
     [[ "$SE_CODE" == port_busy ]] && fail port_in_use "sotto: ERROR ports $PORT-$SE_LAST are all in use ($PORT is held by $(port_holder "$PORT")). Choose another port in /config (sotto), or stop that program."
   fi
   [[ -n "$H" ]] || fail spawn_timeout "sotto: ERROR the voice daemon did not start. See $D/logs/daemon.log"

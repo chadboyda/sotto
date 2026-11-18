@@ -459,7 +459,7 @@ async function holdPort(port) {
 async function freeRun(n) {
   for (let tries = 0; tries < 50; tries++) {
     const p = await freePort();
-    if (p + n > 65535) continue;
+    if (p + n > 65535) continue; // also keeps p+9 in range for the fallback window
     let ok = true;
     for (let q = p + 1; q < p + n && ok; q++) ok = await portFree(q);
     if (ok) return p;
@@ -473,8 +473,10 @@ describe("toggle.sh port fallback (SPEC §6.2)", () => {
     await holdPort(port);
     const { D, env } = await setup({ CLAUDE_PLUGIN_OPTION_PORT: String(port) });
     const out = parseOut(await run(TOGGLE, { env, input: stdinFor("on") }));
-    assert.equal(out.stopReason, `sotto: port ${port} busy (held by node pid ${process.pid}), using ${port + 1}; stub: on`);
-    assert.equal(readFileSync(join(D, "daemon.port"), "utf8").trim(), String(port + 1));
+    // Usually port+1; another test may have grabbed it meanwhile.
+    const moved = Number(readFileSync(join(D, "daemon.port"), "utf8").trim());
+    assert.ok(moved > port && moved <= port + 9, `moved to ${moved}`);
+    assert.equal(out.stopReason, `sotto: port ${port} busy (held by node pid ${process.pid}), using ${moved}; stub: on`);
     const { argv } = JSON.parse(readFileSync(join(D, "stub-argv.json"), "utf8"));
     assert.equal(argv[1], String(port), "spawned with the port setting; the daemon moves itself");
     const pid = Number(readFileSync(join(D, "daemon.pid"), "utf8"));
@@ -512,7 +514,7 @@ describe("toggle.sh port fallback (SPEC §6.2)", () => {
     writeFileSync(join(D, "stub-live"), "");
     assert.equal(parseOut(await run(TOGGLE, { env, input: stdinFor("on") })).stopReason, "stub: on");
     assert.equal(Number(readFileSync(join(D, "daemon.pid"), "utf8")), pid, "live: not restarted");
-    assert.equal(readFileSync(join(D, "daemon.port"), "utf8").trim(), String(port + 1));
+    assert.notEqual(readFileSync(join(D, "daemon.port"), "utf8").trim(), String(port));
 
     rmSync(join(D, "stub-live"));
     assert.equal(parseOut(await run(TOGGLE, { env, input: stdinFor("on") })).stopReason, "stub: on");

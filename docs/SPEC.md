@@ -1640,6 +1640,7 @@ The earlier voice conversation follows as user and assistant messages, oldest fi
 | no node, no Bun | `sotto: ERROR node was not found on PATH; sotto needs Node 22 or newer. <how>` |
 | | `<how>` = `Install Node 22 or newer (brew install node, nvm install 22, or nodejs.org), or Bun (bun.sh), then run /talk on again.` |
 | port taken (the setting and all 9 fallbacks, §6.2) | `sotto: ERROR ports <P>-<last> are all in use (<P> is held by <command> pid <n>). Choose another port in /config (sotto), or stop that program.` |
+| port lost (§6.2; taken between the probe and listen: `D/start-error` `port_lost<TAB><port>`) | `sotto: ERROR port <Q> was taken while the voice daemon started. Run /talk on again.` |
 | port moved (§6.2; prefix of the `/talk on` answer) | `sotto: port <P> busy (held by <command> pid <n>), using <Q>; <answer without its sotto: prefix>` |
 | spawn timeout | `sotto: ERROR the voice daemon did not start. See <D>/logs/daemon.log` |
 | bad response | `sotto: ERROR the voice daemon did not answer. See <D>/logs/daemon.log` |

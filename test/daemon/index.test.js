@@ -86,16 +86,18 @@ test("port held by another program → listens on the next port and records it (
   const net = await import("node:net");
   const { portFree } = await import("../../daemon/port.js");
   let port;
-  do { port = await freePort(); } while (!(await portFree(port + 1)));
+  do { port = await freePort(); } while (port >= 65535 || !(await portFree(port + 1)));
   const blocker = net.createServer().listen(port, "127.0.0.1");
   await new Promise((r) => blocker.once("listening", r));
   const child = spawn(process.execPath, [ENTRY, "--port", String(port), "--data-dir", D, "--plugin-root", root], { stdio: "ignore", env: envNoKey() });
   t.after(() => { try { child.kill("SIGKILL"); } catch {} blocker.close(); fs.rmSync(D, { recursive: true, force: true }); fs.rmSync(root, { recursive: true, force: true }); });
-  const body = await waitFor(async () => (await fetch(`http://127.0.0.1:${port + 1}/healthz`)).json());
-  assert.equal(body.port, port + 1);
-  assert.equal(fs.readFileSync(path.join(D, "daemon.port"), "utf8").trim(), String(port + 1));
+  // Another test may grab port+1 meanwhile: any port of the fallback range will do.
+  const moved = await waitFor(() => Number(fs.readFileSync(path.join(D, "daemon.port"), "utf8").trim()));
+  assert.ok(moved > port && moved <= port + 9, `moved to ${moved}`);
+  const body = await waitFor(async () => (await fetch(`http://127.0.0.1:${moved}/healthz`)).json());
+  assert.equal(body.port, moved);
   const log = fs.readFileSync(path.join(D, "logs", "daemon.log"), "utf8");
-  assert.match(log, new RegExp(`"ev":"listen.fallback".*"from":${port},"to":${port + 1}`));
+  assert.match(log, new RegExp(`"ev":"listen.fallback".*"from":${port},"to":${moved}`));
 });
 
 test("the port setting and all nine fallbacks held → exit 1, D/start-error port_busy", async (t) => {
