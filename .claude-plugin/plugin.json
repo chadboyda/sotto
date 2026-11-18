@@ -2,7 +2,7 @@
   "$schema": "https://json.schemastore.org/claude-code-plugin-manifest.json",
   "name": "sotto",
   "displayName": "Sotto",
-  "version": "0.6.9",
+  "version": "0.6.10",
   "description": "Full-duplex voice conversation with your running Claude Code session, powered by OpenAI gpt-live-1. Toggle with /talk.",
   "author": { "name": "Chad Boyda" },
   "homepage": "https://github.com/chadboyda/sotto",
@@ -17,7 +17,7 @@
     },
     "port": {
       "type": "number", "title": "Local port", "default": 47821, "min": 1024, "max": 65535,
-      "description": "Loopback port for the sotto daemon and voice window."
+      "description": "Loopback port for the sotto daemon and voice window. If another program holds it, Sotto uses the next free port (up to 9 higher) and says so."
     },
     "idle_seconds": {
       "type": "number", "title": "Idle seconds", "default": 60, "min": 0, "max": 7200,

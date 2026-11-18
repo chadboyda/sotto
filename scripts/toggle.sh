@@ -526,14 +526,14 @@ json_escape -v E_ROOT "$ROOT"
 KEYFILE="$D/daemon.key"
 
 H="$(healthz)"
+FOREIGN=""
+if [[ -n "$H" && "$H" != *'"name":"sotto"'* ]]; then
+  # Another program answers on our port. Our daemon then runs (or will run)
+  # on a fallback port (SPEC §6.2 "Port fallback"), found below via D/daemon.port.
+  FOREIGN=1
+  H=""
+fi
 if [[ -n "$H" ]]; then
-  if [[ "$H" != *'"name":"sotto"'* ]]; then
-    # Name the program when it says who it is (e.g. an older voice daemon
-    # that also answers /healthz), so the user knows what to stop.
-    re_nm='"name":"([A-Za-z0-9._-]{1,40})"'
-    WHO=""; [[ "$H" =~ $re_nm ]] && WHO=" (${BASH_REMATCH[1]})"
-    fail port_in_use "sotto: ERROR port $PORT is used by another program$WHO. Choose another port in /config (sotto), or stop that program."
-  fi
   re_dd='"data_dir":"((\\.|[^"\\])*)"'
   re_pr='"plugin_root":"((\\.|[^"\\])*)"'
   H_DD=""; H_PR=""
@@ -565,15 +565,45 @@ if [[ -n "$H" ]]; then
   fi
 fi
 
-# Our daemon may still run on a port recorded before the port option changed.
-# off/status/policy talk to it there; on/toggle stop it and start on the new port.
+# port_busy PORT: does something accept connections on 127.0.0.1:PORT?
+# (bash's /dev/tcp; a refused loopback connect fails at once.)
+port_busy() { ( exec 3<>"/dev/tcp/127.0.0.1/$1" ) 2>/dev/null; }
+
+# port_holder PORT: "<command> pid <n>" of the process listening on PORT (lsof),
+# else "another program". Only run when a port clash is reported.
+port_holder() {
+  local line p="" c="" L=lsof
+  command -v lsof >/dev/null || L=/usr/sbin/lsof
+  while IFS= read -r line; do
+    case "$line" in
+      p*) [[ -z "$p" ]] && p="${line#p}" ;;
+      c*) [[ -z "$c" ]] && c="${line#c}" ;;
+    esac
+  done < <("$L" -nP +c 0 -iTCP:"$1" -sTCP:LISTEN -Fpc 2>/dev/null </dev/null)
+  c="${c//[^A-Za-z0-9._ -]/}"; c="${c:0:40}"
+  if [[ "$p" =~ ^[0-9]+$ ]]; then printf '%s pid %s' "${c:-a program}" "$p"; else printf 'another program'; fi
+}
+PORT_NOTE=""
+
+# Our daemon may run on a port other than the setting: a fallback port while
+# another program holds the setting (SPEC §6.2), or the port recorded before
+# the port option changed. Every action talks to a fallback daemon there; for
+# a changed option, off/status/policy talk to it and on/toggle stop it and
+# start on the new port.
 if [[ -z "$H" && -r "$D/daemon.port" ]]; then
   RECPORT="$(<"$D/daemon.port")"; RECPORT="${RECPORT%%[[:space:]]*}"
   if [[ "$RECPORT" =~ ^[0-9]+$ && "$RECPORT" != "$PORT" ]]; then
     RBASE="http://127.0.0.1:$RECPORT"
     RH="$(healthz "$RBASE")"
     if [[ "$RH" == *'"name":"sotto"'* && "$RH" == *"\"data_dir\":\"$E_D\""* ]]; then
-      if [[ "$ACTION" == on || "$ACTION" == toggle || "$ACTION" == app ]]; then
+      # A fallback daemon stays while the setting is held, and while voice is
+      # live there (a freed setting is never worth dropping a session for).
+      FALLBACK=""
+      if (( RECPORT > PORT && RECPORT <= PORT + 9 )) \
+          && { [[ -n "$FOREIGN" || "$RH" != *'"state":"off"'* ]] || port_busy "$PORT"; }; then
+        FALLBACK=1
+      fi
+      if [[ -z "$FALLBACK" && ( "$ACTION" == on || "$ACTION" == toggle || "$ACTION" == app ) ]]; then
         RKEY=""; [[ -r "$D/daemon.key" ]] && RKEY="$(<"$D/daemon.key")"
         post_shutdown "$RBASE" "${RKEY%%[[:space:]]*}"
         wait_gone "$RBASE" || fail other_daemon_stuck "sotto: ERROR the voice daemon on port $RECPORT did not stop. See $D/logs/daemon.log"
@@ -655,26 +685,38 @@ cold_start() {
   ( cd "$ROOT" && CLAUDE_PLUGIN_OPTION_OPENAI_API_KEY="${CLAUDE_PLUGIN_OPTION_OPENAI_API_KEY:-}" \
       exec nohup "$NODE" "$ENTRY" --port "$PORT" --data-dir "$D" --plugin-root "$ROOT" ) >/dev/null 2>&1 </dev/null &
   disown
-  # Poll /healthz every 50 ms for up to ~5 s (version-manager shims can take a
-  # second to start node). bash 3.2 has no sub-second clock, so bound by both
-  # SECONDS (4-5 s of wall time) and an iteration cap.
+  # Poll every 50 ms for up to ~5 s (version-manager shims can take a second
+  # to start node). bash 3.2 has no sub-second clock, so bound by both
+  # SECONDS (4-5 s of wall time) and an iteration cap. The daemon may have
+  # moved to a fallback port (SPEC §6.2), so ask the port it records in
+  # D/daemon.port, and only OUR daemon (same data dir) ends the wait.
   SECONDS=0
   i=0
+  CP=""
   while (( SECONDS < 5 && i < 100 )); do
-    H="$(healthz)"
-    [[ -n "$H" ]] && break
+    H=""
+    if [[ -r "$D/daemon.port" ]]; then
+      CP="$(<"$D/daemon.port")"; CP="${CP%%[[:space:]]*}"
+      if [[ "$CP" =~ ^[0-9]+$ ]]; then
+        H="$(healthz "http://127.0.0.1:$CP")"
+        [[ "$H" == *'"name":"sotto"'* && "$H" == *"\"data_dir\":\"$E_D\""* ]] && break
+        H=""
+      fi
+    fi
     [[ -f "$D/start-error" ]] && break
     sleep 0.05
     i=$((i + 1))
   done
   if [[ -z "$H" && -f "$D/start-error" ]]; then
-    IFS=$'\t' read -r SE_CODE SE_VER _ < "$D/start-error"
+    IFS=$'\t' read -r SE_CODE SE_VER SE_LAST _ < "$D/start-error"
     [[ "$SE_CODE" == node_version ]] && fail no_node "sotto: ERROR node on PATH is $SE_VER; sotto needs Node 22 or newer. Set SOTTO_NODE to a Node 22 binary, or change your default Node."
+    [[ "$SE_CODE" == port_busy ]] && fail port_in_use "sotto: ERROR ports $PORT-$SE_LAST are all in use ($PORT is held by $(port_holder "$PORT")). Choose another port in /config (sotto), or stop that program."
   fi
-  # It must be OUR daemon that answers (same data dir), not a leftover.
-  [[ "$H" == *'"name":"sotto"'* && "$H" == *"\"data_dir\":\"$E_D\""* ]] || fail spawn_timeout "sotto: ERROR the voice daemon did not start. See $D/logs/daemon.log"
-  BASE="http://127.0.0.1:$PORT"
+  [[ -n "$H" ]] || fail spawn_timeout "sotto: ERROR the voice daemon did not start. See $D/logs/daemon.log"
+  BASE="http://127.0.0.1:$CP"
   KEYFILE="$D/daemon.key"
+  # Another program held the port setting: say so once, with who holds it.
+  [[ "$CP" != "$PORT" ]] && PORT_NOTE="port $PORT busy (held by $(port_holder "$PORT")), using $CP"
 }
 
 # A daemon of ours without any key, while the plugin settings now hold one:
@@ -769,6 +811,13 @@ post_control() {
     --data-binary @- "$BASE/control?format=hook")"
   RESP="${RESP%$'\n'}"
   if [[ "$RESP" == \{*\} && "$RESP" == *'"continue":false'* && "$RESP" != *$'\n'* ]]; then
+    # A port clash at this start leads the daemon's answer (SPEC §6.2).
+    local pre='{"continue":false,"stopReason":"' rest note
+    if [[ -n "$PORT_NOTE" && "$RESP" == "$pre"* ]]; then
+      rest="${RESP#"$pre"}"
+      json_escape -v note "$PORT_NOTE"
+      RESP="${pre}sotto: ${note}; ${rest#sotto: }"
+    fi
     printf '%s\n' "$RESP"
     exit 0
   fi
