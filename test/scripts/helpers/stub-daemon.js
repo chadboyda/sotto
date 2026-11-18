@@ -7,19 +7,28 @@
 // - POST /control?format=hook -> {"continue":false,"stopReason":"stub: <action>"}
 //   (requires X-Sotto-Key); each body is appended to D/stub-control.jsonl
 // - {"action":"shutdown"} replies, then exits (after CLV_STUB_SHUTDOWN_MS)
-// - writes D/daemon.port like the real daemon
+// - /healthz state is "listening" while D/stub-live exists, else "off"
+// - writes D/daemon.port like the real daemon, after the same port fallback
+//   (daemon/port.js: a held --port moves it to the next free one; all held ->
+//   D/start-error "port_busy" and exit 1)
 // It exits by itself after 60 s so a failed test never leaks it.
 import { createServer } from "node:http";
 import { writeFileSync, appendFileSync, rmSync, existsSync } from "node:fs";
 import { randomBytes } from "node:crypto";
 import { join } from "node:path";
+import { pickPort, lastPort } from "../../../daemon/port.js";
 
 const args = process.argv.slice(2);
 const opt = (name) => { const i = args.indexOf(name); return i >= 0 ? args[i + 1] : undefined; };
-const port = Number(opt("--port"));
+const basePort = Number(opt("--port"));
 const dataDir = opt("--data-dir");
 const pluginRoot = opt("--plugin-root");
-if (!port || !dataDir || !pluginRoot) process.exit(2);
+if (!basePort || !dataDir || !pluginRoot) process.exit(2);
+const port = await pickPort(basePort);
+if (port === null) {
+  writeFileSync(join(dataDir, "start-error"), `port_busy\t${basePort}\t${lastPort(basePort)}\n`);
+  process.exit(1);
+}
 
 const key = randomBytes(32).toString("hex");
 writeFileSync(join(dataDir, "daemon.pid"), `${process.pid}\n`, { mode: 0o600 });
@@ -45,7 +54,7 @@ const server = createServer((req, res) => {
     const url = new URL(req.url, "http://x");
     if (req.method === "GET" && url.pathname === "/healthz") {
       res.writeHead(200, { "Content-Type": "application/json" });
-      res.end(JSON.stringify({ ok: true, name: "sotto", version: "0.6.9", pid: process.pid, port, data_dir: dataDir, plugin_root: pluginRoot, state: "off", api_key: !!userConfigKey || existsSync(join(dataDir, "stub-has-key")) }));
+      res.end(JSON.stringify({ ok: true, name: "sotto", version: "0.6.10", pid: process.pid, port, data_dir: dataDir, plugin_root: pluginRoot, state: existsSync(join(dataDir, "stub-live")) ? "listening" : "off", api_key: !!userConfigKey || existsSync(join(dataDir, "stub-has-key")) }));
       return;
     }
     if (req.method === "POST" && url.pathname === "/control") {

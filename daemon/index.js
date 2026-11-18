@@ -12,6 +12,7 @@ import { KeyStore } from "./apikey.js";
 import { dataPaths } from "./paths.js";
 import { writePid, writeKey, writePort, writeAtomic, removeQuiet } from "./statefiles.js";
 import { createLogger } from "./log.js";
+import { pickPort, lastPort } from "./port.js";
 import { SseHub } from "./sse.js";
 import { Voice } from "./voice.js";
 import { createHttpServer } from "./http.js";
@@ -284,6 +285,18 @@ async function main() {
     removeQuiet(paths.active);
     removeQuiet(paths.pendingContext);
     removeQuiet(paths.approvalPending);
+    // Port fallback (§6.2): another program on the port setting moves us to
+    // the next free one (47822..47830). Chosen before anything is built, so
+    // every URL, Host check and D/active carries the port actually bound; a
+    // successor (self-update) is handed that port and keeps it.
+    const chosen = await pickPort(args.port);
+    if (chosen === null) {
+      log.error("listen.error", { code: "EADDRINUSE", port: args.port, last: lastPort(args.port) });
+      try { writeAtomic(paths.startError, `port_busy\t${args.port}\t${lastPort(args.port)}\n`); } catch { /* ignore */ }
+      process.exit(1);
+    }
+    if (chosen !== args.port) log.warn("listen.fallback", { from: args.port, to: chosen });
+    args.port = chosen;
   }
 
   const daemonKey = handover ? handover.daemon_key : randomBytes(32).toString("hex");
@@ -354,7 +367,12 @@ async function main() {
     await (handover ? listenWithRetry(() => d.listen()) : d.listen());
   } catch (e) {
     log.error("listen.error", { code: e.code, port: args.port });
-    if (!handover) removeQuiet(paths.pid);
+    if (!handover) {
+      removeQuiet(paths.pid);
+      // Taken between the port probe and listen (§6.2): say so to toggle.sh.
+      if (e.code === "EADDRINUSE") try { writeAtomic(paths.startError, `port_lost	${args.port}
+`); } catch { /* ignore */ }
+    }
     process.exit(1);
   }
   log.info("start", { version: VERSION, pid: process.pid, port: args.port, node: process.version, runtime: runtimeLabel(), handover: !!handover });

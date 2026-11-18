@@ -3,11 +3,13 @@
 // SOTTO_DAEMON_ENTRY; it records every /control body it receives.
 import { test, describe, afterEach } from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync, existsSync, statSync, mkdirSync, writeFileSync, realpathSync } from "node:fs";
+import { readFileSync, existsSync, statSync, mkdirSync, writeFileSync, realpathSync, rmSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { join } from "node:path";
+import { createServer as createNetServer } from "node:net";
 import { TOGGLE, ROOT, run, tempDir, rmDir, baseEnv, freePort, waitFor, isAlive, sleep, spawnBaseline, underLoad, IDLE_SPAWN_MS } from "./helpers/run.js";
 import { startFakeDaemon } from "./helpers/fake-daemon.js";
+import { portFree } from "../../daemon/port.js";
 import { BUILTIN_PERSONAS, personaListMessage, unknownPersonaMessage, loadPersonas } from "../../daemon/personas.js";
 
 const STUB = join(ROOT, "test/scripts/helpers/stub-daemon.js");
@@ -445,23 +447,94 @@ describe("toggle.sh with the daemon down", () => {
   });
 });
 
-describe("toggle.sh with something else on the port", () => {
-  test("foreign HTTP server -> port in use error", async () => {
-    const foreign = await startFakeDaemon({ handler: () => ({ status: 200, body: "<html>hi</html>" }) });
-    const { env } = await setup({ CLAUDE_PLUGIN_OPTION_PORT: String(foreign.port) });
-    cleanups.push(() => foreign.close());
+/** Hold 127.0.0.1:port with a plain TCP listener in this process (not HTTP). */
+async function holdPort(port) {
+  const srv = createNetServer((sock) => sock.destroy());
+  await new Promise((res, rej) => { srv.once("error", rej); srv.listen(port, "127.0.0.1", res); });
+  cleanups.push(() => new Promise((r) => srv.close(() => r())));
+  return srv;
+}
+
+/** A port p with p..p+n-1 all free right now (the fallback tests need neighbours). */
+async function freeRun(n) {
+  for (let tries = 0; tries < 50; tries++) {
+    const p = await freePort();
+    if (p + n > 65535) continue; // also keeps p+9 in range for the fallback window
+    let ok = true;
+    for (let q = p + 1; q < p + n && ok; q++) ok = await portFree(q);
+    if (ok) return p;
+  }
+  throw new Error("no run of free ports");
+}
+
+describe("toggle.sh port fallback (SPEC §6.2)", () => {
+  test("another program holds the port: on starts the daemon on the next port and names the holder", async () => {
+    const port = await freeRun(2);
+    await holdPort(port);
+    const { D, env } = await setup({ CLAUDE_PLUGIN_OPTION_PORT: String(port) });
     const out = parseOut(await run(TOGGLE, { env, input: stdinFor("on") }));
-    assert.equal(out.stopReason, `sotto: ERROR port ${foreign.port} is used by another program. Choose another port in /config (sotto), or stop that program.`);
+    // Usually port+1; another test may have grabbed it meanwhile.
+    const moved = Number(readFileSync(join(D, "daemon.port"), "utf8").trim());
+    assert.ok(moved > port && moved <= port + 9, `moved to ${moved}`);
+    assert.equal(out.stopReason, `sotto: port ${port} busy (held by node pid ${process.pid}), using ${moved}; stub: on`);
+    const { argv } = JSON.parse(readFileSync(join(D, "stub-argv.json"), "utf8"));
+    assert.equal(argv[1], String(port), "spawned with the port setting; the daemon moves itself");
+    const pid = Number(readFileSync(join(D, "daemon.pid"), "utf8"));
+
+    // While the port stays held, every action reaches the daemon on the
+    // fallback port; on/toggle keep it (no restart) and say nothing more.
+    assert.equal(parseOut(await run(TOGGLE, { env, input: stdinFor("status") })).stopReason, "stub: status");
+    assert.equal(parseOut(await run(TOGGLE, { env, input: stdinFor("on") })).stopReason, "stub: on");
+    assert.equal(parseOut(await run(TOGGLE, { env, input: stdinFor("off") })).stopReason, "stub: off");
+    assert.ok(isAlive(pid));
+    assert.equal(Number(readFileSync(join(D, "daemon.pid"), "utf8")), pid);
+    assert.deepEqual(controlBodies(D).map((b) => b.action), ["on", "status", "on", "off"]);
   });
 
-  test("another program that names itself in /healthz is named in the error", async () => {
+  test("a foreign HTTP server on the port: on falls back; status with no daemon says off", async () => {
     const foreign = await startFakeDaemon({ handler: () => ({ status: 200, body: JSON.stringify({ ok: true, name: "old-voice", port: 1 }) }) });
-    const { env } = await setup({ CLAUDE_PLUGIN_OPTION_PORT: String(foreign.port) });
     cleanups.push(() => foreign.close());
-    const out = parseOut(await run(TOGGLE, { env, input: stdinFor("status") }));
-    assert.equal(out.stopReason, `sotto: ERROR port ${foreign.port} is used by another program (old-voice). Choose another port in /config (sotto), or stop that program.`);
+    const { D, env } = await setup({ CLAUDE_PLUGIN_OPTION_PORT: String(foreign.port) });
+    assert.equal(parseOut(await run(TOGGLE, { env, input: stdinFor("status") })).stopReason, "sotto: voice is off.");
+    const out = parseOut(await run(TOGGLE, { env, input: stdinFor("on") }));
+    const moved = Number(readFileSync(join(D, "daemon.port"), "utf8").trim());
+    assert.ok(moved > foreign.port && moved <= foreign.port + 9, `moved to ${moved}`);
+    assert.equal(out.stopReason, `sotto: port ${foreign.port} busy (held by node pid ${process.pid}), using ${moved}; stub: on`);
+    assert.equal(parseOut(await run(TOGGLE, { env, input: stdinFor("status") })).stopReason, "stub: status");
   });
 
+  test("once the setting is free again: a live fallback daemon is kept, an idle one moves back", async () => {
+    const port = await freeRun(2);
+    const holder = await holdPort(port);
+    const { D, env } = await setup({ CLAUDE_PLUGIN_OPTION_PORT: String(port) });
+    parseOut(await run(TOGGLE, { env, input: stdinFor("on") }));
+    const pid = Number(readFileSync(join(D, "daemon.pid"), "utf8"));
+    await new Promise((r) => holder.close(r));
+
+    writeFileSync(join(D, "stub-live"), "");
+    assert.equal(parseOut(await run(TOGGLE, { env, input: stdinFor("on") })).stopReason, "stub: on");
+    assert.equal(Number(readFileSync(join(D, "daemon.pid"), "utf8")), pid, "live: not restarted");
+    assert.notEqual(readFileSync(join(D, "daemon.port"), "utf8").trim(), String(port));
+
+    rmSync(join(D, "stub-live"));
+    assert.equal(parseOut(await run(TOGGLE, { env, input: stdinFor("on") })).stopReason, "stub: on");
+    assert.ok(await waitFor(() => !isAlive(pid), 6000), "idle fallback daemon stopped");
+    assert.equal(readFileSync(join(D, "daemon.port"), "utf8").trim(), String(port));
+  });
+
+  test("the port setting and all nine fallbacks held -> one clear error", async () => {
+    const port = await freePort();
+    for (let q = port; q <= Math.min(port + 9, 65535); q++) {
+      if (await portFree(q)) await holdPort(q);
+    }
+    const { D, env } = await setup({ CLAUDE_PLUGIN_OPTION_PORT: String(port) });
+    const out = parseOut(await run(TOGGLE, { env, input: stdinFor("on") }));
+    assert.equal(out.stopReason, `sotto: ERROR ports ${port}-${Math.min(port + 9, 65535)} are all in use (${port} is held by node pid ${process.pid}). Choose another port in /config (sotto), or stop that program.`);
+    assert.ok(!existsSync(join(D, "daemon.pid")));
+  });
+});
+
+describe("toggle.sh with something else on the port", () => {
   test("daemon answering non-JSON to /control -> did-not-answer error", async () => {
     const { D, port, env } = await setup();
     const srv = await startFakeDaemon({

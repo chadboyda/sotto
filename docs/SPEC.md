@@ -491,7 +491,7 @@ Invoked by the UserPromptExpansion hook. Stdin example (VERIFIED shape):
 4. Resolve config (§4.2). `PORT` is the validated `CLAUDE_PLUGIN_OPTION_PORT` or `47821`.
 5. `H=$(curl -s -m 0.3 http://127.0.0.1:$PORT/healthz)`.
    - **If `H` contains `"name":"sotto"`:** if its `"data_dir"` differs from `D`, or its `"plugin_root"` differs from `ROOT`, and the action is `on`/`toggle`: POST `/control` with `{"action":"shutdown"}`. Use the other daemon's key from `<its data_dir>/daemon.key`. Then wait ≤ 1.5 s for `/healthz` to stop answering, and fall through to the spawn step.
-   - **If `H` is non-empty and not ours:** error "port in use" (§9.1).
+   - **If `H` is non-empty and not ours:** another program holds the port setting; treat it as "nothing answers" here and look for our daemon on its fallback port (§6.2 "Port fallback").
    - **If nothing answers:**
      - For `off`/`status`, print `sotto: voice is off.` and exit (no spawn).
      - For `policy`, print `sotto: voice is off. Turn it on with /talk on first.`
@@ -504,7 +504,7 @@ Invoked by the UserPromptExpansion hook. Stdin example (VERIFIED shape):
        - require `CLAUDE_CODE_MESSAGING_SOCKET` to be non-empty (error otherwise);
        - resolve the runtime (§6.2): `$SOTTO_NODE` if set (error if not found); else `node` if `node -v`, run from `$ROOT`, says 22 or newer; else `bun` (or `~/.bun/bin/bun`) if `bun --version` is 1.1 or newer; else fail at once with the §9.1 "no node" string for the case, which says how to install one;
        - spawn exactly (from `$ROOT`): `CLAUDE_PLUGIN_OPTION_OPENAI_API_KEY=<the userConfig key or empty> nohup "$NODE" "${SOTTO_DAEMON_ENTRY:-$ROOT/daemon/index.js}" --port "$PORT" --data-dir "$D" --plugin-root "$ROOT" >/dev/null 2>&1 </dev/null & disown`;
-       - poll `/healthz` every 50 ms for up to 3 s (error if it never answers).
+       - poll every 50 ms for up to 5 s: `/healthz` on the port in `D/daemon.port` (the daemon may have moved, §6.2), until our daemon (same `data_dir`) answers; a `D/start-error` ends the wait with its §9.1 error, else "did not start".
 6. `KEY=$(<"$D/daemon.key")`.
 7. Build the body (§6.4 `ControlRequest`) with printf and `json_escape` for env-derived strings. POST it: `curl -s -m 2 -X POST -H 'Content-Type: application/json' -H @<(key_header "$KEY") --data-binary @- "http://127.0.0.1:$PORT/control?format=hook"`. The daemon key reaches curl as a `/dev/fd` header file, never in argv (macOS `ps` shows every user's command lines).
 8. If the response starts with `{` and ends with `}`, print it unchanged. Otherwise print the "did not answer" error.
@@ -570,7 +570,8 @@ No `dependencies` and no `devDependencies`. Everything is ESM. Test files match 
 - **Single instance:** at start, if `D/daemon.pid` names a live process whose `ps -o args=` contains `daemon/index.js`, exit 1. Otherwise:
   1. delete stale `active` and `pending-context`;
   2. write `daemon.pid` and `daemon.key`;
-  3. `listen(port, "127.0.0.1")`. On `EADDRINUSE`, log and exit 1.
+  3. `listen(port, "127.0.0.1")` on the port chosen by the port fallback below. On `EADDRINUSE` there (a race after the probe), log and exit 1.
+- **Port fallback** (`daemon/port.js`, 0.6.10): before anything is built, the daemon probes `--port` and then the next 9 ports (47821 → 47822..47830, never past 65535) by binding and closing a loopback server, and uses the first it can bind; a move logs `listen.fallback {from, to}`. The chosen port is the daemon's port everywhere: `D/daemon.port`, `D/active` (hooks, the courier, the mod), `/healthz`, the Host/Origin checks, window URLs and a self-update successor (which keeps it). With all ten held it writes `D/start-error` `port_busy<TAB><port><TAB><last>` and exits 1. toggle.sh (§5.7) spawns with the port setting and reads `D/daemon.port` to find the daemon; a foreign answer on the setting is no longer an error. While the setting is held (something accepts connections there), or voice is live, a daemon of ours on setting+1..setting+9 is used by every action, `on` included (an idle one whose setting has come free is moved back by `on`); otherwise a recorded port that differs is a changed setting (SPEC-DEVIATIONS "Port changes"). The `/talk on` that started the moved daemon leads its answer with `sotto: port <P> busy (held by <command> pid <n>), using <Q>; ` (the holder from `lsof`, else "another program").
 - **Detachment:** stdio is `/dev/null` (the spawner does this). The daemon MUST log only through `daemon/log.js`. `process.on("uncaughtException")` and `unhandledRejection` append to `crash.log` and keep running.
 - **Signals:** SIGTERM/SIGINT/SIGHUP trigger the graceful shutdown in §6.13.
 - **Runtime:** Node 22+ (`engines`). Bun ≥ 1.1 runs the same code unchanged and is the fallback when no Node 22 is on PATH (§5.7); verified with Bun 1.3.5 by the full smoke e2e, the restart e2e and a self-update. `nodeProblem()` accepts Bun (it reports a Node 22+ `process.versions.node` and has a global `WebSocket`). The `start` log line carries `runtime` (`node v22.18.0`, `bun 1.3.5`).
@@ -1638,7 +1639,9 @@ The earlier voice conversation follows as user and assistant messages, oldest fi
 | node does not run (a version-manager shim without the version), no Bun | `sotto: ERROR node on PATH did not run (a version manager without an installed version?). <how>` |
 | no node, no Bun | `sotto: ERROR node was not found on PATH; sotto needs Node 22 or newer. <how>` |
 | | `<how>` = `Install Node 22 or newer (brew install node, nvm install 22, or nodejs.org), or Bun (bun.sh), then run /talk on again.` |
-| port taken | `sotto: ERROR port <P> is used by another program[ (<name>)]. Choose another port in /config (sotto), or stop that program.` (`<name>`: the `name` from its `/healthz` JSON, if any) |
+| port taken (the setting and all 9 fallbacks, §6.2) | `sotto: ERROR ports <P>-<last> are all in use (<P> is held by <command> pid <n>). Choose another port in /config (sotto), or stop that program.` |
+| port lost (§6.2; taken between the probe and listen: `D/start-error` `port_lost<TAB><port>`) | `sotto: ERROR port <Q> was taken while the voice daemon started. Run /talk on again.` |
+| port moved (§6.2; prefix of the `/talk on` answer) | `sotto: port <P> busy (held by <command> pid <n>), using <Q>; <answer without its sotto: prefix>` |
 | spawn timeout | `sotto: ERROR the voice daemon did not start. See <D>/logs/daemon.log` |
 | bad response | `sotto: ERROR the voice daemon did not answer. See <D>/logs/daemon.log` |
 

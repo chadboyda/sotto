@@ -80,17 +80,44 @@ test("start: pid/key files, stale cleanup, healthz, single instance, SIGTERM cle
   assert.ok(!log.includes(key.trim()), "daemon key never logged");
 });
 
-test("EADDRINUSE → exit 1", async (t) => {
+test("port held by another program → listens on the next port and records it (SPEC §6.2)", async (t) => {
   const D = tmpDir("clv-d-");
   const root = makePluginRoot();
-  const port = await freePort();
   const net = await import("node:net");
+  const { portFree } = await import("../../daemon/port.js");
+  let port;
+  do { port = await freePort(); } while (port >= 65535 || !(await portFree(port + 1)));
   const blocker = net.createServer().listen(port, "127.0.0.1");
   await new Promise((r) => blocker.once("listening", r));
-  t.after(() => { blocker.close(); fs.rmSync(D, { recursive: true, force: true }); fs.rmSync(root, { recursive: true, force: true }); });
+  const child = spawn(process.execPath, [ENTRY, "--port", String(port), "--data-dir", D, "--plugin-root", root], { stdio: "ignore", env: envNoKey() });
+  t.after(() => { try { child.kill("SIGKILL"); } catch {} blocker.close(); fs.rmSync(D, { recursive: true, force: true }); fs.rmSync(root, { recursive: true, force: true }); });
+  // Another test may grab port+1 meanwhile: any port of the fallback range will do.
+  const moved = await waitFor(() => Number(fs.readFileSync(path.join(D, "daemon.port"), "utf8").trim()));
+  assert.ok(moved > port && moved <= port + 9, `moved to ${moved}`);
+  const body = await waitFor(async () => (await fetch(`http://127.0.0.1:${moved}/healthz`)).json());
+  assert.equal(body.port, moved);
+  const log = fs.readFileSync(path.join(D, "logs", "daemon.log"), "utf8");
+  assert.match(log, new RegExp(`"ev":"listen.fallback".*"from":${port},"to":${moved}`));
+});
+
+test("the port setting and all nine fallbacks held → exit 1, D/start-error port_busy", async (t) => {
+  const D = tmpDir("clv-d-");
+  const root = makePluginRoot();
+  const net = await import("node:net");
+  const { portFree, lastPort } = await import("../../daemon/port.js");
+  const port = await freePort();
+  const blockers = [];
+  for (let q = port; q <= lastPort(port); q++) {
+    if (!(await portFree(q))) continue;
+    const b = net.createServer().listen(q, "127.0.0.1");
+    await new Promise((r) => b.once("listening", r));
+    blockers.push(b);
+  }
+  t.after(() => { for (const b of blockers) b.close(); fs.rmSync(D, { recursive: true, force: true }); fs.rmSync(root, { recursive: true, force: true }); });
   const r = spawnSync(process.execPath, [ENTRY, "--port", String(port), "--data-dir", D, "--plugin-root", root], { env: envNoKey(), timeout: 5000 });
   assert.equal(r.status, 1);
   assert.ok(!fs.existsSync(path.join(D, "daemon.pid")));
+  assert.equal(fs.readFileSync(path.join(D, "start-error"), "utf8"), `port_busy\t${port}\t${lastPort(port)}\n`);
 });
 
 test("createDaemon().listen() records the bound port in D/daemon.port (0600)", async () => {
